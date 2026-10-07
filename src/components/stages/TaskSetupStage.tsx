@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Task, UserRole, TaskStage } from '../types';
+import { Task, UserRole, TaskStage } from '../../types';
 import { 
   FileText, 
   Calendar, 

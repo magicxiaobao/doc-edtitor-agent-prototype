@@ -6,6 +6,12 @@ import {
   EvidenceSnippet 
 } from './types';
 import { createPresetTask } from './services/mockData';
+import { 
+  loadPersistedState, 
+  savePersistedState, 
+  resetStorageWithBackup,
+  BACKUP_CORRUPTED_KEY 
+} from './services/storageService';
 import { Navbar } from './components/Navbar';
 import { StageBreadcrumbs } from './components/StageBreadcrumbs';
 import { SnippetDrawer } from './components/SnippetDrawer';
@@ -15,48 +21,25 @@ import { StyleAndOutlineStage } from './components/stages/StyleAndOutlineStage';
 import { DraftingStage } from './components/stages/DraftingStage';
 import { ReviewStage } from './components/stages/ReviewStage';
 import { AuditAndExportStage } from './components/stages/AuditAndExportStage';
-
-const LOCAL_STORAGE_KEY = 'doc_editor_agent_tasks_v1';
+import { AlertTriangle, RefreshCw, Download, CheckCircle2, X } from 'lucide-react';
 
 export function App() {
-  // Load tasks from localStorage or generate defaults
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved tasks from localStorage', e);
-    }
+  // Requirement 5: Load with schema migration & corruption recovery
+  const [initialLoaded] = useState(() => loadPersistedState());
+  const [tasks, setTasks] = useState<Task[]>(initialLoaded.tasks);
+  const [currentTaskId, setCurrentTaskId] = useState<string>(initialLoaded.currentTaskId);
+  const [activeRole, setActiveRole] = useState<UserRole>(initialLoaded.activeRole);
+  
+  const [isCorrupted, setIsCorrupted] = useState(initialLoaded.isCorrupted);
+  const [corruptedMessage, setCorruptedMessage] = useState(initialLoaded.corruptedMessage);
+  const [migrationMessage, setMigrationMessage] = useState(initialLoaded.migrationMessage);
 
-    // Default presets
-    return [
-      createPresetTask('conflict_pending'),
-      createPresetTask('ready_to_draft'),
-      createPresetTask('under_review'),
-      createPresetTask('blank'),
-    ];
-  });
-
-  const [currentTaskId, setCurrentTaskId] = useState<string>(() => {
-    return tasks[0]?.id || 'TASK-CONFLICT';
-  });
-
-  const [activeRole, setActiveRole] = useState<UserRole>('主笔甲');
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
 
-  // Sync tasks to localStorage whenever tasks change
+  // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
   useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tasks));
-    } catch (e) {
-      console.warn('Failed to save tasks to localStorage', e);
-    }
-  }, [tasks]);
+    savePersistedState(tasks, currentTaskId, activeRole);
+  }, [tasks, currentTaskId, activeRole]);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId) || tasks[0];
 
@@ -112,15 +95,24 @@ export function App() {
   };
 
   const handleResetData = () => {
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-    const initialTasks = [
-      createPresetTask('conflict_pending'),
-      createPresetTask('ready_to_draft'),
-      createPresetTask('under_review'),
-      createPresetTask('blank'),
-    ];
-    setTasks(initialTasks);
-    setCurrentTaskId(initialTasks[0].id);
+    const defaults = resetStorageWithBackup();
+    setTasks(defaults);
+    setCurrentTaskId(defaults[0].id);
+    setActiveRole('主笔甲');
+    setIsCorrupted(false);
+  };
+
+  const handleDownloadCorruptedBackup = () => {
+    const raw = localStorage.getItem(BACKUP_CORRUPTED_KEY) || '';
+    const blob = new Blob([raw], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `corrupted_data_backup_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleSelectStage = (stage: TaskStage) => {
@@ -132,7 +124,7 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 text-sm">
       {/* Top Navbar */}
       <Navbar
         currentTask={currentTask}
@@ -144,6 +136,54 @@ export function App() {
         onResetData={handleResetData}
       />
 
+      {/* Migration Notice Banner */}
+      {migrationMessage && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2.5 text-xs text-blue-900 flex items-center justify-between">
+          <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
+            <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>{migrationMessage}</span>
+            <button 
+              onClick={() => setMigrationMessage(undefined)}
+              className="ml-auto text-blue-500 hover:text-blue-800 cursor-pointer"
+              aria-label="关闭提示"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Corrupted Data Alert Banner with Recovery Options */}
+      {isCorrupted && (
+        <div className="bg-amber-50 border-b border-amber-300 px-4 py-3 text-sm text-amber-950">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold">数据存储安全提示：</strong>
+                <span>{corruptedMessage || '检测到本地缓存数据异常，已隔离原始数据至备份区，未静默丢弃草稿。'}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleDownloadCorruptedBackup}
+                className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 rounded text-xs font-semibold text-amber-900 flex items-center gap-1 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>导出损坏数据JSON</span>
+              </button>
+              <button
+                onClick={handleResetData}
+                className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>重置为标准预置场景</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Stage Breadcrumb Progress */}
       <StageBreadcrumbs
         currentStage={currentTask.currentStage}
@@ -151,7 +191,7 @@ export function App() {
         onSelectStage={handleSelectStage}
       />
 
-      {/* Main Stage Workspace */}
+      {/* Main Stage Workspace - Checked for 1440, 1280, 1024 widths */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {currentTask.currentStage === 'task_setup' && (
           <TaskSetupStage

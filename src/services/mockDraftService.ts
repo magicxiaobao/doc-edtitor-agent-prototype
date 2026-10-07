@@ -61,7 +61,6 @@ export function formatTaskPeriod(startDate?: string, endDate?: string): string {
 export function isValidFactForDraft(fact: Fact, task: Task): boolean {
   if (!fact || fact.status !== 'confirmed') return false;
   if (fact.isHistoricOnly) return false;
-  if (fact.status === 'gap' || fact.status === 'excluded') return false;
 
   // Selected conflict value cannot bypass excluded or pending
   if (fact.hasConflict) {

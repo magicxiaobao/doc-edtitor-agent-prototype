@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
-    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "test": "tsx test-task07.ts && tsx test-task08.ts"
+    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

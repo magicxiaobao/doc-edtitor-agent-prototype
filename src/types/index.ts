@@ -170,6 +170,13 @@ export interface RevisionSuggestion {
   createdAt: string;
 }
 
+export interface AuditRecord {
+  issueId: string;
+  status: 'unresolved' | 'accepted' | 'ignored';
+  ignoreReason?: string;
+  resolvedAt?: string;
+}
+
 export interface DraftVersion {
   id: string;
   versionNumber: string;
@@ -180,6 +187,7 @@ export interface DraftVersion {
   isFinal?: boolean;
   finalizedAt?: string;
   isHistoricalSnapshot?: boolean;
+  auditRecords?: AuditRecord[];
   snapshotMetadata?: {
     taskTitle: string;
     startDate: string;
@@ -219,17 +227,38 @@ export interface ReviewComment {
   resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
 }
 
+export type AuditIssueType = 
+  | 'metric_unit' 
+  | 'period_mismatch' 
+  | 'unreferenced_number' 
+  | 'gap_missing' 
+  | 'historic_data_leak'
+  | 'conflict_mismatch'
+  | 'unverified_statement';
+
 export interface AuditIssue {
-  id: string;
-  type: 'metric_unit' | 'period_mismatch' | 'unreferenced_number' | 'gap_missing' | 'historic_data_leak';
+  id: string;                          // 兼容已有代码
+  issueId: string;                     // 稳定 issueId
+  taskId: string;                      // 绑定所属任务ID
+  draftId: string;                     // 绑定所属草稿ID
+  blockId: string;                     // 绑定段落ID
+  type: AuditIssueType;
   severity: 'error' | 'warning' | 'info';
-  location: string;
-  blockId: string;
-  originalText: string;
-  evidenceText: string;
-  suggestion: string;
+  isBlocking: boolean;                 // 重大不一致阻断定稿，不可通用忽略
+  location: string;                    // 具体位置，如“第2段第1句”
+  originalText: string;                // 原文
+  evidenceText: string;                // 依据出处
+  suggestion: string;                  // 更正建议
+  replacementText?: string;            // 自动修正文本
   status: 'unresolved' | 'accepted' | 'ignored';
-  ignoreReason?: string;
+  ignoreReason?: string;               // 忽略非阻断提示理由
+  charIndex?: number;                  // 字符偏移量
+}
+
+export interface ExportOptions {
+  includeBody?: boolean;               // 正文
+  includeEvidence?: boolean;           // 依据出处
+  includeReviewLog?: boolean;          // 审阅处理记录
 }
 
 export interface Task {
