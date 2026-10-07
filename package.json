@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "test": "tsx test-task07.ts"
+    "test": "tsx test-task07.ts && tsx test-task08.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

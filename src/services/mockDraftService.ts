@@ -1,14 +1,17 @@
-import { Task, ParagraphBlock, Fact, OutlineSection } from '../types';
+import { Task, ParagraphBlock, Fact, OutlineSection, type RevisionAction, type RevisionSuggestion } from '../types';
 
-export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight';
+export type { RevisionAction, RevisionSuggestion };
 
-export interface RevisionSuggestion {
-  action: RevisionAction;
-  originalText: string;
-  suggestedText: string;
-  diffExplanation: string;
-  factsAffected: string[];
-  baseBlockUpdatedAt: string;
+/**
+ * Deterministic hash/fingerprint of paragraph content to detect manual modifications
+ */
+export function computeContentHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash << 5) - hash + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return `HASH-${Math.abs(hash).toString(36)}-${text.length}`;
 }
 
 /**
@@ -236,7 +239,10 @@ function buildSingleFactParagraph(
  */
 export function generateParagraphRevision(
   block: ParagraphBlock,
-  action: RevisionAction
+  action: RevisionAction,
+  taskId?: string,
+  sourceDraftId?: string,
+  runId?: string
 ): RevisionSuggestion {
   const originalText = block.content;
   let suggestedText = originalText;
@@ -302,11 +308,17 @@ export function generateParagraphRevision(
   });
 
   return {
+    runId: runId || `RUN-${Date.now().toString(36)}`,
+    taskId: taskId || '',
+    sourceDraftId: sourceDraftId || '',
+    targetBlockId: block.id,
+    baseContent: originalText,
+    baseContentHash: computeContentHash(originalText),
     action,
     originalText,
     suggestedText,
     diffExplanation,
     factsAffected: block.referencedFactIds,
-    baseBlockUpdatedAt: block.updatedAt,
+    createdAt: new Date().toISOString(),
   };
 }

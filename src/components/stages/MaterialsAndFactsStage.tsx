@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Task, 
   SourceDocument, 
@@ -11,6 +11,11 @@ import {
   queryMockRag, 
   RagScenario 
 } from '../../services/mockRagService';
+import { 
+  checkPermission, 
+  canConfirmFacts, 
+  canSubmitMaterial 
+} from '../../services/permissionService';
 import { 
   Database, 
   FileText, 
@@ -26,7 +31,8 @@ import {
   Upload, 
   Check, 
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  RotateCcw
 } from 'lucide-react';
 
 interface MaterialsAndFactsStageProps {
@@ -83,6 +89,20 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const [isRagLoading, setIsRagLoading] = useState(false);
   const [ragResult, setRagResult] = useState<any>(null);
   const [ragError, setRagError] = useState<string | null>(null);
+  const [activeRagRunId, setActiveRagRunId] = useState<string | null>(null);
+  const ragCancelledRef = useRef(false);
+
+  // Requirement 8: Cancel running RAG and isolate late results if task changes or unmounts
+  useEffect(() => {
+    ragCancelledRef.current = true;
+    setIsRagLoading(false);
+    setActiveRagRunId(null);
+    setRagResult(null);
+    setRagError(null);
+    return () => {
+      ragCancelledRef.current = true;
+    };
+  }, [task.id]);
 
   // Filters for materials & facts
   const [factFilter, setFactFilter] = useState<'all' | 'pending' | 'confirmed' | 'conflict' | 'gap'>('all');
@@ -95,6 +115,11 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const gapsCount = task.facts.filter((f) => f.status === 'gap').length;
 
   const handleOpenConflictModal = (fact: Fact) => {
+    const perm = checkPermission(activeRole, 'confirm_facts');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可裁决事实冲突');
+      return;
+    }
     setResolvingFact(fact);
     // CRITICAL: Do NOT pre-select greater value, do NOT pre-fill canned reason
     setConflictChoice(fact.selectedConflictValue || (fact.status === 'excluded' ? 'exclude' : ''));
@@ -102,6 +127,11 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   };
 
   const handleResolveConflict = () => {
+    const perm = checkPermission(activeRole, 'confirm_facts');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可裁决事实冲突');
+      return;
+    }
     if (!resolvingFact || !conflictChoice) return;
 
     const updatedFacts = task.facts.map((f) => {
@@ -141,6 +171,12 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   };
 
   const handleToggleFactStatus = (factId: string, currentStatus: string) => {
+    const perm = checkPermission(activeRole, 'confirm_facts');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可核准或撤销事实状态');
+      return;
+    }
+
     const targetFact = task.facts.find((f) => f.id === factId);
     if (!targetFact) return;
     if (targetFact.isHistoricOnly) {
@@ -170,6 +206,12 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   };
 
   const handleConfirmAllFacts = () => {
+    const perm = checkPermission(activeRole, 'confirm_facts');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可确认全量事实清单');
+      return;
+    }
+
     if (pendingConflictsCount > 0) {
       alert('存在未裁决的同口径事实冲突（如120项 vs 128项）。请先裁决采信口径或明确排除后，再确认本次事实清单。');
       return;
@@ -203,22 +245,42 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   };
 
   const handleRunRag = async () => {
+    const runId = `RAG-RUN-${Date.now().toString(36)}`;
+    const startingTaskId = task.id;
+    setActiveRagRunId(runId);
+    ragCancelledRef.current = false;
     setIsRagLoading(true);
     setRagError(null);
     setRagResult(null);
 
     try {
       const res = await queryMockRag(ragQuery, ragScenario);
+      if (ragCancelledRef.current || task.id !== startingTaskId) {
+        // Late result isolated or cancelled; do not update
+        return;
+      }
       setRagResult(res);
     } catch (err: any) {
+      if (ragCancelledRef.current || task.id !== startingTaskId) return;
       setRagError(err.message || '检索发生异常');
     } finally {
       setIsRagLoading(false);
     }
   };
 
+  const handleCancelRag = () => {
+    ragCancelledRef.current = true;
+    setIsRagLoading(false);
+    setActiveRagRunId(null);
+  };
+
   const handleCreateSupplementFact = (e: React.FormEvent) => {
     e.preventDefault();
+    const perm = checkPermission(activeRole, 'supplement_fact');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲与供稿丙可补充事实');
+      return;
+    }
     if (!newFactMetric.trim() || !newFactValue.trim()) return;
 
     const newFact: Fact = {
@@ -251,6 +313,11 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
 
   const handleAddMaterialSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const perm = checkPermission(activeRole, 'submit_material');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲与供稿丙可提交材料');
+      return;
+    }
     if (!matName.trim()) return;
 
     const isSimulatedDocx = matFileType === 'docx' || matFileType === 'pdf';
@@ -301,6 +368,11 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
 
   const handleCreateFactFromSnippetSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const perm = checkPermission(activeRole, 'supplement_fact');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲与供稿丙可建立事实候选');
+      return;
+    }
     if (!snippetForFact || !snipFactMetric.trim() || !snipFactValue.trim()) return;
 
     const newFact: Fact = {
@@ -806,21 +878,45 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
               placeholder="输入待检索单位公文问题..."
               className="flex-1 text-xs p-2.5 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
             />
-            <button
-              onClick={handleRunRag}
-              disabled={isRagLoading}
-              className="px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
-            >
-              {isRagLoading ? (
-                <span>检索中...</span>
-              ) : (
-                <>
-                  <Search className="w-3.5 h-3.5" />
-                  <span>执行检索</span>
-                </>
-              )}
-            </button>
+            {isRagLoading ? (
+              <button
+                onClick={handleCancelRag}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+                title="取消当前检索任务"
+              >
+                <span>取消检索</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleRunRag}
+                className="px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>执行检索</span>
+              </button>
+            )}
+            {ragResult && !isRagLoading && (
+              <button
+                onClick={handleRunRag}
+                className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+                title="重新执行此检索"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>重试</span>
+              </button>
+            )}
           </div>
+
+          {/* Active Run Indicator */}
+          {isRagLoading && activeRagRunId && (
+            <div className="p-2.5 bg-blue-50 border border-blue-200 rounded text-[11px] text-blue-800 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
+                RAG检索执行中...
+              </span>
+              <span className="font-mono text-slate-500">运行标识：{activeRagRunId}</span>
+            </div>
+          )}
 
           {/* Error Message */}
           {ragError && (

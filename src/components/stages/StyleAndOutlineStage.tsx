@@ -7,6 +7,11 @@ import {
   EvidenceSnippet 
 } from '../../types';
 import { 
+  checkPermission, 
+  canConfirmOutline, 
+  canConfirmStyle 
+} from '../../services/permissionService';
+import { 
   BookOpen, 
   ListTree, 
   CheckCircle2, 
@@ -67,6 +72,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
 
   // Move section
   const handleMoveSection = (index: number, direction: 'up' | 'down') => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可调整大纲章节');
+      return;
+    }
     const newOutline = [...task.outline];
     const targetIdx = direction === 'up' ? index - 1 : index + 1;
     if (targetIdx < 0 || targetIdx >= newOutline.length) return;
@@ -88,6 +98,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleDeleteSection = (secId: string) => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可删除大纲章节');
+      return;
+    }
     if (task.outline.length <= 1) {
       alert('文稿至少需要保留一个主体章节');
       return;
@@ -102,6 +117,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
 
   const handleAddSection = (e: React.FormEvent) => {
     e.preventDefault();
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可新增大纲章节');
+      return;
+    }
     if (!newSecTitle.trim()) return;
 
     const newSection: OutlineSection = {
@@ -130,6 +150,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleUnassignFact = (sectionId: string, factId: string) => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可调整章节事实分配');
+      return;
+    }
     const updated = task.outline.map((sec) => {
       if (sec.id === sectionId) {
         const nextFactIds = sec.assignedFactIds.filter((id) => id !== factId);
@@ -150,6 +175,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleSaveFactAssignment = (sectionId: string, selectedFactIds: string[]) => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可分配事实依据');
+      return;
+    }
     const updated = task.outline.map((sec) => {
       if (sec.id === sectionId) {
         return {
@@ -170,6 +200,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleToggleExcludeStyleRule = (ruleId: string) => {
+    const perm = checkPermission(activeRole, 'confirm_style');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可启用或排除文风规则');
+      return;
+    }
     const updatedRules = task.styleRules.map((r) =>
       r.id === ruleId ? { ...r, excluded: !r.excluded } : r
     );
@@ -184,6 +219,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
 
   const handleSaveEditStyleRule = (e: React.FormEvent) => {
     e.preventDefault();
+    const perm = checkPermission(activeRole, 'confirm_style');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可修改文风规则');
+      return;
+    }
     if (!editingStyleRule || !editRuleTitle.trim()) return;
 
     const updatedRules = task.styleRules.map((r) =>
@@ -204,6 +244,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleConfirmStyle = () => {
+    const perm = checkPermission(activeRole, 'confirm_style');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可确认文风规范');
+      return;
+    }
     const activeRules = task.styleRules.filter((r) => !r.excluded);
     const styleSnapshot = {
       confirmedAt: new Date().toISOString(),
@@ -217,6 +262,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleConfirmOutline = () => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可确认公文大纲');
+      return;
+    }
     if (!factsConfirmed) {
       alert('前序事实清单尚未确认或事实已发生变更导致快照失效。请先返回阶段02“材料与事实”重新核准并确认事实清单。');
       return;
@@ -246,6 +296,11 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   };
 
   const handleApplyTemplate = (type: 'standard' | 'problem_driven') => {
+    const perm = checkPermission(activeRole, 'confirm_outline');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可应用大纲模板');
+      return;
+    }
     setSelectedStructureTemplate(type);
     if (type === 'standard') {
       const standardSections: OutlineSection[] = [

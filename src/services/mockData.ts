@@ -525,6 +525,14 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
     author: '主笔甲',
     summary: '根据已确认的128项重点任务及三章大纲生成的初稿版本，已提交审阅',
     blocks: draftBlocks,
+    snapshotMetadata: {
+      taskTitle: baseTask.title,
+      startDate: baseTask.startDate,
+      endDate: baseTask.endDate,
+      targetWordCount: baseTask.targetWordCount,
+      factSnapshot: baseTask.factSnapshot,
+      outlineSections: JSON.parse(JSON.stringify(baseTask.outline)),
+    },
   };
 
   baseTask.drafts = [initialDraft];
@@ -557,6 +565,7 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
       targetBlockId: 'BLK-02',
       targetBlockOrder: 2,
       targetVersionId: initialDraft.id,
+      baseParagraphText: draftBlocks[1].content,
       reviewer: '审阅乙',
       content: '培训段落表述较为冗长，可压缩精炼，同时务必保持“16场、800人次”的严谨口径，不要随意改成人数。',
       status: 'pending',

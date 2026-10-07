@@ -7,6 +7,7 @@ import {
 } from '../../types';
 import { runDocumentAudit } from '../../services/mockAuditService';
 import { exportDocumentAsTxt, exportDocumentAsDocx } from '../../services/exportService';
+import { checkPermission, canFinalize as canFinalizeRole } from '../../services/permissionService';
 import { 
   CheckCircle2, 
   ShieldCheck, 
@@ -17,9 +18,12 @@ import {
   RefreshCw, 
   Check, 
   Eye, 
-  Sparkles,
-  Bug,
-  FileCheck
+  Sparkles, 
+  Bug, 
+  FileCheck,
+  ShieldAlert,
+  XCircle,
+  HelpCircle
 } from 'lucide-react';
 
 interface AuditAndExportStageProps {
@@ -38,20 +42,38 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const [activeTab, setActiveTab] = useState<'audit' | 'export'>('audit');
   const [includeAnnotations, setIncludeAnnotations] = useState(true);
   const [isExportingDocx, setIsExportingDocx] = useState(false);
+  const [exportVersionId, setExportVersionId] = useState<string>(task.currentDraftId || task.drafts[0]?.id || '');
+
+  // Target draft for export
+  const selectedExportDraft = task.drafts.find((d) => d.id === exportVersionId) || currentDraft;
 
   // Run audit issues dynamically
   const auditIssues = currentDraft ? runDocumentAudit(task, currentDraft.blocks) : [];
 
-  // Check blockers for finalization
+  // Requirement 7: Finalization prerequisite checks
+  const hasDraftText = !!currentDraft && currentDraft.blocks.length > 0;
+  const isAuthor = activeRole === '主笔甲';
+  const isUpstreamValid = task.outlineConfirmed && !!task.factSnapshot && task.styleConfirmed;
   const pendingConflictsCount = task.facts.filter((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded').length;
   const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending').length;
   const criticalAuditIssuesCount = auditIssues.filter((i) => i.severity === 'error' && i.status === 'unresolved').length;
 
-  const canFinalize = pendingConflictsCount === 0 && criticalAuditIssuesCount === 0;
+  const canFinalize =
+    hasDraftText &&
+    isAuthor &&
+    isUpstreamValid &&
+    pendingConflictsCount === 0 &&
+    pendingCommentsCount === 0 &&
+    criticalAuditIssuesCount === 0;
 
-  // Inject 800人 test error button (satisfies Task 06 demonstration requirement: "预置或允许用户引入一个把800人次改成800人的例子，能够发现并展示原文口径")
+  // Inject 800人 test error button (Task 06 demonstration requirement)
   const handleInjectUnitError = () => {
     if (!currentDraft) return;
+    const perm = checkPermission(activeRole, 'edit_draft');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可修改正文口径');
+      return;
+    }
     const updatedBlocks = currentDraft.blocks.map((b) => {
       if (b.content.includes('800人次')) {
         return {
@@ -69,6 +91,11 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
 
   const handleFixUnitError = () => {
     if (!currentDraft) return;
+    const perm = checkPermission(activeRole, 'edit_draft');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可修改正文口径');
+      return;
+    }
     const updatedBlocks = currentDraft.blocks.map((b) => {
       if (b.content.includes('800人') && !b.content.includes('800人次')) {
         return {
@@ -85,12 +112,39 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   };
 
   const handleFinalizeDocument = () => {
-    if (!canFinalize) {
-      alert('存在阻断性问题（指标冲突或严重核校错误），无法执行定稿。请先纠正错误。');
+    // Requirement 7: 无正文不得弹出定稿确认或抛错
+    if (!hasDraftText) {
+      alert('当前公文任务尚无正文草稿，无法执行定稿。请先前往阶段04“正文起草”生成初稿。');
       return;
     }
 
-    if (!window.confirm('确认定稿吗？定稿后将生成不可篡改的定稿快照。后续编辑将自动生成新的草稿版本。')) {
+    const perm = checkPermission(activeRole, 'finalize');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可定稿公文');
+      return;
+    }
+
+    if (!isUpstreamValid) {
+      alert('前序事实快照失效、文风未核准或大纲批准已失效，无法定稿。请先返回前序阶段重新确认。');
+      return;
+    }
+
+    if (pendingConflictsCount > 0) {
+      alert('存在未裁决的同口径事实冲突（如120项 vs 128项），无法执行定稿。请先前往阶段02完成裁决或明确排除。');
+      return;
+    }
+
+    if (pendingCommentsCount > 0) {
+      alert(`尚有 ${pendingCommentsCount} 条待处理的重大审阅意见，需主笔逐项处理（采纳落实、拒绝说明或待沟通）后方可定稿。`);
+      return;
+    }
+
+    if (criticalAuditIssuesCount > 0) {
+      alert('存在阻断级正文核校偏差（如计量单位口径不符），无法执行定稿。请先纠正错误。');
+      return;
+    }
+
+    if (!window.confirm('确认定稿吗？定稿后将生成不可篡改的定稿快照（定稿 v2.0）。后续编辑将自动生成新的工作草稿，旧定稿保留归档。')) {
       return;
     }
 
@@ -102,6 +156,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       summary: '经主笔核定、审阅意见全部闭环并完成事实口径核校后的正式定稿文件',
       blocks: JSON.parse(JSON.stringify(currentDraft.blocks)),
       isFinal: true,
+      snapshotMetadata: currentDraft.snapshotMetadata,
     };
 
     onUpdateTask({
@@ -113,15 +168,15 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   };
 
   const handleDownloadTxt = () => {
-    if (!currentDraft) return;
-    exportDocumentAsTxt(task, currentDraft, includeAnnotations);
+    if (!selectedExportDraft) return;
+    exportDocumentAsTxt(task, selectedExportDraft, includeAnnotations);
   };
 
   const handleDownloadDocx = async () => {
-    if (!currentDraft) return;
+    if (!selectedExportDraft) return;
     setIsExportingDocx(true);
     try {
-      await exportDocumentAsDocx(task, currentDraft, includeAnnotations);
+      await exportDocumentAsDocx(task, selectedExportDraft, includeAnnotations);
     } catch (err) {
       console.error('Word export error:', err);
       alert('Word导出失败，请重试');
@@ -141,7 +196,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
               阶段06：公文严谨核校与定稿导出
             </h2>
             {task.isFinalized ? (
-              <span className="text-xs bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded flex items-center gap-1 font-semibold">
+              <span className="text-xs bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded flex items-center gap-1 font-semibold">
                 <Lock className="w-3.5 h-3.5" /> 已完成定稿归档
               </span>
             ) : (
@@ -165,7 +220,19 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                   ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
-              title={!canFinalize ? '请先解决阻断性核校错误' : '确认定稿'}
+              title={
+                !hasDraftText
+                  ? '当前任务尚无正文草稿，无法定稿'
+                  : !isAuthor
+                  ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可定稿`
+                  : !isUpstreamValid
+                  ? '前序事实快照或大纲审批已失效，无法定稿'
+                  : pendingCommentsCount > 0
+                  ? `尚有 ${pendingCommentsCount} 条待处理审阅意见未闭环`
+                  : !canFinalize
+                  ? '存在阻断性核校偏差或未裁决冲突'
+                  : '确认定稿锁定公文'
+              }
             >
               <Lock className="w-4 h-4" />
               <span>确认最终定稿</span>
@@ -181,6 +248,71 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Requirement 7: Clear finalization gatekeeper status indicator */}
+      {!task.isFinalized && (
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-xs">
+          <div className="flex items-center justify-between pb-1 border-b border-slate-200">
+            <span className="font-bold text-slate-800 flex items-center gap-1.5">
+              <Lock className="w-4 h-4 text-blue-700" />
+              正式定稿前置准入核验条件 (主笔专属操作)
+            </span>
+            <span className="font-medium text-[11px] text-slate-500">
+              当前操作身份：<strong>{activeRole}</strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 text-[11px]">
+            <div className={`p-2 rounded border flex flex-col justify-between ${hasDraftText ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">1. 正文草稿</div>
+              <div className="mt-1 flex items-center gap-1">
+                {hasDraftText ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{hasDraftText ? `${currentDraft.blocks.length}段正文` : '无正文(阻断)'}</span>
+              </div>
+            </div>
+
+            <div className={`p-2 rounded border flex flex-col justify-between ${isAuthor ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">2. 动作权限</div>
+              <div className="mt-1 flex items-center gap-1">
+                {isAuthor ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{isAuthor ? '主笔甲(符合)' : '非主笔(阻断)'}</span>
+              </div>
+            </div>
+
+            <div className={`p-2 rounded border flex flex-col justify-between ${isUpstreamValid ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">3. 前序审批</div>
+              <div className="mt-1 flex items-center gap-1">
+                {isUpstreamValid ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{isUpstreamValid ? '事实大纲有效' : '审批失效(阻断)'}</span>
+              </div>
+            </div>
+
+            <div className={`p-2 rounded border flex flex-col justify-between ${pendingConflictsCount === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">4. 口径冲突</div>
+              <div className="mt-1 flex items-center gap-1">
+                {pendingConflictsCount === 0 ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{pendingConflictsCount === 0 ? '无待决冲突' : `${pendingConflictsCount}项未决(阻断)`}</span>
+              </div>
+            </div>
+
+            <div className={`p-2 rounded border flex flex-col justify-between ${pendingCommentsCount === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">5. 审阅意见</div>
+              <div className="mt-1 flex items-center gap-1">
+                {pendingCommentsCount === 0 ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{pendingCommentsCount === 0 ? '全部已研判' : `${pendingCommentsCount}条待办(阻断)`}</span>
+              </div>
+            </div>
+
+            <div className={`p-2 rounded border flex flex-col justify-between ${criticalAuditIssuesCount === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-rose-50 border-rose-200 text-rose-900'}`}>
+              <div className="font-semibold">6. 阻断核校</div>
+              <div className="mt-1 flex items-center gap-1">
+                {criticalAuditIssuesCount === 0 ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                <span>{criticalAuditIssuesCount === 0 ? '一致性核校过' : `${criticalAuditIssuesCount}项错误(阻断)`}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-slate-200 bg-white rounded-t-lg px-4 pt-2">
@@ -253,11 +385,17 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
             <div className="flex items-center justify-between pb-1 border-b border-slate-100">
               <span className="font-bold text-xs text-slate-800">核校比对发现项</span>
               <span className="text-[11px] text-slate-400">
-                针对当前版本：{currentDraft?.versionNumber}
+                针对当前版本：{currentDraft?.versionNumber || '无文稿'}
               </span>
             </div>
 
-            {auditIssues.length === 0 ? (
+            {!hasDraftText ? (
+              <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-slate-500 space-y-2">
+                <FileText className="w-8 h-8 mx-auto text-slate-300" />
+                <h4 className="font-bold text-sm">当前任务尚未生成正文草稿</h4>
+                <p className="text-xs">请返回阶段04“正文起草”生成初稿后，系统将自动进行事实口径核校。</p>
+              </div>
+            ) : auditIssues.length === 0 ? (
               <div className="p-8 text-center bg-emerald-50/50 border border-emerald-200 rounded-lg text-emerald-800 space-y-2">
                 <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-600" />
                 <h4 className="font-bold text-sm">核校比对完成：未发现口径偏差与单位冲突</h4>
@@ -348,11 +486,25 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
               </h3>
 
               <div className="space-y-3">
+                {/* Requirement 4: Select which version to export */}
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">待导出稿件版本</label>
-                  <div className="p-2 bg-white border border-slate-300 rounded font-medium text-slate-800">
-                    {currentDraft?.versionNumber} ({currentDraft?.summary})
-                  </div>
+                  <label className="font-semibold text-slate-700">选择待导出版本快照：</label>
+                  <select
+                    value={exportVersionId}
+                    onChange={(e) => setExportVersionId(e.target.value)}
+                    className="w-full p-2 bg-white border border-slate-300 rounded text-slate-800 font-medium"
+                  >
+                    {task.drafts.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.versionNumber} ({d.summary}) {d.isFinal ? '【定稿版】' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedExportDraft?.snapshotMetadata && (
+                    <p className="text-[10px] text-blue-700">
+                      ✓ 系统将锁定导出该版本当时的章节标题与事实快照依据，不受后续大纲变动影响。
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -388,7 +540,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
               <div className="space-y-2 pt-2">
                 <button
                   onClick={handleDownloadDocx}
-                  disabled={isExportingDocx || !currentDraft}
+                  disabled={isExportingDocx || !selectedExportDraft}
                   className="w-full py-2.5 px-4 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <FileText className="w-4 h-4" />
@@ -397,7 +549,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
 
                 <button
                   onClick={handleDownloadTxt}
-                  disabled={!currentDraft}
+                  disabled={!selectedExportDraft}
                   className="w-full py-2 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <FileText className="w-4 h-4 text-slate-500" />
@@ -410,18 +562,24 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
           {/* Document Preview Box */}
           <div className="border border-slate-200 rounded-lg p-5 bg-white space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <span className="font-bold text-xs text-slate-800">定稿文稿终览</span>
-              <span className="text-[11px] text-slate-400">{currentDraft?.blocks.length} 个结构化段落</span>
+              <span className="font-bold text-xs text-slate-800">
+                预览版本：{selectedExportDraft?.versionNumber}
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {selectedExportDraft?.blocks.length || 0} 个结构化段落
+              </span>
             </div>
 
             <div className="max-h-96 overflow-y-auto space-y-4 p-4 bg-slate-50/60 rounded border border-slate-100 text-xs">
-              <h2 className="text-center font-bold text-sm text-slate-900 font-serif">{task.title}</h2>
-              {currentDraft?.blocks.map((b) => (
+              <h2 className="text-center font-bold text-sm text-slate-900 font-serif">
+                {selectedExportDraft?.snapshotMetadata?.taskTitle || task.title}
+              </h2>
+              {selectedExportDraft?.blocks.map((b) => (
                 <div key={b.id} className="space-y-1">
                   <p className="text-slate-800 leading-relaxed indent-8 text-[13px]">{b.content}</p>
                   {includeAnnotations && b.referencedFactIds.length > 0 && (
                     <div className="text-[10px] text-blue-700 pl-8 italic">
-                      📎 依据追溯：{b.referencedFactIds.map((id) => task.facts.find((f) => f.id === id)?.metric).join('、')}
+                      📎 依据追溯：{b.referencedFactIds.map((id) => task.facts.find((f) => f.id === id)?.metric || id).join('、')}
                     </div>
                   )}
                 </div>

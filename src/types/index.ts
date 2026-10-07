@@ -153,6 +153,23 @@ export interface ParagraphBlock {
   updatedAt: string;
 }
 
+export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight';
+
+export interface RevisionSuggestion {
+  runId: string;
+  taskId: string;
+  sourceDraftId: string;
+  targetBlockId: string;
+  baseContent: string;
+  baseContentHash: string;
+  action: RevisionAction;
+  originalText: string;
+  suggestedText: string;
+  diffExplanation: string;
+  factsAffected: string[];
+  createdAt: string;
+}
+
 export interface DraftVersion {
   id: string;
   versionNumber: string;
@@ -161,7 +178,26 @@ export interface DraftVersion {
   summary: string;
   blocks: ParagraphBlock[];
   isFinal?: boolean;
+  finalizedAt?: string;
+  isHistoricalSnapshot?: boolean;
+  snapshotMetadata?: {
+    taskTitle: string;
+    startDate: string;
+    endDate: string;
+    targetWordCount: number;
+    factSnapshot?: FactSnapshot;
+    styleSnapshot?: StyleSnapshot;
+    outlineSnapshot?: OutlineSnapshot;
+    outlineSections: OutlineSection[];
+  };
 }
+
+export type ReviewCommentStatus =
+  | 'pending'                          // 待处理
+  | 'accepted_pending_implementation'  // 决定采纳待落实
+  | 'implemented'                      // 已修改/已落实
+  | 'rejected'                         // 拒绝并说明
+  | 'need_discussion';                 // 待沟通
 
 export interface ReviewComment {
   id: string;
@@ -169,13 +205,18 @@ export interface ReviewComment {
   targetBlockId?: string;
   targetBlockOrder?: number;
   targetVersionId: string;
+  baseParagraphText?: string;          // 提出意见时的基准原文
   reviewer: string;
   content: string;
-  status: 'pending' | 'accepted' | 'rejected' | 'need_discussion';
+  status: ReviewCommentStatus;
   authorReply?: string;
   suggestedChange?: string;
   createdAt: string;
   locationOutdated?: boolean;
+  implementationDraftId?: string;     // 落实版本ID
+  implementationBlockId?: string;     // 落实段落ID
+  decisionReason?: string;             // 采纳决定/拒绝/协调理由
+  resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
 }
 
 export interface AuditIssue {
