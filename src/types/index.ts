@@ -68,6 +68,8 @@ export interface Fact {
   metricScope: string; // e.g. "重点任务台账统计口径"
   primaryEvidenceId: string;
   evidenceIds: string[];
+  sourceDocId?: string;
+  createdByRole?: UserRole; // 提交人角色（供稿丙提交为pending候选）
   hasConflict: boolean;
   conflictCandidates?: ConflictCandidate[];
   selectedConflictValue?: string;
@@ -187,6 +189,8 @@ export interface DraftVersion {
   isFinal?: boolean;
   finalizedAt?: string;
   isHistoricalSnapshot?: boolean;
+  isWorkingDraft?: boolean;
+  sourceDraftId?: string; // 记录派生此工作稿的来源历史版本/定稿快照ID
   auditRecords?: AuditRecord[];
   snapshotMetadata?: {
     taskTitle: string;
@@ -197,6 +201,33 @@ export interface DraftVersion {
     styleSnapshot?: StyleSnapshot;
     outlineSnapshot?: OutlineSnapshot;
     outlineSections: OutlineSection[];
+  };
+}
+
+export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';
+
+export interface CoordinationDiffResult {
+  strategy: CoordinationStrategy;
+  originalWordCount: number;
+  targetWordCount: number;
+  strategyExplanation: string;
+  candidateBlocks: ParagraphBlock[];
+  diffPreview: { blockId: string; originalText: string; proposedText: string }[];
+  hasRealCaseMaterial: boolean;
+  selectedCaseSnippet?: EvidenceSnippet;
+}
+
+export interface FinalizationValidationResult {
+  canFinalize: boolean;
+  reasons: string[];
+  checks: {
+    hasDraftText: boolean;
+    isAuthor: boolean;
+    isUpstreamValid: boolean;
+    pendingConflictsResolved: boolean;
+    commentsClosed: boolean;
+    criticalAuditPassed: boolean;
+    isWorkingDraft: boolean;
   };
 }
 
@@ -229,12 +260,14 @@ export interface ReviewComment {
 
 export type AuditIssueType = 
   | 'metric_unit' 
+  | 'unit_inconsistency'
   | 'period_mismatch' 
   | 'unreferenced_number' 
   | 'gap_missing' 
   | 'historic_data_leak'
   | 'conflict_mismatch'
-  | 'unverified_statement';
+  | 'unverified_statement'
+  | 'unverified_sentence';
 
 export interface AuditIssue {
   id: string;                          // 兼容已有代码

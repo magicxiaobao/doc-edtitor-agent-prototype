@@ -23,28 +23,42 @@ export interface LoadStateResult {
   migrationMessage?: string;
 }
 
+// In-memory fallback for Node.js / non-browser test environments
+let memoryStorage: Record<string, string> = {};
+
+export let globalStorageError: string | null = null;
+
+export function getStorageError(): string | null {
+  return globalStorageError;
+}
+
+export function clearStorageError(): void {
+  globalStorageError = null;
+}
+
+function getStorageItem(key: string): string | null {
+  if (typeof localStorage !== 'undefined') {
+    return localStorage.getItem(key);
+  }
+  return memoryStorage[key] ?? null;
+}
+
+function setStorageItem(key: string, value: string): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(key, value);
+  } else {
+    memoryStorage[key] = value;
+  }
+}
+
 /**
- * Sanitizes tasks before writing to localStorage to prevent large files blowing up quota
- * "仍不把大文件装入localStorage"
+ * Requirement 7: Full pasted original text is persisted without truncation.
+ * If localStorage storage fails (e.g. quota exceeded), gracefully captures error
+ * without losing in-memory data, providing visible alert and recovery option.
  */
 function sanitizeTasksForStorage(tasks: Task[]): Task[] {
-  return tasks.map((task) => {
-    const sanitizedDocs = task.documents.map((doc) => {
-      // If doc content is large (>15KB), store preview only for local storage
-      if (doc.content && doc.content.length > 15000) {
-        return {
-          ...doc,
-          content: doc.content.slice(0, 15000) + '\n\n【系统提示：超长文档正文已截断本地缓存以节约存储，完整材料保留在原文件中】',
-        };
-      }
-      return doc;
-    });
-
-    return {
-      ...task,
-      documents: sanitizedDocs,
-    };
-  });
+  // Do NOT truncate doc.content! Preserve full text for accurate evidence tracing
+  return tasks;
 }
 
 /**
@@ -110,17 +124,8 @@ export function loadPersistedState(): LoadStateResult {
   const defaultTaskId = defaultPresets[0].id;
   const defaultRole: UserRole = '主笔甲';
 
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
-    return {
-      tasks: defaultPresets,
-      currentTaskId: defaultTaskId,
-      activeRole: defaultRole,
-      isCorrupted: false,
-    };
-  }
-
   // Check V2 storage first
-  const rawV2 = localStorage.getItem(STORAGE_KEY_V2);
+  const rawV2 = getStorageItem(STORAGE_KEY_V2);
   if (rawV2) {
     try {
       const payload: AppStoragePayload = JSON.parse(rawV2);
@@ -156,7 +161,7 @@ export function loadPersistedState(): LoadStateResult {
     } catch (e: any) {
       console.error('LocalStorage v2 corrupted:', e);
       // Save corrupted raw for recovery
-      localStorage.setItem(BACKUP_CORRUPTED_KEY, rawV2);
+      setStorageItem(BACKUP_CORRUPTED_KEY, rawV2);
       return {
         tasks: defaultPresets,
         currentTaskId: defaultTaskId,
@@ -168,7 +173,7 @@ export function loadPersistedState(): LoadStateResult {
   }
 
   // Check legacy V1 storage
-  const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY_V1);
+  const rawV1 = getStorageItem(LEGACY_STORAGE_KEY_V1);
   if (rawV1) {
     try {
       const parsedV1 = JSON.parse(rawV1);
@@ -184,7 +189,7 @@ export function loadPersistedState(): LoadStateResult {
       }
     } catch (e: any) {
       console.error('Legacy localStorage corrupted:', e);
-      localStorage.setItem(BACKUP_CORRUPTED_KEY, rawV1);
+      setStorageItem(BACKUP_CORRUPTED_KEY, rawV1);
       return {
         tasks: defaultPresets,
         currentTaskId: defaultTaskId,
@@ -208,10 +213,6 @@ export function loadPersistedState(): LoadStateResult {
  * Saves current app state to localStorage
  */
 export function savePersistedState(tasks: Task[], currentTaskId: string, activeRole: UserRole): boolean {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
-    return false;
-  }
-
   try {
     const sanitized = sanitizeTasksForStorage(tasks);
     const payload: AppStoragePayload = {
@@ -221,10 +222,11 @@ export function savePersistedState(tasks: Task[], currentTaskId: string, activeR
       tasks: sanitized,
       lastSavedAt: new Date().toISOString(),
     };
-    localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(payload));
+    setStorageItem(STORAGE_KEY_V2, JSON.stringify(payload));
     return true;
-  } catch (e) {
+  } catch (e: any) {
     console.warn('Failed to save state to localStorage', e);
+    globalStorageError = `本地存储写入失败或空间受限（${e.message}）。内存中的当前文稿完好无损，建议及时导出TXT/Word文件备份。`;
     return false;
   }
 }
