@@ -72,16 +72,36 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Check role permission
   const isReviewerOnly = activeRole === '审阅乙' || activeRole === '审阅丁';
 
+  // Prerequisite check: facts, style, outline must all be confirmed
+  const isPrerequisiteMet = task.outlineConfirmed && !!task.factSnapshot && task.styleConfirmed;
+
   // Selected block object
   const activeBlock = currentDraft?.blocks.find((b) => b.id === selectedBlockId) || currentDraft?.blocks[0];
 
   // Total word count of current draft
   const currentWordCount = currentDraft?.blocks.reduce((acc, b) => acc + b.content.length, 0) || 0;
 
+  // Identify blocks whose referenced facts have changed, been revoked, or are unconfirmed
+  const blocksNeedingReview = (currentDraft?.blocks || []).filter((block) => {
+    return block.referencedFactIds.some((fId) => {
+      const fact = task.facts.find((f) => f.id === fId);
+      if (!fact) return true;
+      if (fact.status !== 'confirmed') return true;
+      if (fact.isHistoricOnly) return true;
+      if (task.factSnapshot) {
+        const snapItem = task.factSnapshot.items?.find((item) => item.factId === fId);
+        if (snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)) {
+          return true;
+        }
+      }
+      return false;
+    });
+  });
+
   // Handle Generate / Regenerate
   const handleStartGenerate = () => {
-    if (!task.outlineConfirmed) {
-      alert('请先完成大纲确认，再执行初稿生成。');
+    if (!task.outlineConfirmed || !task.factSnapshot || !task.styleConfirmed) {
+      alert('前序事实清单未确认/已失效、文风未核准或大纲批准已失效，无法生成正文。请先前往前序阶段重新核准。现有文稿已保留浏览，未自动覆盖旧稿。');
       return;
     }
 
@@ -249,8 +269,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           {task.drafts.length === 0 ? (
             <button
               onClick={handleStartGenerate}
-              disabled={isGenerating}
-              className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              disabled={isGenerating || !isPrerequisiteMet}
+              className={`px-4 py-2 rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors ${
+                !isPrerequisiteMet
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
+              }`}
+              title={!isPrerequisiteMet ? '前序事实未确认/文风未核准/大纲批准失效，无法起草' : '生成首轮初稿'}
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isGenerating ? '起草生成中...' : '生成首轮初稿'}</span>
@@ -276,8 +301,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
               <button
                 onClick={handleStartGenerate}
-                disabled={isGenerating || isReviewerOnly}
-                className="px-3 py-1.5 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                disabled={isGenerating || isReviewerOnly || !isPrerequisiteMet}
+                className={`px-3 py-1.5 border rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+                  !isPrerequisiteMet || isReviewerOnly
+                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                    : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border-blue-200 cursor-pointer'
+                }`}
+                title={!isPrerequisiteMet ? '前序事实或大纲审批已失效，无法重新生成。请先前往前序阶段核准。' : '重新生成候选稿'}
               >
                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
                 <span>重新生成候选稿</span>
@@ -294,6 +324,44 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           )}
         </div>
       </div>
+
+      {/* Review & Invalidation Alert Banner when upstream approvals changed */}
+      {!isPrerequisiteMet && currentDraft && (
+        <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r text-xs text-amber-900 space-y-2">
+          <div className="flex items-center gap-2 font-bold text-amber-900">
+            <AlertCircle className="w-4 h-4 text-amber-600" />
+            <span>流程复核提示：前序事实已撤销/变更、文风未核准或大纲批准已失效</span>
+          </div>
+          <p className="text-amber-800">
+            检测到上游决策状态发生变动，下游起草批准已失效。系统已保护现有文稿，<strong>未自动覆盖旧稿</strong>，支持继续浏览与手动修订。文风未确认或事实快照无效时不能重新生成正文。
+          </p>
+          {blocksNeedingReview.length > 0 ? (
+            <div className="mt-1 pt-1 border-t border-amber-200/80">
+              <span className="font-semibold text-amber-900">以下正文段落引用的事实已失效或撤销，需主笔重点复核：</span>
+              <ul className="list-disc list-inside mt-1 space-y-0.5 text-[11px] text-amber-800">
+                {blocksNeedingReview.map((b) => {
+                  const changedFact = task.facts.find((f) => b.referencedFactIds.includes(f.id));
+                  return (
+                    <li key={b.id}>
+                      第 {b.order} 段：引用事实“{changedFact?.metric || '已删除事实'}”当前状态为【
+                      {changedFact?.status === 'pending'
+                        ? '待核定（已从confirmed撤销）'
+                        : changedFact?.status === 'excluded'
+                        ? '已明确排除'
+                        : changedFact ? '口径已变动' : '已不存在'}
+                      】
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-[11px] text-amber-700">
+              当前文稿暂无受影响的事实段落，但重新起草需先返回前序阶段重新确认大纲。
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Candidate comparison banner if present */}
       {pendingCandidateBlocks && (
@@ -441,8 +509,14 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
                         {/* Block metadata & facts pill */}
                         <div className="mt-2 flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-slate-100/70">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-mono text-[10px] text-slate-400">第{block.order || idx + 1}段</span>
+                            {blocksNeedingReview.some((b) => b.id === block.id) && (
+                              <span className="inline-flex items-center gap-1 text-[10px] bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded font-medium">
+                                <AlertCircle className="w-3 h-3 text-rose-600" />
+                                引用事实已变动/待复核
+                              </span>
+                            )}
                             {block.referencedFactIds.map((factId) => {
                               const fact = task.facts.find((f) => f.id === factId);
                               if (!fact) return null;

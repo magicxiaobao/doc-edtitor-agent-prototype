@@ -388,14 +388,56 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
     baseTask.title = '某单位2026年前三季度工作总结 (事实大纲已确认)';
     baseTask.currentStage = 'drafting';
     baseTask.status = '起草中';
-    // Resolve conflict to 128
+    // Resolve conflict to 128 -> primary evidence MUST be EVD-02
     baseTask.facts[0].status = 'confirmed';
     baseTask.facts[0].value = '128';
     baseTask.facts[0].selectedConflictValue = '128';
+    baseTask.facts[0].metricScope = '科室乙汇总口径：全口径合并统计，统计范围相同，完成128项';
+    baseTask.facts[0].primaryEvidenceId = 'EVD-02';
     baseTask.facts[0].conflictResolutionReason = '经核实，科室乙采用全系统全口径汇总标准，涵盖交叉归集任务，统计范围一致，采信科室乙汇总口径128项。';
     baseTask.factSnapshot = {
       confirmedAt: '2026-10-07T08:30:00.000Z',
       factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04'],
+      items: [
+        {
+          factId: 'FACT-01',
+          metric: '累计完成重点任务',
+          value: '128',
+          unit: '项',
+          period: '2026年1至9月',
+          metricScope: '科室乙汇总口径：全口径合并统计，统计范围相同，完成128项',
+          primaryEvidenceId: 'EVD-02',
+          selectedConflictValue: '128',
+          conflictResolutionReason: '采信科室乙汇总口径128项',
+        },
+        {
+          factId: 'FACT-02',
+          metric: '组织专题培训',
+          value: '16',
+          unit: '场',
+          period: '2026年1至9月',
+          metricScope: '全系统干部职工专题业务培训台账',
+          primaryEvidenceId: 'EVD-03',
+        },
+        {
+          factId: 'FACT-03',
+          metric: '专题培训参训规模',
+          value: '800',
+          unit: '人次',
+          period: '2026年1至9月',
+          metricScope: '专题培训实名参训人次统计',
+          primaryEvidenceId: 'EVD-03',
+        },
+        {
+          factId: 'FACT-04',
+          metric: '开展专题调研',
+          value: '12',
+          unit: '次',
+          period: '2026年1至9月',
+          metricScope: '深入基层专项调研工作记录',
+          primaryEvidenceId: 'EVD-05',
+        },
+      ],
       hash: 'SNAPSHOT-HASH-CONFIRMED-128',
     };
     baseTask.styleConfirmed = true;
@@ -411,10 +453,23 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   baseTask.facts[0].status = 'confirmed';
   baseTask.facts[0].value = '128';
   baseTask.facts[0].selectedConflictValue = '128';
+  baseTask.facts[0].primaryEvidenceId = 'EVD-02';
   baseTask.facts[0].conflictResolutionReason = '经核实采纳科室乙汇总口径128项。';
   baseTask.factSnapshot = {
     confirmedAt: '2026-10-07T08:30:00.000Z',
     factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04'],
+    items: [
+      {
+        factId: 'FACT-01',
+        metric: '累计完成重点任务',
+        value: '128',
+        unit: '项',
+        period: '2026年1至9月',
+        metricScope: '科室乙汇总口径：完成128项',
+        primaryEvidenceId: 'EVD-02',
+        selectedConflictValue: '128',
+      },
+    ],
     hash: 'SNAPSHOT-HASH-CONFIRMED-128',
   };
   baseTask.styleConfirmed = true;

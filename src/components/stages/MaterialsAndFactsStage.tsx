@@ -49,10 +49,16 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
 
   // Conflict modal state
   const [resolvingFact, setResolvingFact] = useState<Fact | null>(null);
-  const [conflictChoice, setConflictChoice] = useState<'120' | '128' | 'exclude'>('128');
-  const [conflictReason, setConflictReason] = useState(
-    '经核实，科室乙采用全系统全口径汇总标准，涵盖交叉归集任务，统计范围一致，采信科室乙汇总口径128项。'
-  );
+  const [conflictChoice, setConflictChoice] = useState<string>('');
+  const [conflictReason, setConflictReason] = useState<string>('');
+
+  // Snippet to Fact Modal
+  const [snippetForFact, setSnippetForFact] = useState<EvidenceSnippet | null>(null);
+  const [snipFactMetric, setSnipFactMetric] = useState('');
+  const [snipFactPeriod, setSnipFactPeriod] = useState('');
+  const [snipFactValue, setSnipFactValue] = useState('');
+  const [snipFactUnit, setSnipFactUnit] = useState('');
+  const [snipFactScope, setSnipFactScope] = useState('');
 
   // Manual Supplement Fact Modal
   const [showAddFactModal, setShowAddFactModal] = useState(false);
@@ -88,8 +94,15 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const pendingConflictsCount = task.facts.filter((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded').length;
   const gapsCount = task.facts.filter((f) => f.status === 'gap').length;
 
+  const handleOpenConflictModal = (fact: Fact) => {
+    setResolvingFact(fact);
+    // CRITICAL: Do NOT pre-select greater value, do NOT pre-fill canned reason
+    setConflictChoice(fact.selectedConflictValue || (fact.status === 'excluded' ? 'exclude' : ''));
+    setConflictReason(fact.conflictResolutionReason || '');
+  };
+
   const handleResolveConflict = () => {
-    if (!resolvingFact) return;
+    if (!resolvingFact || !conflictChoice) return;
 
     const updatedFacts = task.facts.map((f) => {
       if (f.id === resolvingFact.id) {
@@ -97,15 +110,19 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
           return {
             ...f,
             status: 'excluded' as const,
-            conflictResolutionReason: conflictReason || '主笔决定排除该冲突指标，不作为本期成效写入正文',
+            selectedConflictValue: undefined,
+            conflictResolutionReason: conflictReason.trim() || '主笔明确排除该冲突指标，不作为本期成效写入正文',
           };
         } else {
+          // Find matching candidate to update primaryEvidenceId to the candidate's exact evidenceId!
+          const matchedCand = resolvingFact.conflictCandidates?.find((c) => c.value === conflictChoice);
           return {
             ...f,
             status: 'confirmed' as const,
             value: conflictChoice,
             selectedConflictValue: conflictChoice,
-            conflictResolutionReason: conflictReason,
+            primaryEvidenceId: matchedCand ? matchedCand.evidenceId : f.primaryEvidenceId,
+            conflictResolutionReason: conflictReason.trim() || `主笔采信${conflictChoice}${f.unit}口径`,
           };
         }
       }
@@ -114,15 +131,27 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
 
     onUpdateTask({
       facts: updatedFacts,
-      // If fact changed, invalidate previous snapshot to enforce review
+      // If fact changed, invalidate previous snapshots
       factSnapshot: undefined,
       outlineConfirmed: false,
+      outlineSnapshot: undefined,
     });
 
     setResolvingFact(null);
   };
 
   const handleToggleFactStatus = (factId: string, currentStatus: string) => {
+    const targetFact = task.facts.find((f) => f.id === factId);
+    if (!targetFact) return;
+    if (targetFact.isHistoricOnly) {
+      alert('历史定稿事实严格隔离为文风参考，严禁带入本期事实清单。');
+      return;
+    }
+    if (targetFact.status === 'gap' || targetFact.primaryEvidenceId === 'EVD-06' || targetFact.metricScope?.includes('仅作为线索')) {
+      alert('仅有定性检索线索，缺少原文依据与量化数据，不可直接确认为事实。');
+      return;
+    }
+
     const updatedFacts = task.facts.map((f) => {
       if (f.id === factId) {
         const nextStatus = currentStatus === 'confirmed' ? ('pending' as const) : ('confirmed' as const);
@@ -131,9 +160,12 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       return f;
     });
 
+    // Invalidate downstream snapshots when fact is toggled
     onUpdateTask({
       facts: updatedFacts,
       factSnapshot: undefined,
+      outlineConfirmed: false,
+      outlineSnapshot: undefined,
     });
   };
 
@@ -143,19 +175,30 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       return;
     }
 
-    const confirmedFactIds = task.facts
-      .filter((f) => f.status === 'confirmed')
-      .map((f) => f.id);
+    const confirmedFacts = task.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly);
+
+    const snapshotItems = confirmedFacts.map((f) => ({
+      factId: f.id,
+      metric: f.metric,
+      value: f.value,
+      unit: f.unit,
+      period: f.period,
+      metricScope: f.metricScope,
+      primaryEvidenceId: f.primaryEvidenceId,
+      selectedConflictValue: f.selectedConflictValue,
+      conflictResolutionReason: f.conflictResolutionReason,
+    }));
 
     const snapshot = {
       confirmedAt: new Date().toISOString(),
-      factIds: confirmedFactIds,
+      factIds: confirmedFacts.map((f) => f.id),
+      items: snapshotItems,
       hash: `SNAP-${Date.now().toString(36)}`,
     };
 
     onUpdateTask({
       factSnapshot: snapshot,
-      status: '大纲待确认',
+      status: task.status === '草稿' ? '事实待确认' : task.status,
     });
   };
 
@@ -211,8 +254,28 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     if (!matName.trim()) return;
 
     const isSimulatedDocx = matFileType === 'docx' || matFileType === 'pdf';
+    const newDocId = `SRC-${Date.now().toString(36).toUpperCase()}`;
+
+    // Generate stable snippet IDs from text paragraphs if TXT or pasted
+    let newSnippets: EvidenceSnippet[] = [];
+    if (!isSimulatedDocx && matContent.trim()) {
+      const paragraphs = matContent
+        .split(/\n+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      newSnippets = paragraphs.map((p, idx) => ({
+        id: `EVD-${newDocId}-${idx + 1}`,
+        sourceDocId: newDocId,
+        docName: matName.trim(),
+        location: `第${idx + 1}段`,
+        period: matPeriod.trim(),
+        text: p,
+      }));
+    }
+
     const newDoc: SourceDocument = {
-      id: `SRC-${Date.now().toString(36).toUpperCase()}`,
+      id: newDocId,
       name: matName.trim(),
       source: matSource.trim(),
       period: matPeriod.trim(),
@@ -222,17 +285,50 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       content: isSimulatedDocx
         ? `【元数据记录】文件名称：${matName}（${matFileType.toUpperCase()}格式）。状态：待接入内网文档解析服务，当前未提取文本内容。`
         : matContent.trim() || '（无正文内容）',
-      paragraphCount: isSimulatedDocx ? 0 : 2,
+      paragraphCount: isSimulatedDocx ? 0 : newSnippets.length || 1,
       wordCount: isSimulatedDocx ? 0 : matContent.length,
     };
 
     onUpdateTask({
       documents: [...task.documents, newDoc],
+      snippets: [...task.snippets, ...newSnippets],
     });
 
     setShowAddMaterialModal(false);
     setMatName('');
     setMatContent('');
+  };
+
+  const handleCreateFactFromSnippetSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!snippetForFact || !snipFactMetric.trim() || !snipFactValue.trim()) return;
+
+    const newFact: Fact = {
+      id: `FACT-EVD-${Date.now().toString(36).toUpperCase()}`,
+      metric: snipFactMetric.trim(),
+      period: snipFactPeriod.trim() || snippetForFact.period || task.startDate.slice(0, 4) + '年1至9月',
+      value: snipFactValue.trim(),
+      unit: snipFactUnit.trim(),
+      metricScope: snipFactScope.trim() || `${snippetForFact.docName}原文记载`,
+      primaryEvidenceId: snippetForFact.id,
+      evidenceIds: [snippetForFact.id],
+      hasConflict: false,
+      status: 'pending', // Created as pending, awaiting author explicit confirmation
+    };
+
+    onUpdateTask({
+      facts: [...task.facts, newFact],
+      factSnapshot: undefined,
+      outlineConfirmed: false,
+      outlineSnapshot: undefined,
+    });
+
+    setSnippetForFact(null);
+    setSnipFactMetric('');
+    setSnipFactPeriod('');
+    setSnipFactValue('');
+    setSnipFactUnit('');
+    setSnipFactScope('');
   };
 
   return (
@@ -510,22 +606,27 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                         </td>
 
                         <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                          {fact.hasConflict ? (
+                          {fact.isHistoricOnly ? (
+                            <span
+                              className="text-[11px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded cursor-not-allowed select-none"
+                              title="历史定稿数据严格隔离为文风参考，严禁带入本期事实清单"
+                            >
+                              历史隔离（严禁确认）
+                            </span>
+                          ) : fact.hasConflict ? (
                             <button
-                              onClick={() => setResolvingFact(fact)}
+                              onClick={() => handleOpenConflictModal(fact)}
                               className="text-amber-700 hover:text-amber-900 font-semibold px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 cursor-pointer"
                             >
                               裁决冲突
                             </button>
                           ) : fact.status === 'gap' ? (
-                            <button
-                              onClick={() => {
-                                alert(`资料缺口说明：${fact.gapDescription}\n建议联系业务科室补充调查问卷或测评公函。`);
-                              }}
-                              className="text-blue-700 hover:text-blue-900 font-medium cursor-pointer"
+                            <span
+                              className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded cursor-not-allowed select-none"
+                              title="仅有定性检索线索，缺少原文出处与量化数据，不可直接确认为事实"
                             >
-                              查看缺口
-                            </button>
+                              线索待核（严禁确认）
+                            </span>
                           ) : (
                             <button
                               onClick={() => handleToggleFactStatus(fact.id, fact.status)}
@@ -535,7 +636,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                                   : 'text-emerald-700 hover:text-emerald-900 bg-emerald-50 border border-emerald-200'
                               }`}
                             >
-                              {fact.status === 'confirmed' ? '重置为待定' : '确认采纳'}
+                              {fact.status === 'confirmed' ? '撤销为待定' : '确认采纳'}
                             </button>
                           )}
                         </td>
@@ -777,12 +878,29 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                         出处：{snip.docName} · {snip.location} ({snip.period})
                       </div>
                     </div>
-                    <button
-                      onClick={() => onViewSnippet(snip)}
-                      className="px-2.5 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs font-medium cursor-pointer"
-                    >
-                      定位原文
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => onViewSnippet(snip)}
+                        className="px-2 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs font-medium cursor-pointer"
+                      >
+                        定位原文
+                      </button>
+                      {!ragResult.isClueOnly && (
+                        <button
+                          onClick={() => {
+                            setSnippetForFact(snip);
+                            setSnipFactMetric('');
+                            setSnipFactPeriod(snip.period || '');
+                            setSnipFactValue('');
+                            setSnipFactUnit('');
+                            setSnipFactScope(snip.docName);
+                          }}
+                          className="px-2 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-medium cursor-pointer shadow-2xs"
+                        >
+                          + 建立事实候选
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -813,31 +931,54 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                 系统检测到针对指标<strong>“{resolvingFact.metric}”</strong>存在两个不同来源的申报数值，且统计范围相同。系统不会随意取大值或平均值，请主笔对比原文后明确采信项：
               </div>
 
-              {/* Side-by-Side Candidates */}
+              {/* Side-by-Side Candidates with Raw Snippets */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {resolvingFact.conflictCandidates?.map((cand) => {
                   const isSelected = conflictChoice === cand.value;
+                  const candSnippet = task.snippets.find((s) => s.id === cand.evidenceId);
+                  const candDoc = task.documents.find((d) => d.id === cand.sourceDocId);
+
                   return (
                     <div
                       key={cand.value}
-                      onClick={() => setConflictChoice(cand.value as any)}
-                      className={`p-3.5 rounded-lg border cursor-pointer transition-all ${
+                      onClick={() => setConflictChoice(cand.value)}
+                      className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between ${
                         isSelected
-                          ? 'border-blue-700 bg-blue-50/70 shadow-xs ring-1 ring-blue-700'
+                          ? 'border-blue-700 bg-blue-50/70 shadow-xs ring-2 ring-blue-700'
                           : 'border-slate-200 hover:border-slate-300 bg-white'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-800">
-                          {cand.description.split('：')[0]}
-                        </span>
-                        <span className="text-base font-extrabold text-blue-800 font-mono">
-                          {cand.value} {resolvingFact.unit}
-                        </span>
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-800">
+                            {cand.description.split('：')[0]}
+                          </span>
+                          <span className="text-base font-extrabold text-blue-800 font-mono">
+                            {cand.value} {resolvingFact.unit}
+                          </span>
+                        </div>
+                        <p className="mt-1.5 text-slate-600 text-[11px] leading-relaxed">
+                          {cand.description}
+                        </p>
+
+                        {/* Raw Original Snippet in Candidate Box */}
+                        <div className="mt-2.5 p-2 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700 font-mono space-y-1">
+                          <span className="text-slate-400 font-semibold text-[10px] block">
+                            【原文依据片段（{cand.evidenceId}）】
+                          </span>
+                          <p className="text-slate-800 font-medium italic">
+                            “{candSnippet?.text || '（暂未关联原文片段）'}”
+                          </p>
+                          <span className="text-[10px] text-slate-500 block">
+                            定位：{candDoc?.name || cand.sourceDocId} · {candSnippet?.location || ''}
+                          </span>
+                        </div>
                       </div>
-                      <p className="mt-2 text-slate-600 text-[11px] leading-relaxed">
-                        {cand.description}
-                      </p>
+
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500">主出处将绑定为：</span>
+                        <strong className="text-blue-700 font-mono">{cand.evidenceId}</strong>
+                      </div>
                     </div>
                   );
                 })}
@@ -848,25 +989,29 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                 onClick={() => setConflictChoice('exclude')}
                 className={`p-3 rounded-lg border cursor-pointer transition-all ${
                   conflictChoice === 'exclude'
-                    ? 'border-rose-600 bg-rose-50/70 shadow-xs ring-1 ring-rose-600'
+                    ? 'border-rose-600 bg-rose-50/70 shadow-xs ring-2 ring-rose-600'
                     : 'border-slate-200 hover:border-slate-300 bg-white'
                 }`}
               >
                 <div className="font-bold text-xs text-rose-800">排除该事实（不写入本期稿件）</div>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  若口径暂时无法核准，可暂时排除该指标，待后续部门复核后再补充。
+                  若口径暂时无法核准，主笔可明确排除该指标，本次正文起草将不引用该数值。
                 </p>
               </div>
 
               {/* Reason input */}
               <div className="space-y-1">
-                <label className="font-semibold text-slate-700">主笔裁决理由与口径依据记录：</label>
+                <div className="flex justify-between items-center">
+                  <label className="font-semibold text-slate-700">主笔裁决理由与口径依据记录：</label>
+                  <span className="text-[10px] text-slate-400">（必填：由主笔人工核验并记录决策依据）</span>
+                </div>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={conflictReason}
                   onChange={(e) => setConflictReason(e.target.value)}
                   className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
-                  placeholder="填写为何采信此口径的业务依据..."
+                  placeholder="在此输入主笔裁决采纳或排除该口径的具体业务依据..."
+                  required
                 />
               </div>
 
@@ -881,7 +1026,8 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                 <button
                   type="button"
                   onClick={handleResolveConflict}
-                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                  disabled={!conflictChoice || !conflictReason.trim()}
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   确认采信并写入事实
                 </button>
@@ -1092,6 +1238,118 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                   className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer"
                 >
                   保存登记材料
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create Fact From Snippet Modal */}
+      {snippetForFact && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-blue-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-blue-900 flex items-center gap-1.5">
+                <Database className="w-4 h-4 text-blue-700" />
+                基于材料片段建立事实候选
+              </h3>
+              <button
+                onClick={() => setSnippetForFact(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateFactFromSnippetSubmit} className="p-5 space-y-3.5 text-xs">
+              {/* Target Snippet Preview */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded text-xs space-y-1">
+                <span className="text-[10px] text-slate-400 font-mono block">
+                  依据来源：{snippetForFact.docName} ({snippetForFact.location}) · {snippetForFact.period}
+                </span>
+                <p className="font-medium text-slate-800 italic">“{snippetForFact.text}”</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">
+                  提取指标 / 事实名称 <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="例如：组织专题培训 / 开展专项调研"
+                  value={snipFactMetric}
+                  onChange={(e) => setSnipFactMetric(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">统计期间</label>
+                <input
+                  type="text"
+                  placeholder="例如：2026年1至9月 / 2027年二季度"
+                  value={snipFactPeriod}
+                  onChange={(e) => setSnipFactPeriod(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">
+                    数值 <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="例如：25 / 120"
+                    value={snipFactValue}
+                    onChange={(e) => setSnipFactValue(e.target.value)}
+                    className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 font-mono"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">计量单位</label>
+                  <input
+                    type="text"
+                    placeholder="例如：场 / 项 / 人次 / 次"
+                    value={snipFactUnit}
+                    onChange={(e) => setSnipFactUnit(e.target.value)}
+                    className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">统计口径与说明</label>
+                <input
+                  type="text"
+                  placeholder="例如：科室专项台账统计范围说明"
+                  value={snipFactScope}
+                  onChange={(e) => setSnipFactScope(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-800">
+                提示：建立后该事实初始状态为“待确认”，需主笔在事实清单中人工核对确认后，方可纳入大纲与正文起草。
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSnippetForFact(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  保存并加入事实清单
                 </button>
               </div>
             </form>

@@ -79,9 +79,22 @@ export interface Fact {
   gapDescription?: string;
 }
 
+export interface FactItemSnapshot {
+  factId: string;
+  metric: string;
+  value: string;
+  unit: string;
+  period: string;
+  metricScope: string;
+  primaryEvidenceId: string;
+  selectedConflictValue?: string;
+  conflictResolutionReason?: string;
+}
+
 export interface FactSnapshot {
   confirmedAt: string;
   factIds: string[];
+  items: FactItemSnapshot[];
   hash: string;
 }
 
@@ -93,6 +106,26 @@ export interface StyleRule {
   sampleSnippet: string;
   sampleDocId: string;
   confirmed: boolean;
+  excluded?: boolean;
+}
+
+export interface StyleSnapshot {
+  confirmedAt: string;
+  activeRuleIds: string[];
+  hash: string;
+}
+
+export interface OutlineSectionSnapshot {
+  sectionId: string;
+  title: string;
+  suggestedWordCount: number;
+  assignedFactIds: string[];
+}
+
+export interface OutlineSnapshot {
+  confirmedAt: string;
+  sections: OutlineSectionSnapshot[];
+  hash: string;
 }
 
 export interface OutlineSection {
@@ -183,8 +216,10 @@ export interface Task {
   factSnapshot?: FactSnapshot;
   styleRules: StyleRule[];
   styleConfirmed: boolean;
+  styleSnapshot?: StyleSnapshot;
   outline: OutlineSection[];
   outlineConfirmed: boolean;
+  outlineSnapshot?: OutlineSnapshot;
   drafts: DraftVersion[];
   currentDraftId: string;
   reviewComments: ReviewComment[];
