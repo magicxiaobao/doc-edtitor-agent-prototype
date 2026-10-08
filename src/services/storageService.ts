@@ -23,7 +23,7 @@ export interface LoadStateResult {
   migrationMessage?: string;
 }
 
-// In-memory fallback for Node.js / non-browser test environments
+// In-memory fallback for Node.js / non-browser test environments or storage quota emergencies
 let memoryStorage: Record<string, string> = {};
 
 export let globalStorageError: string | null = null;
@@ -36,14 +36,14 @@ export function clearStorageError(): void {
   globalStorageError = null;
 }
 
-function getStorageItem(key: string): string | null {
+export function getStorageItem(key: string): string | null {
   if (typeof localStorage !== 'undefined') {
     return localStorage.getItem(key);
   }
   return memoryStorage[key] ?? null;
 }
 
-function setStorageItem(key: string, value: string): void {
+export function setStorageItem(key: string, value: string): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(key, value);
   } else {
@@ -52,13 +52,23 @@ function setStorageItem(key: string, value: string): void {
 }
 
 /**
- * Requirement 7: Full pasted original text is persisted without truncation.
- * If localStorage storage fails (e.g. quota exceeded), gracefully captures error
- * without losing in-memory data, providing visible alert and recovery option.
+ * Requirement 7 & Task 10: Preserves full pasted/uploaded original text without truncation.
+ * Even long materials (50,000+ chars) are preserved intact for evidence verification.
  */
 function sanitizeTasksForStorage(tasks: Task[]): Task[] {
-  // Do NOT truncate doc.content! Preserve full text for accurate evidence tracing
+  // Strictly preserve full original text!
   return tasks;
+}
+
+/**
+ * Validates task runtime structure integrity.
+ * Returns true if valid or safely repaired, false if structural corruption.
+ */
+function validateTaskStructure(task: any): boolean {
+  if (!task || typeof task !== 'object') return false;
+  if (typeof task.id !== 'string' || !task.id) return false;
+  if (typeof task.title !== 'string') return false;
+  return true;
 }
 
 /**
@@ -66,10 +76,8 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
  */
 function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } {
   const migratedTasks: Task[] = rawTasks.map((rawT: any) => {
-    // Ensure task has drafts array
     const drafts: DraftVersion[] = Array.isArray(rawT.drafts) ? rawT.drafts : [];
     
-    // Ensure each draft has snapshotMetadata
     const migratedDrafts = drafts.map((d: any) => {
       if (!d.snapshotMetadata) {
         return {
@@ -109,8 +117,7 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
 }
 
 /**
- * Loads persisted app state from localStorage
- * - Supports schemaVersion migration
+ * Loads persisted app state with runtime structure verification
  * - Catches corrupted data with recovery options without silent data loss
  * - Keeps currentTaskId and activeRole on refresh
  */
@@ -129,34 +136,52 @@ export function loadPersistedState(): LoadStateResult {
   if (rawV2) {
     try {
       const payload: AppStoragePayload = JSON.parse(rawV2);
-      if (payload && Array.isArray(payload.tasks) && payload.tasks.length > 0) {
-        // Validate if schema matches
-        if (payload.schemaVersion === CURRENT_SCHEMA_VERSION) {
-          const matchedTaskId = payload.tasks.some((t) => t.id === payload.currentTaskId)
-            ? payload.currentTaskId
-            : payload.tasks[0].id;
 
-          const matchedRole: UserRole = ['主笔甲', '审阅乙', '供稿丙', '审阅丁'].includes(payload.activeRole)
-            ? payload.activeRole
-            : '主笔甲';
+      // Runtime structure verification: must be object, have tasks array
+      if (!payload || typeof payload !== 'object' || !Array.isArray(payload.tasks)) {
+        throw new Error('存储结构异常：缺少有效的 tasks 根数组');
+      }
 
-          return {
-            tasks: payload.tasks,
-            currentTaskId: matchedTaskId,
-            activeRole: matchedRole,
-            isCorrupted: false,
-          };
-        } else {
-          // Upgrade older schema
-          const migration = migrateToSchemaV2(payload.tasks);
-          return {
-            tasks: migration.tasks,
-            currentTaskId: payload.currentTaskId || migration.tasks[0].id,
-            activeRole: payload.activeRole || '主笔甲',
-            isCorrupted: false,
-            migrationMessage: migration.message,
-          };
-        }
+      // Check task integrity
+      const hasCorruptedTask = payload.tasks.some((t) => !validateTaskStructure(t));
+      if (hasCorruptedTask) {
+        throw new Error('存储结构异常：检测到任务对象元数据缺失或结构损坏');
+      }
+
+      if (payload.tasks.length === 0) {
+        return {
+          tasks: defaultPresets,
+          currentTaskId: defaultTaskId,
+          activeRole: defaultRole,
+          isCorrupted: false,
+        };
+      }
+
+      if (payload.schemaVersion === CURRENT_SCHEMA_VERSION) {
+        const matchedTaskId = payload.tasks.some((t) => t.id === payload.currentTaskId)
+          ? payload.currentTaskId
+          : payload.tasks[0].id;
+
+        const matchedRole: UserRole = ['主笔甲', '审阅乙', '供稿丙', '审阅丁'].includes(payload.activeRole)
+          ? payload.activeRole
+          : '主笔甲';
+
+        return {
+          tasks: payload.tasks,
+          currentTaskId: matchedTaskId,
+          activeRole: matchedRole,
+          isCorrupted: false,
+        };
+      } else {
+        // Upgrade older schema
+        const migration = migrateToSchemaV2(payload.tasks);
+        return {
+          tasks: migration.tasks,
+          currentTaskId: payload.currentTaskId || migration.tasks[0].id,
+          activeRole: payload.activeRole || '主笔甲',
+          isCorrupted: false,
+          migrationMessage: migration.message,
+        };
       }
     } catch (e: any) {
       console.error('LocalStorage v2 corrupted:', e);
@@ -167,7 +192,7 @@ export function loadPersistedState(): LoadStateResult {
         currentTaskId: defaultTaskId,
         activeRole: defaultRole,
         isCorrupted: true,
-        corruptedMessage: `检测到本地存储数据损坏 (JSON解析错误: ${e.message})。已隔离原始数据至备份区，未静默丢弃草稿。`,
+        corruptedMessage: `检测到本地存储数据结构损坏 (${e.message})。已隔离原始数据至备份区，未静默丢弃草稿。`,
       };
     }
   }
@@ -210,7 +235,8 @@ export function loadPersistedState(): LoadStateResult {
 }
 
 /**
- * Saves current app state to localStorage
+ * Saves current app state to localStorage.
+ * If quota exceeded or storage write fails, captures error without losing in-memory state.
  */
 export function savePersistedState(tasks: Task[], currentTaskId: string, activeRole: UserRole): boolean {
   try {
@@ -222,11 +248,27 @@ export function savePersistedState(tasks: Task[], currentTaskId: string, activeR
       tasks: sanitized,
       lastSavedAt: new Date().toISOString(),
     };
-    setStorageItem(STORAGE_KEY_V2, JSON.stringify(payload));
+    const serialized = JSON.stringify(payload);
+    setStorageItem(STORAGE_KEY_V2, serialized);
+    clearStorageError();
     return true;
   } catch (e: any) {
     console.warn('Failed to save state to localStorage', e);
-    globalStorageError = `本地存储写入失败或空间受限（${e.message}）。内存中的当前文稿完好无损，建议及时导出TXT/Word文件备份。`;
+    // Write to memoryStorage as emergency backup
+    try {
+      const payload: AppStoragePayload = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        currentTaskId,
+        activeRole,
+        tasks: sanitizeTasksForStorage(tasks),
+        lastSavedAt: new Date().toISOString(),
+      };
+      memoryStorage[STORAGE_KEY_V2] = JSON.stringify(payload);
+    } catch {
+      // ignore
+    }
+
+    globalStorageError = `本地存储写入失败或空间受限（${e.message || '存储配额超限'}）。内存中的当前文稿完好无损，建议及时导出TXT/Word文件备份。`;
     return false;
   }
 }

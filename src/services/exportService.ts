@@ -33,10 +33,11 @@ export function normalizeExportOptions(options?: boolean | ExportOptions): Requi
 }
 
 /**
- * Requirement 4: Exports document version as TXT
- * - Supports granular options: includeBody, includeEvidence, includeReviewLog
- * - Uses frozen snapshotMetadata of the target draft rather than current outline/facts
- * - Returns generated text string for test verification
+ * Requirement 4 & Task 10: Exports document version as TXT
+ * - Supports granular options: includeBody, includeEvidence, includeReviewLog (all 8 combinations!)
+ * - When includeBody is false and includeEvidence is true, outputs standalone evidence list.
+ * - Uses frozen snapshotMetadata of the target draft rather than current outline/facts.
+ * - Returns generated text string for test verification.
  */
 export function exportDocumentAsTxt(
   task: Task, 
@@ -61,7 +62,7 @@ export function exportDocumentAsTxt(
   outlineList.forEach((sec) => sectionsMap.set(sec.id, sec.title));
 
   // Prepare snapshot facts map
-  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string }>();
+  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string; period?: string; primaryEvidenceId?: string }>();
   if (meta?.factSnapshot?.items) {
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
@@ -69,6 +70,8 @@ export function exportDocumentAsTxt(
         value: item.value,
         unit: item.unit,
         metricScope: item.metricScope,
+        period: item.period,
+        primaryEvidenceId: item.primaryEvidenceId,
       });
     });
   }
@@ -104,33 +107,66 @@ export function exportDocumentAsTxt(
     });
   }
 
+  // Standalone Evidence Section when includeBody is false but includeEvidence is true
+  if (opts.includeEvidence && !opts.includeBody) {
+    content += `【事实依据清单与出处溯源】\n----------------------------------------------------\n`;
+    if (meta?.factSnapshot?.items && meta.factSnapshot.items.length > 0) {
+      meta.factSnapshot.items.forEach((item, idx) => {
+        content += `${idx + 1}. [${item.factId}] ${item.metric}：${item.value}${item.unit} | 期间：${item.period} | 口径：${item.metricScope} (主出处：${item.primaryEvidenceId || '台账'})\n`;
+      });
+    } else if (task.facts.length > 0) {
+      task.facts.forEach((f, idx) => {
+        content += `${idx + 1}. [${f.id}] ${f.metric}：${f.selectedConflictValue || f.value}${f.unit} | 期间：${f.period} | 口径：${f.metricScope} (主出处：${f.primaryEvidenceId || '台账'})\n`;
+      });
+    } else {
+      content += `暂无已核准的事实依据。\n`;
+    }
+    content += `\n`;
+  }
+
   // 2. Output Review Comments & Decisions
-  if (opts.includeReviewLog && task.reviewComments.length > 0) {
+  if (opts.includeReviewLog) {
     content += `\n====================================================\n`;
     content += `【附：审阅意见与落实处理记录】\n`;
-    task.reviewComments.forEach((cmt, idx) => {
-      const statusLabel = 
-        cmt.status === 'implemented' ? '已修改落实' :
-        cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
-        cmt.status === 'rejected' ? '拒绝并说明' :
-        cmt.status === 'need_discussion' ? '待沟通' : '待处理';
+    if (task.reviewComments.length > 0) {
+      task.reviewComments.forEach((cmt, idx) => {
+        const statusLabel = 
+          cmt.status === 'implemented' ? '已修改落实' :
+          cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
+          cmt.status === 'rejected' ? '拒绝并说明' :
+          cmt.status === 'need_discussion' ? '待沟通' : '待处理';
 
-      content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}] 状态：${statusLabel}\n`;
-      content += `   意见内容：${cmt.content}\n`;
-      if (cmt.suggestedChange) {
-        content += `   修改建议：${cmt.suggestedChange}\n`;
-      }
-      if (cmt.decisionReason) {
-        content += `   研判理由：${cmt.decisionReason}\n`;
-      }
-      if (cmt.authorReply) {
-        content += `   主笔答复：${cmt.authorReply}\n`;
-      }
-      if (cmt.implementationDraftId) {
-        content += `   落实版本：${cmt.implementationDraftId}${cmt.implementationBlockId ? ' (段落: ' + cmt.implementationBlockId + ')' : ''}\n`;
-      }
-      content += `\n`;
-    });
+        content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}] 状态：${statusLabel}\n`;
+        content += `   意见内容：${cmt.content}\n`;
+        if (cmt.suggestedChange) {
+          content += `   修改建议：${cmt.suggestedChange}\n`;
+        }
+        if (cmt.decisionReason) {
+          content += `   研判理由：${cmt.decisionReason}\n`;
+        }
+        if (cmt.authorReply) {
+          content += `   主笔答复：${cmt.authorReply}\n`;
+        }
+        if (cmt.implementationDraftId) {
+          content += `   落实版本：${cmt.implementationDraftId}${cmt.implementationBlockId ? ' (段落: ' + cmt.implementationBlockId + ')' : ''}\n`;
+        }
+        content += `\n`;
+      });
+    } else {
+      content += `（本版本无待处理或已登记的审阅意见记录）\n`;
+    }
+
+    if (draft.auditRecords && draft.auditRecords.length > 0) {
+      content += `\n【附：核校更正与忽略存证记录】\n`;
+      draft.auditRecords.forEach((rec, idx) => {
+        content += `${idx + 1}. 核校项：${rec.issueId} | 状态：${rec.status === 'accepted' ? '已更正采纳' : rec.status === 'ignored' ? '已忽略存证' : '待处理'}${rec.ignoreReason ? ' (理由：' + rec.ignoreReason + ')' : ''}\n`;
+      });
+    }
+  }
+
+  // When all 3 options are false
+  if (!opts.includeBody && !opts.includeEvidence && !opts.includeReviewLog) {
+    content += `（已依据导出选项排除正文、依据出处及审阅处理记录，仅保留文稿版本元数据）\n`;
   }
 
   // Trigger download if running in DOM browser
@@ -139,7 +175,7 @@ export function exportDocumentAsTxt(
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${exportTitle}_${draft.versionNumber.replace(/[\s\(\)]/g, '_')}.txt`;
+    a.download = `${exportTitle}_${draft.versionNumber}_${Date.now()}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -150,17 +186,17 @@ export function exportDocumentAsTxt(
 }
 
 /**
- * Requirement 4: Exports document version as real OOXML DOCX
- * - Supports identical options: includeBody, includeEvidence, includeReviewLog
- * - Uses frozen snapshotMetadata of target version
- * - Validates OOXML structure
- * - Explicit compatibility disclaimer: Word/WPS desktop opening compatibility pending verification
+ * Requirement 4 & Task 10: Exports document version as DOCX
+ * - Generates valid ECMA-376 OOXML document structure
+ * - Supports granular options: includeBody, includeEvidence, includeReviewLog (all 8 combinations!)
+ * - Standalone evidence table if includeBody is false and includeEvidence is true
+ * - Uses frozen snapshotMetadata of the target draft
  */
 export async function exportDocumentAsDocx(
   task: Task, 
   draft: DraftVersion, 
   options?: boolean | ExportOptions
-): Promise<Blob> {
+): Promise<Blob | Buffer> {
   const opts = normalizeExportOptions(options);
   const meta = draft.snapshotMetadata;
   const exportTitle = meta?.taskTitle || task.title;
@@ -169,40 +205,54 @@ export async function exportDocumentAsDocx(
 
   const docParagraphs: (Paragraph | Table)[] = [];
 
-  // Title
+  // Title: 2号方正小标宋 (22pt = size 44)
   docParagraphs.push(
     new Paragraph({
-      heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
-      spacing: { after: 300 },
+      spacing: { before: 200, after: 300 },
       children: [
         new TextRun({
           text: exportTitle,
           bold: true,
-          size: 36, // 18pt
-          font: 'SimHei',
+          size: 44,
+          font: 'SimSun',
         }),
       ],
     })
   );
 
-  // Subtitle metadata
+  // Subtitle / Metadata
+  docParagraphs.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 150 },
+      children: [
+        new TextRun({
+          text: `文种：${task.docType}   |   统计期间：${exportStartDate} 至 ${exportEndDate}`,
+          size: 24, // 12pt
+          color: '555555',
+          font: 'KaiTi',
+        }),
+      ],
+    })
+  );
+
   docParagraphs.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 300 },
       children: [
         new TextRun({
-          text: `文种：${task.docType}   统计期间：${exportStartDate} 至 ${exportEndDate}   版本：${draft.versionNumber}`,
-          size: 24, // 12pt
-          color: '444444',
-          font: 'FangSong',
+          text: `公文版本：${draft.versionNumber}   |   拟稿人：${draft.author}   |   归档时间：${new Date(draft.createdAt).toLocaleString('zh-CN')}`,
+          size: 22, // 11pt
+          color: '555555',
+          font: 'KaiTi',
         }),
       ],
     })
   );
 
-  // Disclaimer / Scope metadata note
+  // Scope metadata note
   docParagraphs.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -223,7 +273,7 @@ export async function exportDocumentAsDocx(
   const outlineList = meta?.outlineSections || task.outline;
   outlineList.forEach((sec) => sectionsMap.set(sec.id, sec.title));
 
-  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string }>();
+  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string; period?: string; primaryEvidenceId?: string }>();
   if (meta?.factSnapshot?.items) {
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
@@ -231,6 +281,8 @@ export async function exportDocumentAsDocx(
         value: item.value,
         unit: item.unit,
         metricScope: item.metricScope,
+        period: item.period,
+        primaryEvidenceId: item.primaryEvidenceId,
       });
     });
   }
@@ -306,8 +358,69 @@ export async function exportDocumentAsDocx(
     }
   }
 
+  // Standalone Evidence Table when includeBody is false and includeEvidence is true
+  if (opts.includeEvidence && !opts.includeBody) {
+    docParagraphs.push(
+      new Paragraph({
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 300, after: 150 },
+        children: [
+          new TextRun({
+            text: '【事实依据清单与出处溯源】',
+            bold: true,
+            size: 28,
+            font: 'SimHei',
+          }),
+        ],
+      })
+    );
+
+    const factTableRows: TableRow[] = [];
+    factTableRows.push(
+      new TableRow({
+        tableHeader: true,
+        children: [
+          new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '事实编号', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 30, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '指标名称与数值', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '统计期间', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 35, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '口径说明与出处', bold: true, size: 20, font: 'SimHei' })] })] }),
+        ],
+      })
+    );
+
+    const itemsToRender = meta?.factSnapshot?.items || task.facts.map((f) => ({
+      factId: f.id,
+      metric: f.metric,
+      value: f.selectedConflictValue || f.value,
+      unit: f.unit,
+      period: f.period,
+      metricScope: f.metricScope,
+      primaryEvidenceId: f.primaryEvidenceId,
+    }));
+
+    itemsToRender.forEach((item) => {
+      factTableRows.push(
+        new TableRow({
+          children: [
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: item.factId, size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${item.metric}：${item.value}${item.unit}`, size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: item.period || '2026年1-9月', size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${item.metricScope} (${item.primaryEvidenceId || '台账'})`, size: 18, font: 'FangSong' })] })] }),
+          ],
+        })
+      );
+    });
+
+    docParagraphs.push(
+      new Table({
+        rows: factTableRows,
+        width: { size: 100, type: WidthType.PERCENTAGE },
+      })
+    );
+  }
+
   // 2. Output Review Comments & Decisions
-  if (opts.includeReviewLog && task.reviewComments.length > 0) {
+  if (opts.includeReviewLog) {
     docParagraphs.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_1,
@@ -403,6 +516,32 @@ export async function exportDocumentAsDocx(
         width: { size: 100, type: WidthType.PERCENTAGE },
       })
     );
+
+    if (draft.auditRecords && draft.auditRecords.length > 0) {
+      docParagraphs.push(
+        new Paragraph({
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 300, after: 150 },
+          children: [new TextRun({ text: '附：核校更正与忽略存证记录', bold: true, size: 24, font: 'SimHei' })],
+        })
+      );
+
+      draft.auditRecords.forEach((rec, idx) => {
+        docParagraphs.push(
+          new Paragraph({
+            spacing: { line: 280, before: 60, after: 60 },
+            indent: { left: 480 },
+            children: [
+              new TextRun({
+                text: `${idx + 1}. 核校项：${rec.issueId} | 状态：${rec.status === 'accepted' ? '已更正采纳' : rec.status === 'ignored' ? '已忽略存证' : '待处理'}${rec.ignoreReason ? ' (理由：' + rec.ignoreReason + ')' : ''}`,
+                size: 20,
+                font: 'FangSong',
+              }),
+            ],
+          })
+        );
+      });
+    }
   }
 
   // End of Document note with compatibility disclaimer
@@ -441,19 +580,21 @@ export async function exportDocumentAsDocx(
     ],
   });
 
-  const blob = await Packer.toBlob(doc);
-
-  // Trigger download if in browser
+  // Support both browser (Blob) and Node (Buffer) environments
+  let result: Blob | Buffer;
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-    const url = URL.createObjectURL(blob);
+    result = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(result as Blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${exportTitle}_${draft.versionNumber.replace(/[\s\(\)]/g, '_')}.docx`;
+    a.download = `${exportTitle}_${draft.versionNumber}_${Date.now()}.docx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  } else {
+    result = await Packer.toBuffer(doc);
   }
 
-  return blob;
+  return result;
 }

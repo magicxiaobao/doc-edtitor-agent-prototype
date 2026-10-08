@@ -17,6 +17,7 @@ import {
   canEditDraft, 
   canRestoreVersion 
 } from '../../services/permissionService';
+import { applyDraftContentChange } from '../../services/draftLifecycleService';
 import { 
   PenTool, 
   Sparkles, 
@@ -189,29 +190,24 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
     if (!pendingCandidateBlocks) return;
 
-    const newVersion: DraftVersion = {
-      id: `DRAFT-${Date.now()}`,
-      versionNumber: `v1.${task.drafts.length}`,
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: '基于最新已确认事实重新生成的初稿版本',
-      blocks: pendingCandidateBlocks,
-      snapshotMetadata: {
-        taskTitle: task.title,
-        startDate: task.startDate,
-        endDate: task.endDate,
-        targetWordCount: task.targetWordCount,
-        factSnapshot: task.factSnapshot,
-        styleSnapshot: task.styleSnapshot,
-        outlineSnapshot: task.outlineSnapshot,
-        outlineSections: JSON.parse(JSON.stringify(task.outline)),
-      },
-    };
-    onUpdateTask({
-      drafts: [newVersion, ...task.drafts],
-      currentDraftId: newVersion.id,
-    });
-    setPendingCandidateBlocks(null);
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft?.id,
+        () => pendingCandidateBlocks,
+        '采纳重新起草候选稿',
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+      setPendingCandidateBlocks(null);
+    } catch (err: any) {
+      alert(err.message || '采纳候选稿失败');
+    }
   };
 
   const handleUpdateBlockContent = (blockId: string, newContent: string) => {
@@ -223,43 +219,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
     if (!currentDraft) return;
 
-    // Requirement 3: Working copy vs historical snapshot separation
-    // If the task or current draft is finalized, editing creates a new working draft and clears finalized status
-    if (task.isFinalized || currentDraft.isFinal) {
-      const newWorkingVersion: DraftVersion = {
-        id: `DRAFT-WORK-${Date.now()}`,
-        versionNumber: `v${task.drafts.length + 1}.0 (工作草稿·重新编辑)`,
-        createdAt: new Date().toISOString(),
-        author: activeRole,
-        summary: `定稿后重新编辑生成的新工作草稿（来源定稿：${currentDraft.versionNumber}）`,
-        blocks: currentDraft.blocks.map((b) =>
-          b.id === blockId ? { ...b, content: newContent, updatedAt: new Date().toISOString() } : { ...b }
-        ),
-        snapshotMetadata: currentDraft.snapshotMetadata,
-      };
-
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) =>
+            b.id === blockId ? { ...b, content: newContent, updatedAt: new Date().toISOString() } : b
+          ),
+        '手工编辑修改段落',
+        activeRole
+      );
       onUpdateTask({
-        isFinalized: false,
-        status: '起草中',
-        drafts: [newWorkingVersion, ...task.drafts],
-        currentDraftId: newWorkingVersion.id,
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
       });
-      return;
+    } catch (err: any) {
+      alert(err.message || '正文修改失败');
     }
-
-    const updatedBlocks = currentDraft.blocks.map((b) => {
-      if (b.id === blockId) {
-        return {
-          ...b,
-          content: newContent,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return b;
-    });
-
-    const updatedDrafts = task.drafts.map((d) => (d.id === currentDraft.id ? { ...d, blocks: updatedBlocks } : d));
-    onUpdateTask({ drafts: updatedDrafts });
   };
 
   // Local revision action
@@ -307,8 +286,29 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
-    handleUpdateBlockContent(revisionSuggestion.targetBlockId, revisionSuggestion.suggestedText);
-    setRevisionSuggestion(null);
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) =>
+            b.id === revisionSuggestion.targetBlockId
+              ? { ...b, content: revisionSuggestion.suggestedText, updatedAt: new Date().toISOString() }
+              : b
+          ),
+        `采纳局部修改建议（${revisionSuggestion.action}）`,
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+      setRevisionSuggestion(null);
+    } catch (err: any) {
+      alert(err.message || '采纳建议失败');
+    }
   };
 
   // Save version snapshot
@@ -322,23 +322,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
+    // Requirement 1 & 10: Saving snapshot MUST set read-only immutable semantics!
     const snapshotVersion: DraftVersion = {
       id: `DRAFT-${Date.now()}`,
       versionNumber: `v1.${task.drafts.length} (${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })})`,
       createdAt: new Date().toISOString(),
       author: activeRole,
-      summary: versionSummary.trim() || '主笔手动保存的稿件快照',
+      summary: versionSummary.trim() || '主笔手动保存的只读稿件快照',
       blocks: JSON.parse(JSON.stringify(currentDraft.blocks)),
-      snapshotMetadata: {
-        taskTitle: task.title,
-        startDate: task.startDate,
-        endDate: task.endDate,
-        targetWordCount: task.targetWordCount,
-        factSnapshot: task.factSnapshot,
-        styleSnapshot: task.styleSnapshot,
-        outlineSnapshot: task.outlineSnapshot,
-        outlineSections: JSON.parse(JSON.stringify(task.outline)),
-      },
+      isFinal: false,
+      isHistoricalSnapshot: true, // Read-only immutable
+      isWorkingDraft: false,      // Not a working draft
+      snapshotMetadata: currentDraft.snapshotMetadata,
+      auditRecords: currentDraft.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
     };
 
     onUpdateTask({
@@ -358,31 +354,24 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
-    const restoredVersion: DraftVersion = {
-      id: `DRAFT-RESTORED-${Date.now()}`,
-      versionNumber: `v${task.drafts.length + 1}.0 (恢复自${version.versionNumber})`,
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: `恢复自历史版本 ${version.versionNumber}：${version.summary}`,
-      blocks: JSON.parse(JSON.stringify(version.blocks)),
-      snapshotMetadata: version.snapshotMetadata || {
-        taskTitle: task.title,
-        startDate: task.startDate,
-        endDate: task.endDate,
-        targetWordCount: task.targetWordCount,
-        factSnapshot: task.factSnapshot,
-        styleSnapshot: task.styleSnapshot,
-        outlineSnapshot: task.outlineSnapshot,
-        outlineSections: JSON.parse(JSON.stringify(task.outline)),
-      },
-    };
-
-    onUpdateTask({
-      isFinalized: false,
-      drafts: [restoredVersion, ...task.drafts],
-      currentDraftId: restoredVersion.id,
-    });
-    setShowVersionHistory(false);
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft?.id,
+        () => JSON.parse(JSON.stringify(version.blocks)),
+        `恢复自历史版本 ${version.versionNumber}`,
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+      setShowVersionHistory(false);
+    } catch (err: any) {
+      alert(err.message || '恢复历史版本失败');
+    }
   };
 
   return (

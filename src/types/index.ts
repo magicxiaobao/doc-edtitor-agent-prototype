@@ -91,6 +91,8 @@ export interface FactItemSnapshot {
   primaryEvidenceId: string;
   selectedConflictValue?: string;
   conflictResolutionReason?: string;
+  hasConflict?: boolean;
+  conflictCandidates?: { value: string; description: string; evidenceId?: string }[];
 }
 
 export interface FactSnapshot {
@@ -208,6 +210,9 @@ export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';
 
 export interface CoordinationDiffResult {
   strategy: CoordinationStrategy;
+  baseDraftId?: string;
+  baseContentHash?: string;
+  createdAt?: string;
   originalWordCount: number;
   targetWordCount: number;
   strategyExplanation: string;

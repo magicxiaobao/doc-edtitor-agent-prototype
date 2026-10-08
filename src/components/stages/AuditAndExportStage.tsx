@@ -10,6 +10,11 @@ import { runDocumentAudit } from '../../services/mockAuditService';
 import { exportDocumentAsTxt, exportDocumentAsDocx } from '../../services/exportService';
 import { checkPermission, canFinalize as canFinalizeRole } from '../../services/permissionService';
 import { 
+  validateFinalizationConditions, 
+  finalizeDraft, 
+  applyDraftContentChange 
+} from '../../services/draftLifecycleService';
+import { 
   CheckCircle2, 
   ShieldCheck, 
   Download, 
@@ -67,24 +72,18 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const auditIssues = currentDraft ? runDocumentAudit(task, currentDraft.blocks, currentDraft.id) : [];
 
   // Finalization prerequisite checks
-  const hasDraftText = !!currentDraft && currentDraft.blocks.length > 0;
-  const isAuthor = activeRole === '主笔甲';
-  const isUpstreamValid = task.outlineConfirmed && !!task.factSnapshot && task.styleConfirmed;
+  const validation = validateFinalizationConditions(task, currentDraft?.id, activeRole);
+  const canFinalize = validation.canFinalize;
+  const hasDraftText = validation.checks.hasDraftText;
+  const isAuthor = validation.checks.isAuthor;
+  const isUpstreamValid = validation.checks.isUpstreamValid;
   const pendingConflictsCount = task.facts.filter((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded').length;
-  const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending').length;
+  const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation' || c.status === 'need_discussion').length;
   
   // Critical audit issues that are blocking and unresolved
   const criticalAuditIssuesCount = auditIssues.filter(
     (i) => i.isBlocking && i.status === 'unresolved'
   ).length;
-
-  const canFinalize =
-    hasDraftText &&
-    isAuthor &&
-    isUpstreamValid &&
-    pendingConflictsCount === 0 &&
-    pendingCommentsCount === 0 &&
-    criticalAuditIssuesCount === 0;
 
   // Esc key listener for Ignore Modal
   useEffect(() => {
@@ -127,28 +126,57 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       return;
     }
 
-    // Replace originalText with replacementText in block
-    const updatedContent = targetBlock.content.replace(issue.originalText, replacement);
-    const updatedBlocks = currentDraft.blocks.map((b) => 
-      b.id === issue.blockId ? { ...b, content: updatedContent, updatedAt: new Date().toISOString() } : b
-    );
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) => {
+            if (b.id === issue.blockId) {
+              let updatedContent = b.content;
+              if (
+                issue.charIndex !== undefined &&
+                b.content.slice(issue.charIndex, issue.charIndex + issue.originalText.length) === issue.originalText
+              ) {
+                updatedContent =
+                  b.content.slice(0, issue.charIndex) +
+                  replacement +
+                  b.content.slice(issue.charIndex + issue.originalText.length);
+              } else {
+                updatedContent = b.content.replace(issue.originalText, replacement);
+              }
+              return { ...b, content: updatedContent, updatedAt: new Date().toISOString() };
+            }
+            return b;
+          }),
+        `接受核校更正：${issue.originalText} -> ${replacement}`,
+        activeRole
+      );
 
-    // Save resolution record to draft
-    const existingRecords = currentDraft.auditRecords || [];
-    const updatedRecords = [
-      ...existingRecords.filter((r) => r.issueId !== issue.issueId),
-      {
-        issueId: issue.issueId,
-        status: 'accepted' as const,
-        resolvedAt: new Date().toISOString(),
-      },
-    ];
+      // Save resolution record to draft
+      const existingRecords = workingDraft.auditRecords || [];
+      const updatedRecords = [
+        ...existingRecords.filter((r) => r.issueId !== issue.issueId),
+        {
+          issueId: issue.issueId,
+          status: 'accepted' as const,
+          resolvedAt: new Date().toISOString(),
+        },
+      ];
 
-    const updatedDrafts = task.drafts.map((d) => 
-      d.id === currentDraft.id ? { ...d, blocks: updatedBlocks, auditRecords: updatedRecords } : d
-    );
+      const finalDrafts = updatedTask.drafts.map((d) =>
+        d.id === workingDraft.id ? { ...d, auditRecords: updatedRecords } : d
+      );
 
-    onUpdateTask({ drafts: updatedDrafts });
+      onUpdateTask({
+        drafts: finalDrafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+    } catch (err: any) {
+      alert(err.message || '接受更正失败');
+    }
   };
 
   // Requirement 2: Open modal to record mandatory reason for non-blocking ignore
@@ -205,20 +233,34 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       alert(perm.reason || '权限受限：仅主笔甲可修改正文口径');
       return;
     }
-    const updatedBlocks = currentDraft.blocks.map((b) => {
-      if (b.content.includes('800人次')) {
-        // Creates the tricky case "800人次，其中800人" or replace to 800人
-        return {
-          ...b,
-          content: b.content.replace('800人次', '800人次，其中800人考核合格'),
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return b;
-    });
 
-    const updatedDrafts = task.drafts.map((d) => (d.id === currentDraft.id ? { ...d, blocks: updatedBlocks } : d));
-    onUpdateTask({ drafts: updatedDrafts });
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) => {
+            if (b.content.includes('800人次')) {
+              return {
+                ...b,
+                content: b.content.replace('800人次', '800人次，其中800人考核合格'),
+                updatedAt: new Date().toISOString(),
+              };
+            }
+            return b;
+          }),
+        '演练模拟：注入单位混淆错误',
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+    } catch (err: any) {
+      alert(err.message || '注入错误失败');
+    }
   };
 
   const handleInjectConflictError = () => {
@@ -228,50 +270,39 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       alert(perm.reason || '权限受限：仅主笔甲可修改正文口径');
       return;
     }
-    const updatedBlocks = currentDraft.blocks.map((b) => {
-      if (b.content.includes('128项')) {
-        return {
-          ...b,
-          content: b.content.replace('128项', '120项'),
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return b;
-    });
 
-    const updatedDrafts = task.drafts.map((d) => (d.id === currentDraft.id ? { ...d, blocks: updatedBlocks } : d));
-    onUpdateTask({ drafts: updatedDrafts });
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) => {
+            if (b.content.includes('128项')) {
+              return {
+                ...b,
+                content: b.content.replace('128项', '120项'),
+                updatedAt: new Date().toISOString(),
+              };
+            }
+            return b;
+          }),
+        '演练模拟：注入采信冲突错误',
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+    } catch (err: any) {
+      alert(err.message || '注入错误失败');
+    }
   };
 
   const handleFinalizeDocument = () => {
-    if (!hasDraftText) {
-      alert('当前公文任务尚无正文草稿，无法执行定稿。请先前往阶段04“正文起草”生成初稿。');
-      return;
-    }
-
-    const perm = checkPermission(activeRole, 'finalize');
-    if (!perm.allowed) {
-      alert(perm.reason || '权限受限：仅主笔甲可定稿公文');
-      return;
-    }
-
-    if (!isUpstreamValid) {
-      alert('前序事实快照失效、文风未核准或大纲批准已失效，无法定稿。请先返回前序阶段重新确认。');
-      return;
-    }
-
-    if (pendingConflictsCount > 0) {
-      alert('存在未裁决的同口径事实冲突（如120项 vs 128项），无法执行定稿。请先前往阶段02完成裁决或明确排除。');
-      return;
-    }
-
-    if (pendingCommentsCount > 0) {
-      alert(`尚有 ${pendingCommentsCount} 条待处理的重大审阅意见，需主笔逐项处理后方可定稿。`);
-      return;
-    }
-
-    if (criticalAuditIssuesCount > 0) {
-      alert(`存在 ${criticalAuditIssuesCount} 项阻断级正文核校错误（如采信128但正文写120、人次混淆为人数等），必须纠正后方可定稿！`);
+    if (!canFinalize) {
+      alert(validation.reasons.join('；') || '未达到定稿要求');
       return;
     }
 
@@ -279,21 +310,15 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       return;
     }
 
-    const finalDraft: DraftVersion = {
-      id: `DRAFT-FINAL-${Date.now()}`,
-      versionNumber: '定稿 v2.0 (最终核定版)',
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: '经主笔核定、审阅意见全部闭环并完成事实口径核校后的正式定稿文件',
-      blocks: JSON.parse(JSON.stringify(currentDraft.blocks)),
-      isFinal: true,
-      snapshotMetadata: currentDraft.snapshotMetadata,
-      auditRecords: currentDraft.auditRecords,
-    };
+    const res = finalizeDraft(task, currentDraft.id, activeRole);
+    if (!res.success) {
+      alert(res.error || '定稿执行失败');
+      return;
+    }
 
     onUpdateTask({
-      drafts: [finalDraft, ...task.drafts],
-      currentDraftId: finalDraft.id,
+      drafts: res.updatedTask!.drafts,
+      currentDraftId: res.finalDraft!.id,
       isFinalized: true,
       status: '已定稿',
     });

@@ -10,30 +10,63 @@ import {
 import { applyDraftContentChange } from './draftLifecycleService';
 
 /**
- * Searches task materials and snippets for authentic case/example materials.
- * Avoids any hallucination!
+ * Validates whether a snippet is an authentic, approved case material for the current task.
+ * - MUST be from current_fact documents
+ * - Filters out historical style materials (2025)
+ * - Filters out textless RAG clues (EVD-06 / 无原文 / 问答摘要)
+ * - Filters out "无案例说明" / "暂无案例" (negative disclaimers cannot masquerade as cases!)
+ * - Avoids any hallucination!
  */
-export function findAuthenticCaseSnippet(task: Task): EvidenceSnippet | undefined {
-  const caseKeywords = ['典型案例', '推进案例', '具体案例', '典型做法', '对策专报', '工作专报', '示范点', '试点', '点位'];
-  
-  for (const snip of task.snippets) {
-    if (caseKeywords.some((kw) => snip.text.includes(kw) || snip.docName.includes(kw))) {
-      return snip;
+export function isValidAuthenticCase(task: Task, snip: EvidenceSnippet): boolean {
+  if (!snip || !snip.sourceDocId) return false;
+  const doc = task.documents.find((d) => d.id === snip.sourceDocId);
+  if (!doc) return false;
+
+  // Filter out historical style reference and RAG clues
+  if (doc.usage !== 'current_fact') return false;
+  if (doc.period.includes('2025') || snip.period?.includes('2025')) return false;
+  if (snip.id === 'EVD-06' || snip.location === '无原文' || snip.location?.includes('线索') || snip.location?.includes('摘要')) {
+    return false;
+  }
+
+  // "无案例说明不冒充案例": negative statements indicating lack of cases MUST NOT be treated as authentic cases!
+  const negativePatterns = ['暂无案例', '无典型案例', '无案例说明', '缺少案例', '未提供案例', '暂无典型', '无具体推进案例', '尚无案例', '无案例'];
+  if (negativePatterns.some((np) => snip.text.includes(np) || snip.docName.includes(np) || doc.name.includes(np))) {
+    return false;
+  }
+
+  const caseKeywords = ['典型案例', '推进案例', '具体案例', '典型做法', '对策专报', '工作专报', '示范点', '试点', '点位', '调研成果'];
+  const hasKeyword = caseKeywords.some((kw) => snip.text.includes(kw) || snip.docName.includes(kw) || doc.name.includes(kw));
+  if (!hasKeyword) return false;
+
+  // Must have substantial descriptive text (> 15 chars)
+  if (snip.text.trim().length < 15) return false;
+
+  return true;
+}
+
+/**
+ * Retrieves all authentic approved case candidates from task materials.
+ */
+export function getAuthenticCaseCandidates(task: Task): EvidenceSnippet[] {
+  return task.snippets.filter((s) => isValidAuthenticCase(task, s));
+}
+
+/**
+ * Searches task materials and snippets for authentic case/example materials.
+ * If selectedCaseId is specified, uses that approved case; otherwise searches authentic registered snippets.
+ */
+export function findAuthenticCaseSnippet(task: Task, selectedCaseId?: string): EvidenceSnippet | undefined {
+  if (selectedCaseId) {
+    const matched = task.snippets.find((s) => s.id === selectedCaseId);
+    if (matched && isValidAuthenticCase(task, matched)) {
+      return matched;
     }
   }
 
-  // Also check document contents if snippet isn't explicitly segmented
-  for (const doc of task.documents) {
-    if (doc.usage === 'current_fact' && caseKeywords.some((kw) => doc.content.includes(kw) || doc.name.includes(kw))) {
-      return {
-        id: `EVD-DOC-${doc.id}`,
-        sourceDocId: doc.id,
-        docName: doc.name,
-        location: '正文材料',
-        period: doc.period,
-        text: doc.content.slice(0, 80) + '...',
-      };
-    }
+  const candidates = getAuthenticCaseCandidates(task);
+  if (candidates.length > 0) {
+    return candidates[0];
   }
 
   return undefined;
@@ -69,6 +102,7 @@ export function generateCoordinationDiff(
         // Streamline paragraph 1
         let text = b.content;
         text = text.replace(/围绕高质量发展主线，统筹推进各项重点业务工作，/g, '统筹推进重点工作，');
+        text = text.replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '强化统筹联动与机制创新。');
         text = text.replace(/在.*良好开局的基础上，/g, '');
         return { ...b, content: text, updatedAt: new Date().toISOString() };
       }
@@ -89,7 +123,7 @@ export function generateCoordinationDiff(
           };
         } else {
           // NO REAL CASE EXISTS -> Strictly mark as pending, NO HALLUCINATIONS!
-          const addition = `【待补案例材料：当前资料库中无已登记的典型推进案例，需业务科室补传材料后再行补充，严禁虚构数据】`;
+          const addition = `【待补案例材料：当前资料库中无已登记的本期典型推进案例（历史文风参考材料不可作为本期案例），需业务科室补传材料后再行补充，严禁虚构数据】`;
           return {
             ...b,
             content: `${b.content} ${addition}`,
@@ -105,7 +139,9 @@ export function generateCoordinationDiff(
     strategyExplanation = '统筹协调折中方案：精简开头铺垫修饰，并在调研段落紧凑嵌入案例（有真实材料则嵌入，无材料则标待补）。';
     candidateBlocks = originalBlocks.map((b, idx) => {
       if (idx === 0) {
-        let text = b.content.replace(/围绕高质量发展主线，统筹推进各项重点业务工作，/g, '统筹推进重点工作，');
+        let text = b.content;
+        text = text.replace(/围绕高质量发展主线，统筹推进各项重点业务工作，/g, '统筹推进重点工作，');
+        text = text.replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '强化统筹联动与机制创新。');
         return { ...b, content: text, updatedAt: new Date().toISOString() };
       }
       if (idx === 2) {
@@ -113,7 +149,7 @@ export function generateCoordinationDiff(
           const addition = `【典型案例】${realCaseSnippet.text.replace(/^.*?：/, '')}。`;
           return { ...b, content: `${b.content} ${addition}`, updatedAt: new Date().toISOString() };
         } else {
-          const addition = `【待补案例材料：当前资料库中无已登记的典型推进案例，需业务科室补传材料后再行补充，严禁虚构数据】`;
+          const addition = `【待补案例材料：当前资料库中无已登记的本期典型推进案例（历史文风参考材料不可作为本期案例），需业务科室补传材料后再行补充，严禁虚构数据】`;
           return { ...b, content: `${b.content} ${addition}`, updatedAt: new Date().toISOString() };
         }
       }
@@ -137,6 +173,9 @@ export function generateCoordinationDiff(
 
   return {
     strategy,
+    baseDraftId: draft.id,
+    baseContentHash: `HASH-${draft.id}-${originalWordCount}`,
+    createdAt: new Date().toISOString(),
     originalWordCount,
     targetWordCount,
     strategyExplanation,
@@ -150,6 +189,8 @@ export function generateCoordinationDiff(
 /**
  * Requirement 5: Applies the author-confirmed coordination decision to the draft
  * and marks comments as implemented.
+ * - Validates that diffPreview is not empty (无差异不能标已落实)
+ * - Validates that candidate target blocks have not been edited in the meantime (防误覆盖人工编辑)
  */
 export function applyCoordinationDecision(
   task: Task,
@@ -158,6 +199,37 @@ export function applyCoordinationDecision(
   authorRole: UserRole,
   relatedCommentIds: string[]
 ): { updatedTask: Task; workingDraft: DraftVersion } {
+  // 1. Zero difference check: 无差异不能标已落实
+  if (!coordinationResult.diffPreview || coordinationResult.diffPreview.length === 0) {
+    throw new Error('未检测到正文文本差异（零差异），不能标记审阅意见为已落实！');
+  }
+
+  let currentDraft: DraftVersion | undefined;
+  if (draftId) {
+    currentDraft = task.drafts.find((d) => d.id === draftId);
+    if (!currentDraft) {
+      throw new Error(`未找到指定版本【${draftId}】，无法落实审阅协调意见！`);
+    }
+  } else {
+    currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+    if (!currentDraft) {
+      throw new Error('未找到当前工作草稿，无法落实审阅协调意见');
+    }
+  }
+
+  // 2. Outdated candidate conflict check: 协调候选过期不能覆盖人工编辑
+  for (const diff of coordinationResult.diffPreview) {
+    const targetBlock = currentDraft.blocks.find((b) => b.id === diff.blockId);
+    if (!targetBlock) {
+      throw new Error(`协调建议目标段落【${diff.blockId}】在当前稿件中已被删除或重构，建议已失效！`);
+    }
+    if (targetBlock.content !== diff.originalText) {
+      throw new Error(
+        `采纳冲突：检测到目标段落自协调生成后已被人工编辑修改，基准内容已变动。为防止直接覆盖人工文本，协调建议已失效，请重新生成协调预览！`
+      );
+    }
+  }
+
   // Apply changes via draftLifecycleService (safely forks immutable snapshots if needed)
   const { updatedTask: taskWithNewDraft, workingDraft } = applyDraftContentChange(
     task,

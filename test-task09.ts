@@ -138,7 +138,8 @@ assert(txtFull.includes('【附：审阅意见与落实处理记录】'), 'TXT�
 // DOCX Blob与OOXML结构测试
 async function testDocx() {
   const docxBlob = await exportDocumentAsDocx(task1, testDraft, { includeBody: true, includeEvidence: true, includeReviewLog: true });
-  assert(docxBlob.size > 1000, `DOCX生成成功，大小为 ${docxBlob.size} 字节，具备标准OOXML结构`);
+  const docxSize = (docxBlob as any).size ?? (docxBlob as any).length ?? (docxBlob as any).byteLength;
+  assert(docxSize > 1000, `DOCX生成成功，大小为 ${docxSize} 字节，具备标准OOXML结构`);
 }
 
 // -----------------------------------------------------------------------

@@ -12,6 +12,11 @@ import {
   canAddComment 
 } from '../../services/permissionService';
 import { 
+  generateCoordinationDiff, 
+  applyCoordinationDecision 
+} from '../../services/reviewCoordinationService';
+import { applyDraftContentChange } from '../../services/draftLifecycleService';
+import { 
   MessageSquare, 
   UserCheck, 
   CheckCircle2, 
@@ -178,53 +183,53 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     }
     if (!implementingComment || !currentDraft) return;
 
-    // Update target block in current draft
-    const updatedBlocks = currentDraft.blocks.map((b) => {
-      if (b.id === implTargetBlockId) {
-        return {
-          ...b,
-          content: implSuggestedText.trim(),
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return b;
-    });
+    try {
+      const { updatedTask, workingDraft } = applyDraftContentChange(
+        task,
+        currentDraft.id,
+        (blocks) =>
+          blocks.map((b) =>
+            b.id === implTargetBlockId
+              ? { ...b, content: implSuggestedText.trim(), updatedAt: new Date().toISOString() }
+              : b
+          ),
+        `落实【${implementingComment.reviewer}】修改建议`,
+        activeRole
+      );
 
-    // Create a new version snapshot recording this implementation
-    const newVersionId = `DRAFT-REV-${Date.now()}`;
-    const newVersion: DraftVersion = {
-      id: newVersionId,
-      versionNumber: `v1.${task.drafts.length} (落实审阅修改)`,
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: `落实【${implementingComment.reviewer}】关于“${implementingComment.content.slice(0, 20)}...”的修改建议`,
-      blocks: updatedBlocks,
-      snapshotMetadata: currentDraft.snapshotMetadata,
-    };
+      const updatedComments = updatedTask.reviewComments.map((c) => {
+        if (c.id === implementingComment.id) {
+          return {
+            ...c,
+            status: 'implemented' as const,
+            authorReply: implAuthorReply.trim() || '主笔已核准修改建议并写入正文生成新稿',
+            implementationDraftId: workingDraft.id,
+            implementationBlockId: implTargetBlockId,
+            resolutionType: 'text_modified' as const,
+          };
+        }
+        return c;
+      });
 
-    // Update comment status to 'implemented' and record implementation version & block
-    const updatedComments = task.reviewComments.map((c) => {
-      if (c.id === implementingComment.id) {
-        return {
-          ...c,
-          status: 'implemented' as const,
-          authorReply: implAuthorReply.trim() || '主笔已核准修改建议并写入正文生成新稿',
-          implementationDraftId: newVersion.id,
-          implementationBlockId: implTargetBlockId,
-          resolutionType: 'text_modified' as const,
-        };
-      }
-      return c;
-    });
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        reviewComments: updatedComments,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
 
-    onUpdateTask({
-      drafts: [newVersion, ...task.drafts],
-      currentDraftId: newVersion.id,
-      reviewComments: updatedComments,
-    });
-
-    setImplementingComment(null);
+      setImplementingComment(null);
+    } catch (err: any) {
+      alert(err.message || '落实修改失败');
+    }
   };
+
+  const mappedStrategy = 
+    selectedStrategy === 'compress_priority' ? ('compress' as const) :
+    selectedStrategy === 'case_priority' ? ('expand_case' as const) : ('balanced' as const);
+
+  const currentCoordinationDiff = currentDraft ? generateCoordinationDiff(task, currentDraft, mappedStrategy) : null;
 
   // Reconcile contradictory comments (CMT-01 & CMT-02)
   const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
@@ -234,6 +239,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       return;
     }
 
+    if (!currentDraft || !currentCoordinationDiff) return;
+
     if (mode === 'strategy_only') {
       // Record strategy decision only; status remains accepted_pending_implementation
       const updatedComments = task.reviewComments.map((c) => {
@@ -241,8 +248,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           return {
             ...c,
             status: 'accepted_pending_implementation' as const,
-            authorReply: `【主笔协调裁决策略·待落实】：${strategyReason}`,
-            decisionReason: strategyReason,
+            authorReply: `【主笔协调裁决策略·待落实】：${currentCoordinationDiff.strategyExplanation}`,
+            decisionReason: strategyReason.trim() || currentCoordinationDiff.strategyExplanation,
             resolutionType: 'strategy_decided' as const,
           };
         }
@@ -255,59 +262,32 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     }
 
     // mode === 'implement_now': Actually adjust draft text and create new version
-    if (!currentDraft) return;
+    if (currentCoordinationDiff.diffPreview.length === 0) {
+      alert('未检测到正文文本差异（零差异），不能标记审阅意见为已落实！');
+      return;
+    }
 
-    const updatedBlocks = currentDraft.blocks.map((b) => {
-      if (b.order === 1) {
-        // Compress introductory background
-        return {
-          ...b,
-          content: '2026年1至9月，全系统紧扣年度核心指标，强化机制创新与部门协同，重点攻坚任务稳步落地。截至9月末，累计完成重点任务128项，各项指标平稳达成序时进度。',
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      if (b.order === 3) {
-        // Append balanced representative case
-        return {
-          ...b,
-          content: '在大兴调查研究方面，紧扣基层重难点关切，深入一线点位听取呼声，累计开展专题调研12次，推动形成针对性制度改进举措；期间重点剖析了“跨部门审批流程优化”与“基层窗口即时办结”两个典型案例，有力推动成果转化。',
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return b;
-    });
+    try {
+      const { updatedTask, workingDraft } = applyCoordinationDecision(
+        task,
+        currentDraft.id,
+        currentCoordinationDiff,
+        activeRole,
+        ['CMT-01', 'CMT-02']
+      );
 
-    const newVersionId = `DRAFT-COORD-${Date.now()}`;
-    const newVersion: DraftVersion = {
-      id: newVersionId,
-      versionNumber: `v1.${task.drafts.length} (统筹落实审阅篇幅版)`,
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: `统筹裁决审阅乙与审阅丁意见：压缩前言铺垫并精炼补充两个基层典型案例`,
-      blocks: updatedBlocks,
-      snapshotMetadata: currentDraft.snapshotMetadata,
-    };
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        reviewComments: updatedTask.reviewComments,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
 
-    const updatedComments = task.reviewComments.map((c) => {
-      if (c.id === 'CMT-01' || c.id === 'CMT-02') {
-        return {
-          ...c,
-          status: 'implemented' as const,
-          authorReply: `【主笔协调裁决·已落实到正文】：${strategyReason}`,
-          implementationDraftId: newVersion.id,
-          resolutionType: 'text_modified' as const,
-        };
-      }
-      return c;
-    });
-
-    onUpdateTask({
-      drafts: [newVersion, ...task.drafts],
-      currentDraftId: newVersion.id,
-      reviewComments: updatedComments,
-    });
-
-    setShowContradictionModal(false);
+      setShowContradictionModal(false);
+    } catch (err: any) {
+      alert(err.message || '落实审阅协调失败');
+    }
   };
 
   return (
@@ -981,6 +961,46 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                   className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500"
                 />
               </div>
+
+              {/* Requirement 5: Live Diff Preview for coordination */}
+              {currentCoordinationDiff && (
+                <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">协调效果差异预览（基于当前稿计算）：</span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      篇幅变动：{currentCoordinationDiff.originalWordCount}字 → {currentCoordinationDiff.targetWordCount}字
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600">{currentCoordinationDiff.strategyExplanation}</p>
+                  
+                  {currentCoordinationDiff.diffPreview.length > 0 ? (
+                    <div className="space-y-2 pt-2 border-t border-slate-200 max-h-40 overflow-y-auto">
+                      {currentCoordinationDiff.diffPreview.map((diff, idx) => (
+                        <div key={idx} className="p-2 bg-white rounded border border-slate-200 space-y-1">
+                          <div className="text-[10px] text-slate-500 font-semibold">变更段落：{diff.blockId}</div>
+                          <div className="text-rose-700 bg-rose-50/50 p-1 rounded text-[11px] line-through">
+                            {diff.originalText}
+                          </div>
+                          <div className="text-emerald-700 bg-emerald-50/50 p-1 rounded text-[11px] font-medium">
+                            {diff.proposedText}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-amber-700 bg-amber-50 p-2 rounded text-[11px]">
+                      当前策略未对正文产生实质文本差异（无差异不能标已落实）。
+                    </div>
+                  )}
+
+                  {!currentCoordinationDiff.hasRealCaseMaterial && selectedStrategy !== 'compress_priority' && (
+                    <div className="text-amber-800 bg-amber-50/80 p-2 rounded border border-amber-200 text-[11px] flex items-start gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                      <span>资料库中尚无已登记的本期典型案例，正文已插入待补材料占位符，严禁虚构案例。</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="pt-3 border-t border-slate-200 flex flex-wrap justify-end gap-2">
                 <button

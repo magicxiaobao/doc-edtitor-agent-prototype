@@ -1,30 +1,34 @@
-import { Task, ParagraphBlock, AuditIssue, Fact } from '../types';
+import { Task, ParagraphBlock, AuditIssue, AuditIssueType, DraftVersion } from '../types';
 
-/**
- * Generates a stable deterministic issue ID bound to block ID, type, and specific text fingerprint
- */
-function makeIssueId(prefix: string, blockId: string, extra: string): string {
-  const cleanExtra = extra.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_').slice(0, 40);
-  return `AUDIT-${prefix}-${blockId}-${cleanExtra}`;
+function makeIssueId(prefix: string, blockId: string, suffix: string): string {
+  return `ISSUE-${prefix}-${blockId}-${suffix}`;
+}
+
+function escapeRegExp(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * Requirement 4: Runs factual consistency and metric audit.
- * - Reads frozen fact and evidence snapshot from the target draft version if present.
- * - Matches metrics by name, value, unit, period, metricScope, and paragraph references.
- * - Re-audits actual current block text; PROHIBITS stale 'accepted' records from
- *   bypassing lingering or re-introduced errors!
- * - Blocking errors cannot be bypassed by ignore.
+ * Requirement 4 & Task 10: Dynamic Document Consistency Audit Service
+ * - Evaluates actual document blocks against confirmed facts and snapshot evidence.
+ * - Prioritizes frozen snapshot facts from draft.snapshotMetadata.factSnapshot.
+ * - Does NOT depend on current task.facts or all snippets' global numbers when
+ *   auditing historical drafts (self-sufficient).
+ * - Accurately matches paragraph-referenced facts for:
+ *   * unit confusion (人次 vs 人)
+ *   * value changes (e.g. 799人次 vs 800人次)
+ *   * conflict mismatch (e.g. 120项 vs 128项)
+ * - Identifies individual character indices for duplicate errors (e.g. two 800人 in same block).
+ * - Historic 'accepted' records CANNOT bypass errors that are still present in the current text.
+ * - Major blocking errors CANNOT be ignored.
  */
 export function runDocumentAudit(
-  task: Task, 
-  blocks: ParagraphBlock[], 
-  currentDraftId?: string
+  task: Task,
+  blocks: ParagraphBlock[],
+  draftId: string
 ): AuditIssue[] {
   const issues: AuditIssue[] = [];
-  const draftId = currentDraftId || task.currentDraftId || task.drafts[0]?.id || 'DRAFT-CURRENT';
 
-  // 1. Requirement 4: Read frozen fact snapshot from the target draft if available
   const targetDraft = task.drafts.find((d) => d.id === draftId);
   const snapshotItems = targetDraft?.snapshotMetadata?.factSnapshot?.items;
 
@@ -38,14 +42,14 @@ export function runDocumentAudit(
     metricScope: string;
     primaryEvidenceId: string;
     hasConflict?: boolean;
-    conflictCandidates?: { value: string; description: string }[];
+    conflictCandidates?: { value: string; description: string; evidenceId?: string }[];
     selectedConflictValue?: string;
   }[] = [];
 
   if (snapshotItems && snapshotItems.length > 0) {
+    // Snapshot is self-sufficient!
     activeFacts = snapshotItems.map((item) => {
-      // Find original task fact for candidates metadata
-      const origF = task.facts.find((f) => f.id === item.factId);
+      const origF = task.facts?.find((f) => f.id === item.factId);
       return {
         id: item.factId,
         metric: item.metric,
@@ -54,12 +58,12 @@ export function runDocumentAudit(
         period: item.period,
         metricScope: item.metricScope,
         primaryEvidenceId: item.primaryEvidenceId,
-        hasConflict: origF?.hasConflict,
-        conflictCandidates: origF?.conflictCandidates,
+        hasConflict: item.hasConflict !== undefined ? item.hasConflict : origF?.hasConflict,
+        conflictCandidates: item.conflictCandidates || origF?.conflictCandidates,
         selectedConflictValue: item.selectedConflictValue || item.value,
       };
     });
-  } else {
+  } else if (task.facts && task.facts.length > 0) {
     activeFacts = task.facts.map((f) => ({
       id: f.id,
       metric: f.metric,
@@ -81,41 +85,6 @@ export function runDocumentAudit(
       auditRecordsMap.set(rec.issueId, rec);
     });
   }
-
-  // Build dynamic known numbers & metrics set from facts and evidence
-  const knownMetricTokens = new Set<string>();
-  const knownPlainNumbers = new Set<string>();
-
-  activeFacts.forEach((f) => {
-    if (f.value) {
-      knownPlainNumbers.add(f.value);
-      if (f.unit) {
-        knownMetricTokens.add(`${f.value}${f.unit}`);
-      }
-    }
-    if (f.selectedConflictValue) {
-      knownPlainNumbers.add(f.selectedConflictValue);
-      if (f.unit) {
-        knownMetricTokens.add(`${f.selectedConflictValue}${f.unit}`);
-      }
-    }
-    if (f.conflictCandidates) {
-      f.conflictCandidates.forEach((cand) => {
-        knownPlainNumbers.add(cand.value);
-        if (f.unit) {
-          knownMetricTokens.add(`${cand.value}${f.unit}`);
-        }
-      });
-    }
-  });
-
-  // Add numbers from evidence snippets
-  task.snippets.forEach((snip) => {
-    const snipNums = snip.text.match(/\d+(?:\.\d+)?(?:项|场|次|人次|人|万|个|篇|套|户|条|家|件|名|宗|起)/g);
-    if (snipNums) {
-      snipNums.forEach((t) => knownMetricTokens.add(t));
-    }
-  });
 
   // Date and range patterns to explicitly ignore from accomplishment metrics
   const isDateOrPeriodOrSection = (token: string, fullText: string, index: number): boolean => {
@@ -144,27 +113,29 @@ export function runDocumentAudit(
   blocks.forEach((block, index) => {
     const blockOrder = block.order || index + 1;
     const locationDesc = `第${blockOrder}段`;
+    const linkedFactIds = block.referencedFactIds || [];
+    const blockFacts = activeFacts.filter((f) => linkedFactIds.includes(f.id));
 
     // -------------------------------------------------------------
-    // Check 1: Conflict and Adopted Figure Mismatch
-    // e.g. Adopted 128 (or 777) but text has rejected candidate 120 (or other rejected candidate)
+    // Check 1: Conflict and Adopted Figure Mismatch (e.g. Adopted 128, text has 120)
     // -------------------------------------------------------------
     activeFacts.forEach((fact) => {
-      if (fact.hasConflict) {
+      if (fact.hasConflict || (fact.conflictCandidates && fact.conflictCandidates.length > 0)) {
         const adoptedValue = fact.selectedConflictValue || fact.value;
         if (adoptedValue && fact.conflictCandidates) {
           fact.conflictCandidates.forEach((cand) => {
             if (cand.value !== adoptedValue) {
               const rejectedPattern = `${cand.value}${fact.unit}`;
               const rejectedAlone = cand.value;
-              
+
               const hasRejectedMetric = block.content.includes(rejectedPattern);
-              const hasRejectedInContext = 
-                block.content.includes(rejectedAlone) && 
-                (block.content.includes(fact.metric) || block.content.includes(fact.unit));
+              const hasRejectedInContext =
+                block.content.includes(rejectedAlone) &&
+                (block.content.includes(fact.metric) || block.content.includes(fact.unit) || linkedFactIds.includes(fact.id));
 
               if (hasRejectedMetric || hasRejectedInContext) {
-                const issueId = makeIssueId('CONFLICT', block.id, `${fact.id}_${cand.value}`);
+                const charIdx = block.content.indexOf(hasRejectedMetric ? rejectedPattern : cand.value);
+                const issueId = makeIssueId('CONFLICT', block.id, `${fact.id}_${cand.value}_${charIdx >= 0 ? charIdx : 0}`);
                 const originalText = hasRejectedMetric ? rejectedPattern : `${cand.value}${fact.unit}`;
                 issues.push({
                   id: issueId,
@@ -176,6 +147,7 @@ export function runDocumentAudit(
                   severity: 'error',
                   isBlocking: true, // Major discrepancy blocks finalization
                   location: locationDesc,
+                  charIndex: charIdx >= 0 ? charIdx : undefined,
                   originalText,
                   evidenceText: `事实依据【${fact.metric}】已明确裁决采信口径：“${adoptedValue}${fact.unit}”（出处：${fact.primaryEvidenceId || '台账'}）。排除口径：“${cand.value}${fact.unit}”。`,
                   suggestion: `当前正文仍在使用未采信的冲突口径“${originalText}”，必须更正为已裁决的“${adoptedValue}${fact.unit}”。此项为阻断性核校错误。`,
@@ -191,13 +163,13 @@ export function runDocumentAudit(
 
     // -------------------------------------------------------------
     // Check 2: Metric Unit Confusion (e.g. 人次 vs 人)
-    // Identifies "800人" not followed by "次" even in the same paragraph as "800人次"
+    // Identifies every instance of "800人" not followed by "次"
     // -------------------------------------------------------------
     const personTimesFacts = activeFacts.filter((f) => f.unit === '人次');
     personTimesFacts.forEach((fact) => {
       const factNum = fact.value;
       if (factNum) {
-        const unitConfusionRegex = new RegExp(`(${factNum})\\s*人(?!次)`, 'g');
+        const unitConfusionRegex = new RegExp(`(${escapeRegExp(factNum)})\\s*人(?!次)`, 'g');
         let match: RegExpExecArray | null;
         while ((match = unitConfusionRegex.exec(block.content)) !== null) {
           const issueId = makeIssueId('UNIT', block.id, `${match[1]}_ren_${match.index}`);
@@ -223,41 +195,67 @@ export function runDocumentAudit(
       }
     });
 
-    // Also check for facts where a number has wrong unit (e.g. 25场 written as 25次 or 25个)
-    activeFacts.forEach((fact) => {
-      if (fact.unit && fact.value && fact.unit !== '人次' && fact.unit !== '项') {
-        const wrongUnits = ['个', '次', '项', '起', '场'].filter((u) => u !== fact.unit);
-        wrongUnits.forEach((wu) => {
-          const wrongPattern = `${fact.value}${wu}`;
-          if (block.content.includes(wrongPattern) && (block.content.includes(fact.metric) || block.referencedFactIds.includes(fact.id))) {
-            const issueId = makeIssueId('UNIT', block.id, `${fact.id}_${wu}`);
+    // -------------------------------------------------------------
+    // Check 3: Value Change & Unit Inconsistency on Referenced Facts
+    // e.g. Block references FACT-03 (800人次), but text contains "799人次"
+    // -------------------------------------------------------------
+    blockFacts.forEach((fact) => {
+      if (fact.value && fact.unit) {
+        // Look for any number associated with this fact's unit in this block
+        const unitRegex = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(${escapeRegExp(fact.unit)})`, 'g');
+        let match: RegExpExecArray | null;
+        while ((match = unitRegex.exec(block.content)) !== null) {
+          const foundNum = match[1];
+          const foundUnit = match[2];
+          const matchIndex = match.index;
+
+          if (isDateOrPeriodOrSection(match[0], block.content, matchIndex)) {
+            continue;
+          }
+
+          // If foundNum does not match fact value or conflict candidates
+          const matchesFact = foundNum === fact.value || foundNum === fact.selectedConflictValue;
+          const matchesCandidate = fact.conflictCandidates?.some((c) => c.value === foundNum);
+          const matchesOtherBlockFact = blockFacts.some((bf) => bf.unit === foundUnit && (bf.value === foundNum || bf.selectedConflictValue === foundNum));
+
+          if (!matchesFact && !matchesCandidate && !matchesOtherBlockFact) {
+            // VALUE MISMATCH DETECTED (e.g. 799人次 instead of 800人次)
+            const issueId = makeIssueId('VALUE', block.id, `${fact.id}_${foundNum}_${matchIndex}`);
+            const originalText = `${foundNum}${foundUnit}`;
             issues.push({
               id: issueId,
               issueId,
               taskId: task.id,
               draftId,
               blockId: block.id,
-              type: 'metric_unit',
+              type: 'conflict_mismatch',
               severity: 'error',
-              isBlocking: true,
-              location: locationDesc,
-              originalText: wrongPattern,
-              evidenceText: `依据【${fact.metric}】标准单位为“${fact.unit}”。`,
-              suggestion: `将“${wrongPattern}”更正为“${fact.value}${fact.unit}”。`,
+              isBlocking: true, // Incorrect number blocks finalization
+              location: `${locationDesc}（第${matchIndex + 1}字符处）`,
+              charIndex: matchIndex,
+              originalText,
+              evidenceText: `依据【${fact.metric}】（出处：${fact.primaryEvidenceId || '台账'}）核准数据为“${fact.value}${fact.unit}”，正文表述为“${originalText}”。`,
+              suggestion: `正文数值“${originalText}”与所引用依据不符，应更正为“${fact.value}${fact.unit}”。此项为阻断性核校错误。`,
               replacementText: `${fact.value}${fact.unit}`,
               status: 'unresolved',
             });
           }
-        });
+        }
       }
     });
 
     // -------------------------------------------------------------
-    // Check 3: Historic Data Leak / Period Mismatch
+    // Check 4: Historic Data Leak / Period Mismatch
     // -------------------------------------------------------------
-    const currentTaskYear = task.startDate ? task.startDate.split('-')[0] : '2026';
     const historicLeakPattern = /(202[0-4]|2025)年?(?:度|全年|累计)?.*?完成\d+项/;
-    if (historicLeakPattern.test(block.content) || (block.content.includes('2025') && (block.content.includes('96项') || (block.content.includes('重点任务') && !block.content.includes('历史对比') && !block.content.includes('同比'))))) {
+    if (
+      historicLeakPattern.test(block.content) ||
+      (block.content.includes('2025') &&
+        (block.content.includes('96项') ||
+          (block.content.includes('重点任务') &&
+            !block.content.includes('历史对比') &&
+            !block.content.includes('同比'))))
+    ) {
       const issueId = makeIssueId('HIST', block.id, 'leak');
       issues.push({
         id: issueId,
@@ -277,7 +275,7 @@ export function runDocumentAudit(
     }
 
     // -------------------------------------------------------------
-    // Check 4: Unverified Sentences / Qualitative Claims without Hard Evidence
+    // Check 5: Unverified Sentences / Qualitative Claims without Hard Evidence
     // -------------------------------------------------------------
     const hasQualitativeContent = block.content.includes('服务满意度') || block.content.includes('满意度明显提升');
     if (hasQualitativeContent) {
@@ -306,11 +304,10 @@ export function runDocumentAudit(
 
     // Macro assertions without any linked facts or quantitative metric
     const macroKeywords = ['稳中向好', '稳中有进', '扎实推进', '显著提升', '大幅改善', '再创新高'];
-    const linkedFactIds = block.referencedFactIds || [];
     macroKeywords.forEach((kw) => {
       if (block.content.includes(kw) && linkedFactIds.length === 0 && activeFacts.length > 0) {
         const issueId = makeIssueId('UNVERIFIED', block.id, kw);
-        if (!issues.some(i => i.issueId === issueId)) {
+        if (!issues.some((i) => i.issueId === issueId)) {
           issues.push({
             id: issueId,
             issueId,
@@ -331,9 +328,9 @@ export function runDocumentAudit(
     });
 
     // -------------------------------------------------------------
-    // Check 5: Dynamic Metric Extraction & Unreferenced Numbers
+    // Check 6: Unreferenced Numbers (numbers not matching any active facts)
     // -------------------------------------------------------------
-    const metricExtractor = /(\d+(?:\.\d+)?)\s*([项场次个篇套户条台家件名宗起公里%])/g;
+    const metricExtractor = /(\d+(?:\.\d+)?)\s*(人次|人|项|场|次|个|篇|套|户|条|台|家|件|名|宗|起|公里|%)/g;
     let metricMatch: RegExpExecArray | null;
     while ((metricMatch = metricExtractor.exec(block.content)) !== null) {
       const fullMatch = metricMatch[0];
@@ -344,12 +341,18 @@ export function runDocumentAudit(
         continue;
       }
 
-      const isKnown = 
-        knownMetricTokens.has(fullMatch) || 
-        knownPlainNumbers.has(numStr) ||
-        activeFacts.some((f) => f.value === numStr || f.selectedConflictValue === numStr);
+      // Check if this number is accounted for in activeFacts or already flagged in issues
+      const isKnownInFacts = activeFacts.some((f) => {
+        if (f.value === numStr || f.selectedConflictValue === numStr) return true;
+        if (f.conflictCandidates?.some((c) => c.value === numStr)) return true;
+        return false;
+      });
 
-      if (!isKnown) {
+      const alreadyFlagged = issues.some(
+        (i) => i.blockId === block.id && i.charIndex === matchIndex
+      );
+
+      if (!isKnownInFacts && !alreadyFlagged) {
         const issueId = makeIssueId('UNREF', block.id, `${fullMatch}_${matchIndex}`);
         if (!issues.some((i) => i.issueId === issueId)) {
           issues.push({
@@ -375,16 +378,16 @@ export function runDocumentAudit(
 
   // -------------------------------------------------------------
   // Requirement 4: Re-audit Protection
-  // If an error is STILL DETECTED in the current text, it is UNRESOLVED!
-  // A historical 'accepted' record CANNOT bypass an error that is still in the text!
-  // Blocking errors CANNOT be ignored!
+  // - If an error is STILL DETECTED in the current text, it is UNRESOLVED!
+  // - A historical 'accepted' record CANNOT bypass an error that is still in the text!
+  // - Blocking errors CANNOT be ignored!
   // -------------------------------------------------------------
   return issues.map((issue) => {
     const record = auditRecordsMap.get(issue.issueId);
 
     // If the issue was previously marked 'accepted', but is STILL found in the text:
     // That means the error was not properly removed, or was re-introduced!
-    // It MUST be treated as 'unresolved'!
+    // It MUST remain 'unresolved'!
     if (record?.status === 'accepted') {
       return {
         ...issue,

@@ -409,6 +409,11 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
           primaryEvidenceId: 'EVD-02',
           selectedConflictValue: '128',
           conflictResolutionReason: '采信科室乙汇总口径128项',
+          hasConflict: true,
+          conflictCandidates: [
+            { value: '120', description: '科室甲直报口径：累计完成重点任务120项', evidenceId: 'EVD-01' },
+            { value: '128', description: '科室乙汇总口径：全口径合并统计，完成128项', evidenceId: 'EVD-02' },
+          ],
         },
         {
           factId: 'FACT-02',
@@ -457,7 +462,7 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   baseTask.facts[0].conflictResolutionReason = '经核实采纳科室乙汇总口径128项。';
   baseTask.factSnapshot = {
     confirmedAt: '2026-10-07T08:30:00.000Z',
-    factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04'],
+    factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04', 'FACT-06'],
     items: [
       {
         factId: 'FACT-01',
@@ -468,12 +473,69 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
         metricScope: '科室乙汇总口径：完成128项',
         primaryEvidenceId: 'EVD-02',
         selectedConflictValue: '128',
+        conflictResolutionReason: '采信科室乙汇总口径128项',
+        hasConflict: true,
+        conflictCandidates: [
+          { value: '120', description: '科室甲直报口径：完成120项', evidenceId: 'EVD-01' },
+          { value: '128', description: '科室乙汇总口径：完成128项', evidenceId: 'EVD-02' },
+        ],
+      },
+      {
+        factId: 'FACT-02',
+        metric: '组织专题培训',
+        value: '16',
+        unit: '场',
+        period: '2026年1至9月',
+        metricScope: '全系统干部职工专题业务培训台账',
+        primaryEvidenceId: 'EVD-03',
+      },
+      {
+        factId: 'FACT-03',
+        metric: '专题培训参训规模',
+        value: '800',
+        unit: '人次',
+        period: '2026年1至9月',
+        metricScope: '专题培训实名参训人次统计（注：单位为人次，非人数）',
+        primaryEvidenceId: 'EVD-03',
+      },
+      {
+        factId: 'FACT-04',
+        metric: '开展专题调研',
+        value: '12',
+        unit: '次',
+        period: '2026年1至9月',
+        metricScope: '深入基层专项调研工作记录',
+        primaryEvidenceId: 'EVD-05',
+      },
+      {
+        factId: 'FACT-06',
+        metric: '服务满意度明显提升',
+        value: '定性提升',
+        unit: '定性',
+        period: '2026年1至9月',
+        metricScope: '仅作为定性检索线索（缺少量化测评报告支撑）',
+        primaryEvidenceId: 'EVD-06',
       },
     ],
     hash: 'SNAPSHOT-HASH-CONFIRMED-128',
   };
   baseTask.styleConfirmed = true;
   baseTask.outlineConfirmed = true;
+  baseTask.styleSnapshot = {
+    confirmedAt: '2026-10-07T08:35:00.000Z',
+    activeRuleIds: baseTask.styleRules.filter((r) => r.confirmed).map((r) => r.id),
+    hash: 'STYLE-HASH-CONFIRMED',
+  };
+  baseTask.outlineSnapshot = {
+    confirmedAt: '2026-10-07T08:40:00.000Z',
+    sections: baseTask.outline.map((s) => ({
+      sectionId: s.id,
+      title: s.title,
+      suggestedWordCount: s.suggestedWordCount,
+      assignedFactIds: s.assignedFactIds,
+    })),
+    hash: 'OUTLINE-HASH-CONFIRMED',
+  };
 
   const draftBlocks = [
     {
@@ -525,12 +587,17 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
     author: '主笔甲',
     summary: '根据已确认的128项重点任务及三章大纲生成的初稿版本，已提交审阅',
     blocks: draftBlocks,
+    isWorkingDraft: true,
+    isHistoricalSnapshot: false,
+    isFinal: false,
     snapshotMetadata: {
       taskTitle: baseTask.title,
       startDate: baseTask.startDate,
       endDate: baseTask.endDate,
       targetWordCount: baseTask.targetWordCount,
       factSnapshot: baseTask.factSnapshot,
+      styleSnapshot: baseTask.styleSnapshot,
+      outlineSnapshot: baseTask.outlineSnapshot,
       outlineSections: JSON.parse(JSON.stringify(baseTask.outline)),
     },
   };

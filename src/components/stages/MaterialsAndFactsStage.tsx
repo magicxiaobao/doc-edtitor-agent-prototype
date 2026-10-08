@@ -17,6 +17,11 @@ import {
   canSubmitMaterial 
 } from '../../services/permissionService';
 import { 
+  createFactCandidate, 
+  confirmFact, 
+  modifyOrExcludeFact 
+} from '../../services/factLifecycleService';
+import { 
   Database, 
   FileText, 
   Search, 
@@ -177,32 +182,31 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       return;
     }
 
-    const targetFact = task.facts.find((f) => f.id === factId);
-    if (!targetFact) return;
-    if (targetFact.isHistoricOnly) {
-      alert('历史定稿事实严格隔离为文风参考，严禁带入本期事实清单。');
-      return;
-    }
-    if (targetFact.status === 'gap' || targetFact.primaryEvidenceId === 'EVD-06' || targetFact.metricScope?.includes('仅作为线索')) {
-      alert('仅有定性检索线索，缺少原文依据与量化数据，不可直接确认为事实。');
-      return;
-    }
-
-    const updatedFacts = task.facts.map((f) => {
-      if (f.id === factId) {
-        const nextStatus = currentStatus === 'confirmed' ? ('pending' as const) : ('confirmed' as const);
-        return { ...f, status: nextStatus };
+    if (currentStatus === 'confirmed') {
+      const res = modifyOrExcludeFact(task, factId, { status: 'pending' }, activeRole);
+      if (!res.success) {
+        alert(res.error || '撤销事实确认状态失败');
+        return;
       }
-      return f;
-    });
-
-    // Invalidate downstream snapshots when fact is toggled
-    onUpdateTask({
-      facts: updatedFacts,
-      factSnapshot: undefined,
-      outlineConfirmed: false,
-      outlineSnapshot: undefined,
-    });
+      onUpdateTask({
+        facts: res.updatedTask!.facts,
+        factSnapshot: undefined,
+        outlineConfirmed: false,
+        outlineSnapshot: undefined,
+      });
+    } else {
+      const res = confirmFact(task, factId, activeRole);
+      if (!res.success) {
+        alert(res.error || '审核确认事实失败');
+        return;
+      }
+      onUpdateTask({
+        facts: res.updatedTask!.facts,
+        factSnapshot: undefined,
+        outlineConfirmed: false,
+        outlineSnapshot: undefined,
+      });
+    }
   };
 
   const handleConfirmAllFacts = () => {
@@ -283,24 +287,41 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     }
     if (!newFactMetric.trim() || !newFactValue.trim()) return;
 
-    const newFact: Fact = {
-      id: `FACT-SUPP-${Date.now().toString(36)}`,
-      metric: newFactMetric.trim(),
-      period: task.startDate.slice(0, 4) + '年1至9月',
-      value: newFactValue.trim(),
-      unit: newFactUnit.trim(),
-      metricScope: newFactScope.trim() || '主笔手工补充业务台账',
-      primaryEvidenceId: 'EVD-SUPP',
-      evidenceIds: [],
-      hasConflict: false,
-      status: 'confirmed',
-      isAuthorSupplemented: true,
-      supplementNotes: newFactNotes.trim() || '主笔结合部门内部沟通记录核实补充',
-    };
+    const res = createFactCandidate(
+      task,
+      {
+        metric: newFactMetric.trim(),
+        period: task.startDate.slice(0, 4) + '年1至9月',
+        value: newFactValue.trim(),
+        unit: newFactUnit.trim(),
+        metricScope: newFactScope.trim() || `${activeRole}手工补充业务台账`,
+        primaryEvidenceId: 'EVD-SUPP',
+        evidenceIds: [],
+        hasConflict: false,
+        isAuthorSupplemented: true,
+        supplementNotes: newFactNotes.trim() || `${activeRole}结合部门内部沟通记录核实补充`,
+      },
+      activeRole
+    );
+
+    if (!res.success || !res.fact) {
+      alert(res.error || '补充事实失败');
+      return;
+    }
+
+    const createdFact = res.fact;
+    // 主笔自补事实可直接置为confirmed，供稿丙提交保持pending
+    if (activeRole === '主笔甲') {
+      createdFact.status = 'confirmed';
+    } else {
+      createdFact.status = 'pending';
+    }
 
     onUpdateTask({
-      facts: [...task.facts, newFact],
+      facts: [...task.facts, createdFact],
       factSnapshot: undefined,
+      outlineConfirmed: false,
+      outlineSnapshot: undefined,
     });
 
     setShowAddFactModal(false);
@@ -375,21 +396,28 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     }
     if (!snippetForFact || !snipFactMetric.trim() || !snipFactValue.trim()) return;
 
-    const newFact: Fact = {
-      id: `FACT-EVD-${Date.now().toString(36).toUpperCase()}`,
-      metric: snipFactMetric.trim(),
-      period: snipFactPeriod.trim() || snippetForFact.period || task.startDate.slice(0, 4) + '年1至9月',
-      value: snipFactValue.trim(),
-      unit: snipFactUnit.trim(),
-      metricScope: snipFactScope.trim() || `${snippetForFact.docName}原文记载`,
-      primaryEvidenceId: snippetForFact.id,
-      evidenceIds: [snippetForFact.id],
-      hasConflict: false,
-      status: 'pending', // Created as pending, awaiting author explicit confirmation
-    };
+    const res = createFactCandidate(
+      task,
+      {
+        metric: snipFactMetric.trim(),
+        period: snipFactPeriod.trim() || snippetForFact.period || task.startDate.slice(0, 4) + '年1至9月',
+        value: snipFactValue.trim(),
+        unit: snipFactUnit.trim(),
+        metricScope: snipFactScope.trim() || `${snippetForFact.docName}原文记载`,
+        primaryEvidenceId: snippetForFact.id,
+        evidenceIds: [snippetForFact.id],
+        hasConflict: false,
+      },
+      activeRole
+    );
+
+    if (!res.success || !res.fact) {
+      alert(res.error || '创建事实候选失败');
+      return;
+    }
 
     onUpdateTask({
-      facts: [...task.facts, newFact],
+      facts: [...task.facts, res.fact],
       factSnapshot: undefined,
       outlineConfirmed: false,
       outlineSnapshot: undefined,

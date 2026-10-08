@@ -10,6 +10,7 @@ import {
   loadPersistedState, 
   savePersistedState, 
   resetStorageWithBackup,
+  getStorageError,
   BACKUP_CORRUPTED_KEY 
 } from './services/storageService';
 import { Navbar } from './components/Navbar';
@@ -33,12 +34,18 @@ export function App() {
   const [isCorrupted, setIsCorrupted] = useState(initialLoaded.isCorrupted);
   const [corruptedMessage, setCorruptedMessage] = useState(initialLoaded.corruptedMessage);
   const [migrationMessage, setMigrationMessage] = useState(initialLoaded.migrationMessage);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
 
   // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
   useEffect(() => {
-    savePersistedState(tasks, currentTaskId, activeRole);
+    const success = savePersistedState(tasks, currentTaskId, activeRole);
+    if (!success) {
+      setStorageError(getStorageError() || '本地存储配额不足或写入失败。内存中文稿完好无损，建议及时导出文件备份。');
+    } else {
+      setStorageError(null);
+    }
   }, [tasks, currentTaskId, activeRole]);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId) || tasks[0];
@@ -148,6 +155,27 @@ export function App() {
               aria-label="关闭提示"
             >
               <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Storage Error / Quota Failure Banner */}
+      {storageError && (
+        <div className="bg-rose-50 border-b border-rose-300 px-4 py-3 text-sm text-rose-950">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold">数据存储告警：</strong>
+                <span>{storageError}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setStorageError(null)}
+              className="px-3 py-1 bg-white border border-rose-300 hover:bg-rose-100 rounded text-xs font-semibold text-rose-900 cursor-pointer self-start sm:self-auto"
+            >
+              关闭提示
             </button>
           </div>
         </div>
