@@ -4,7 +4,8 @@ import {
   ParagraphBlock, 
   UserRole, 
   FinalizationValidationResult,
-  AuditIssue 
+  AuditIssue,
+  SnapshotMetadata 
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
 import { checkPermission } from './permissionService';
@@ -25,7 +26,8 @@ export function applyDraftContentChange(
   targetDraftId: string | undefined,
   blockUpdater: (blocks: ParagraphBlock[]) => ParagraphBlock[],
   changeDescription: string,
-  activeRole: UserRole
+  activeRole: UserRole,
+  newSnapshotMetadata?: SnapshotMetadata
 ): { updatedTask: Task; workingDraft: DraftVersion; forkedNewDraft: boolean } {
   const perm = checkPermission(activeRole, 'edit_draft');
   if (!perm.allowed) {
@@ -63,7 +65,7 @@ export function applyDraftContentChange(
       isHistoricalSnapshot: false,
       isWorkingDraft: true,
       sourceDraftId: targetDraft.id, // 记录来源版本ID
-      snapshotMetadata: targetDraft.snapshotMetadata,
+      snapshotMetadata: newSnapshotMetadata || targetDraft.snapshotMetadata,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     };
 
@@ -84,6 +86,7 @@ export function applyDraftContentChange(
       ...targetDraft,
       blocks: updatedBlocks,
       summary: targetDraft.summary ? `${targetDraft.summary}；${changeDescription}` : changeDescription,
+      snapshotMetadata: newSnapshotMetadata || targetDraft.snapshotMetadata,
       isWorkingDraft: true,
       isHistoricalSnapshot: false,
       isFinal: false,
@@ -160,10 +163,23 @@ export function validateFinalizationConditions(
     reasons.push(`权限受限：当前操作身份为【${role}】，定稿锁定公文仅允许“主笔甲”执行`);
   }
 
-  // 4. Upstream fact snapshot, style, outline approved
-  const isUpstreamValid = task.outlineConfirmed === true && !!task.factSnapshot && task.styleConfirmed === true;
+  // 4. Upstream fact snapshot, style, outline approved and evidence consistent
+  let isUpstreamValid = task.outlineConfirmed === true && !!task.factSnapshot && task.styleConfirmed === true;
   if (!isUpstreamValid) {
     reasons.push('前序审批已失效（事实快照缺失、文风未核准或大纲审批已撤销），无法定稿');
+  } else if (targetDraft?.snapshotMetadata?.factSnapshot && task.factSnapshot) {
+    // 校验草稿当时的冻结事实快照是否与当前任务核准的事实快照一致
+    const curSnap = task.factSnapshot;
+    const draftSnap = targetDraft.snapshotMetadata.factSnapshot;
+    const curTime = curSnap.confirmedAt || '';
+    const draftTime = draftSnap.confirmedAt || '';
+    const isSameTime = curTime && draftTime && curTime === draftTime;
+    const isSameItems = JSON.stringify(curSnap.items) === JSON.stringify(draftSnap.items);
+
+    if (!isSameTime && !isSameItems) {
+      isUpstreamValid = false;
+      reasons.push('当前草稿生成依据与最新核准的事实快照不一致（事实依据已重新核准变更，旧稿需重新起草或同步依据后方可定稿）');
+    }
   }
 
   // 5. Fact conflicts resolved or excluded

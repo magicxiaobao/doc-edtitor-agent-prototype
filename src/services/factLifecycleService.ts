@@ -14,8 +14,8 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
   if (!yearMatch) return null;
   const year = parseInt(yearMatch[1], 10);
 
-  // Month ranges: "1至9月", "1-9月", "1~9月", "1月至9月"
-  const monthRangeMatch = p.match(/(\d{1,2})\s*(?:至|-|~|到)\s*(\d{1,2})月/);
+  // Month ranges: "1至9月", "1-9月", "1~9月", "1月至9月", "1月-9月", "1月到9月"
+  const monthRangeMatch = p.match(/(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{1,2})月/);
   if (monthRangeMatch) {
     const startM = parseInt(monthRangeMatch[1], 10);
     const endM = parseInt(monthRangeMatch[2], 10);
@@ -24,16 +24,16 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     return { start, end };
   }
 
-  // Single month: e.g. "10月"
-  const singleMonthMatch = p.match(/(\d{1,2})月/);
-  if (singleMonthMatch) {
-    const m = parseInt(singleMonthMatch[1], 10);
-    const start = new Date(Date.UTC(year, m - 1, 1));
-    const end = new Date(Date.UTC(year, m, 0, 23, 59, 59));
-    return { start, end };
+  // Quarters with cumulative combinations checked first
+  if (p.includes('前三季度')) {
+    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 9, 0, 23, 59, 59)) };
   }
-
-  // Quarters
+  if (p.includes('上半年')) {
+    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 6, 0, 23, 59, 59)) };
+  }
+  if (p.includes('下半年')) {
+    return { start: new Date(Date.UTC(year, 6, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
+  }
   if (p.includes('一季度') || p.includes('第1季度')) {
     return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 3, 0, 23, 59, 59)) };
   }
@@ -46,14 +46,14 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
   if (p.includes('四季度') || p.includes('第4季度')) {
     return { start: new Date(Date.UTC(year, 9, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
   }
-  if (p.includes('前三季度')) {
-    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 9, 0, 23, 59, 59)) };
-  }
-  if (p.includes('上半年')) {
-    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 6, 0, 23, 59, 59)) };
-  }
-  if (p.includes('下半年')) {
-    return { start: new Date(Date.UTC(year, 6, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
+
+  // Single month: e.g. "10月"
+  const singleMonthMatch = p.match(/(\d{1,2})月/);
+  if (singleMonthMatch) {
+    const m = parseInt(singleMonthMatch[1], 10);
+    const start = new Date(Date.UTC(year, m - 1, 1));
+    const end = new Date(Date.UTC(year, m, 0, 23, 59, 59));
+    return { start, end };
   }
 
   // Full year or annual: e.g. "2025年", "2026年度", "2026全年"
@@ -87,13 +87,13 @@ export function isPeriodWithinTaskPeriod(
     return false;
   }
 
-  // 2. Fact interval cannot end before task start date (e.g. 2025年 in 2026 task)
-  if (factRange.end.getTime() < tStartMs) {
+  // 2. Fact interval cannot end after task end date (e.g. 2026年10月 in Q1-Q3 task)
+  if (factRange.end.getTime() > tEndMs) {
     return false;
   }
 
-  // 3. Full-year or annual data exceeding task end date in non-annual tasks
-  if (factRange.end.getTime() > tEndMs && !taskEndDate.endsWith('-12-31') && !taskEndDate.endsWith('-12-30')) {
+  // 3. Fact interval cannot begin before task start date (e.g. 2026年1至6月 in Q2-Q3 task, 2025年 in 2026 task)
+  if (factRange.start.getTime() < tStartMs) {
     return false;
   }
 
@@ -271,4 +271,30 @@ export function modifyOrExcludeFact(
   };
 
   return { success: true, updatedTask };
+}
+
+/**
+ * Returns a default human-readable period string aligned with task start and end dates.
+ * Ensures the period stays strictly within task bounds (e.g. Q2 task defaults to "2026年4至6月").
+ */
+export function formatDefaultPeriodForTask(startDate?: string, endDate?: string): string {
+  if (!startDate || !endDate) return '2026年1至9月';
+  const sYear = startDate.slice(0, 4);
+  const sMonth = parseInt(startDate.slice(5, 7), 10);
+  const eYear = endDate.slice(0, 4);
+  const eMonth = parseInt(endDate.slice(5, 7), 10);
+
+  if (sYear === eYear) {
+    if (sMonth === 1 && eMonth === 12) return `${sYear}年度`;
+    if (sMonth === 1 && eMonth === 3) return `${sYear}年1至3月`;
+    if (sMonth === 4 && eMonth === 6) return `${sYear}年4至6月`;
+    if (sMonth === 7 && eMonth === 9) return `${sYear}年7至9月`;
+    if (sMonth === 10 && eMonth === 12) return `${sYear}年10至12月`;
+    if (sMonth === 1 && eMonth === 6) return `${sYear}年1至6月`;
+    if (sMonth === 7 && eMonth === 12) return `${sYear}年7至12月`;
+    if (sMonth === 1 && eMonth === 9) return `${sYear}年1至9月`;
+    if (sMonth === eMonth) return `${sYear}年${sMonth}月`;
+    return `${sYear}年${sMonth}至${eMonth}月`;
+  }
+  return `${sYear}年${sMonth}月至${eYear}年${eMonth}月`;
 }

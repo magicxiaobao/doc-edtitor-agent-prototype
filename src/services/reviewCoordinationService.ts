@@ -217,6 +217,13 @@ export function applyCoordinationDecision(
     }
   }
 
+  // 1b. Draft version alignment check
+  if (coordinationResult.baseDraftId && coordinationResult.baseDraftId !== currentDraft.id) {
+    throw new Error(
+      `协调建议基于历史版本【${coordinationResult.baseDraftId}】生成，无法直接应用到当前不同版本【${currentDraft.id}】！请重新针对当前稿生成协调预览。`
+    );
+  }
+
   // 2. Outdated candidate conflict check: 协调候选过期不能覆盖人工编辑
   for (const diff of coordinationResult.diffPreview) {
     const targetBlock = currentDraft.blocks.find((b) => b.id === diff.blockId);
@@ -230,11 +237,29 @@ export function applyCoordinationDecision(
     }
   }
 
-  // Apply changes via draftLifecycleService (safely forks immutable snapshots if needed)
+  // Build a map of approved modifications from diffPreview
+  const diffMap = new Map<string, string>();
+  for (const diff of coordinationResult.diffPreview) {
+    diffMap.set(diff.blockId, diff.proposedText);
+  }
+
+  // Apply changes via draftLifecycleService:
+  // Strictly merges only the diff changes into the latest working draft,
+  // completely protecting manual edits in unrelated blocks (e.g. BLK-02)
   const { updatedTask: taskWithNewDraft, workingDraft } = applyDraftContentChange(
     task,
     draftId,
-    () => coordinationResult.candidateBlocks,
+    (blocks) =>
+      blocks.map((b) => {
+        if (diffMap.has(b.id)) {
+          return {
+            ...b,
+            content: diffMap.get(b.id)!,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return b;
+      }),
     `落实审阅意见协调（${coordinationResult.strategyExplanation}）`,
     authorRole
   );

@@ -136,7 +136,8 @@ export function exportDocumentAsTxt(
           cmt.status === 'rejected' ? '拒绝并说明' :
           cmt.status === 'need_discussion' ? '待沟通' : '待处理';
 
-        content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}] 状态：${statusLabel}\n`;
+        const targetVersionInfo = cmt.targetVersionId ? ` 针对版本：${cmt.targetVersionId}` : '';
+        content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}]${targetVersionInfo} | 状态：${statusLabel}\n`;
         content += `   意见内容：${cmt.content}\n`;
         if (cmt.suggestedChange) {
           content += `   修改建议：${cmt.suggestedChange}\n`;
@@ -494,7 +495,7 @@ export async function exportDocumentAsDocx(
               children: [new Paragraph({ children: [new TextRun({ text: `${idx + 1}`, size: 18, font: 'FangSong' })] })],
             }),
             new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: `${cmt.reviewer}\n(${cmt.type === 'overall' ? '整体' : '段落'})`, size: 18, font: 'FangSong' })] })],
+              children: [new Paragraph({ children: [new TextRun({ text: `${cmt.reviewer}\n(${cmt.type === 'overall' ? '整体' : '段落'})\n[针对: ${cmt.targetVersionId || '未指定'}]`, size: 18, font: 'FangSong' })] })],
             }),
             new TableCell({
               children: [new Paragraph({ children: [new TextRun({ text: statusLabel, size: 18, font: 'FangSong' })] })],

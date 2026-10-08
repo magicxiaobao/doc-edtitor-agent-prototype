@@ -181,6 +181,17 @@ export interface AuditRecord {
   resolvedAt?: string;
 }
 
+export interface SnapshotMetadata {
+  taskTitle: string;
+  startDate: string;
+  endDate: string;
+  targetWordCount: number;
+  factSnapshot?: FactSnapshot;
+  styleSnapshot?: StyleSnapshot;
+  outlineSnapshot?: OutlineSnapshot;
+  outlineSections: OutlineSection[];
+}
+
 export interface DraftVersion {
   id: string;
   versionNumber: string;
@@ -194,16 +205,7 @@ export interface DraftVersion {
   isWorkingDraft?: boolean;
   sourceDraftId?: string; // 记录派生此工作稿的来源历史版本/定稿快照ID
   auditRecords?: AuditRecord[];
-  snapshotMetadata?: {
-    taskTitle: string;
-    startDate: string;
-    endDate: string;
-    targetWordCount: number;
-    factSnapshot?: FactSnapshot;
-    styleSnapshot?: StyleSnapshot;
-    outlineSnapshot?: OutlineSnapshot;
-    outlineSections: OutlineSection[];
-  };
+  snapshotMetadata?: SnapshotMetadata;
 }
 
 export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';

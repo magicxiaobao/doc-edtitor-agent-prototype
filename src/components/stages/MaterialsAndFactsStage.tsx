@@ -19,7 +19,8 @@ import {
 import { 
   createFactCandidate, 
   confirmFact, 
-  modifyOrExcludeFact 
+  modifyOrExcludeFact,
+  formatDefaultPeriodForTask 
 } from '../../services/factLifecycleService';
 import { 
   Database, 
@@ -291,7 +292,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       task,
       {
         metric: newFactMetric.trim(),
-        period: task.startDate.slice(0, 4) + '年1至9月',
+        period: formatDefaultPeriodForTask(task.startDate, task.endDate),
         value: newFactValue.trim(),
         unit: newFactUnit.trim(),
         metricScope: newFactScope.trim() || `${activeRole}手工补充业务台账`,
@@ -400,7 +401,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       task,
       {
         metric: snipFactMetric.trim(),
-        period: snipFactPeriod.trim() || snippetForFact.period || task.startDate.slice(0, 4) + '年1至9月',
+        period: snipFactPeriod.trim() || snippetForFact.period || formatDefaultPeriodForTask(task.startDate, task.endDate),
         value: snipFactValue.trim(),
         unit: snipFactUnit.trim(),
         metricScope: snipFactScope.trim() || `${snippetForFact.docName}原文记载`,

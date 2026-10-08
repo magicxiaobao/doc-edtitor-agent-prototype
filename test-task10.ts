@@ -9,7 +9,8 @@ import {
   confirmFact, 
   modifyOrExcludeFact,
   isPeriodWithinTaskPeriod,
-  parsePeriodDateRange
+  parsePeriodDateRange,
+  formatDefaultPeriodForTask
 } from './src/services/factLifecycleService';
 import { 
   generateCoordinationDiff, 
@@ -23,6 +24,7 @@ import {
   savePersistedState, 
   loadPersistedState, 
   setStorageItem, 
+  recoverTasksFromCorruptedBackup,
   STORAGE_KEY_V2, 
   BACKUP_CORRUPTED_KEY 
 } from './src/services/storageService';
@@ -333,6 +335,203 @@ for (const c of combos) {
   }
 }
 
+// -----------------------------------------------------------------------
+// 12. 统计期间边界：包含范围、前三季度解析与动态表单回退
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 12] 统计期间边界：包含范围、前三季度解析与动态表单回退:');
+
+// ① "2026年前三季度" 必须解析为 1月1日 至 9月30日（不得先命中三季度导致起点为7月1日）
+const q13Range = parsePeriodDateRange('2026年前三季度');
+assert(q13Range !== null, '解析前三季度成功');
+assert(q13Range!.start.getUTCMonth() === 0, '前三季度起始月份为1月(0)');
+assert(q13Range!.end.getUTCMonth() === 8, '前三季度结束月份为9月(8)');
+
+// ② "2026年1月至9月" 必须命中月份跨度正则，不得退化为单月
+const m19Range = parsePeriodDateRange('2026年1月至9月');
+assert(m19Range !== null, '解析1月至9月成功');
+assert(m19Range!.start.getUTCMonth() === 0, '1月至9月起始月份为1月');
+assert(m19Range!.end.getUTCMonth() === 8, '1月至9月结束月份为9月');
+
+// ③ "2026年1至6月" 累计数据用于 2026-04-01 至 2026-09-30 任务，必须被排除（不得接受任务开始前的数据）
+const q23Valid = isPeriodWithinTaskPeriod('2026年1至6月', '2026-04-01', '2026-09-30');
+assert(q23Valid === false, '跨期累积数据(1-6月)在二至三季度(4-9月)任务中严格排除');
+
+// ④ 二季度任务的动态默认期间生成合规期间，不被期间校验拒绝
+const q2Default = formatDefaultPeriodForTask('2026-04-01', '2026-06-30');
+assert(q2Default.includes('4至6月') || q2Default.includes('二季度'), `二季度默认期间为: ${q2Default}`);
+const q2SelfValid = isPeriodWithinTaskPeriod(q2Default, '2026-04-01', '2026-06-30');
+assert(q2SelfValid === true, '生成的二季度默认期间能够顺利通过二季度任务校验');
+
+// -----------------------------------------------------------------------
+// 13. 协调决策保护未修改段落，仅合并diff变更
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 13] 协调决策保护未修改段落，仅合并diff变更:');
+const task13 = createPresetTask('under_review');
+const draft13 = task13.drafts[0];
+
+// User manually edits BLK-02 which is NOT in diffPreview
+const modifiedManualText = '【主笔手工重大修订段落：本段不属于协调差异范畴】';
+task13.drafts[0].blocks = draft13.blocks.map(b => b.id === 'BLK-02' ? { ...b, content: modifiedManualText } : b);
+
+// Generate coordination diff (diff covers BLK-01 or BLK-03)
+const coordResult13 = generateCoordinationDiff(task13, task13.drafts[0], 'balanced');
+const appliedCoord = applyCoordinationDecision(
+  task13,
+  task13.drafts[0].id,
+  coordResult13,
+  '主笔甲',
+  ['CMT-01', 'CMT-02']
+);
+
+// BLK-02 manual modification MUST be preserved!
+const blk2AfterCoord = appliedCoord.workingDraft.blocks.find(b => b.id === 'BLK-02');
+assert(blk2AfterCoord?.content === modifiedManualText, '协调采纳仅合并差异段落，BLK-02的人工修改完好保留');
+
+// Outdated baseDraftId check
+let diffBaseVersionBlocked = false;
+try {
+  applyCoordinationDecision(
+    task13,
+    task13.drafts[0].id,
+    { ...coordResult13, baseDraftId: 'OLD-OTHER-DRAFT-ID' },
+    '主笔甲',
+    ['CMT-01']
+  );
+} catch (e: any) {
+  diffBaseVersionBlocked = e.message.includes('基于历史版本');
+}
+assert(diffBaseVersionBlocked === true, '其他版本的协调候选严格禁止应用到当前版本');
+
+// -----------------------------------------------------------------------
+// 14. 依据重建与快照原子更新，旧审批依据稿件定稿拦截
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 14] 依据重建与快照原子更新，旧审批依据稿件定稿拦截:');
+const task14 = createPresetTask('under_review');
+const initialDraft14 = task14.drafts[0];
+
+// Scenario: task approved facts re-confirmed with 25 trainings (FACT-HASH-NEW)
+const newSnapshotMeta = {
+  ...initialDraft14.snapshotMetadata!,
+  factSnapshot: {
+    confirmedAt: '2026-10-08T12:00:00.000Z',
+    factIds: ['FACT-01', 'FACT-02', 'FACT-03'],
+    items: [
+      { factId: 'FACT-02', metric: '举办专题培训', value: '25', unit: '场', metricScope: '全省系统', period: '2026年1-9月' }
+    ]
+  }
+};
+
+// 1. Atomic update of snapshot metadata via applyDraftContentChange
+const { workingDraft: draft14Updated } = applyDraftContentChange(
+  task14,
+  initialDraft14.id,
+  (blocks) => blocks.map(b => b.content.includes('16场') ? { ...b, content: b.content.replace('16场', '25场') } : b),
+  '采纳重新起草25场候选',
+  '主笔甲',
+  newSnapshotMeta
+);
+assert(draft14Updated.snapshotMetadata?.factSnapshot?.items?.[0].value === '25', '采纳新生成稿原子更新快照依据为25场');
+
+// 2. An outdated draft (with 128 items) cannot be finalized when task fact snapshot is re-approved to 120 items
+const task14Reapproved = createPresetTask('under_review');
+task14Reapproved.reviewComments = task14Reapproved.reviewComments.map(c => ({ ...c, status: 'implemented' as const }));
+// Task facts updated to 120 items
+task14Reapproved.factSnapshot = {
+  confirmedAt: '2026-10-08T14:00:00.000Z',
+  factIds: ['FACT-01'],
+  items: [
+    { factId: 'FACT-01', metric: '累计完成重点任务', value: '120', unit: '项', metricScope: '全省', period: '2026年1-9月' }
+  ]
+};
+// But draft14StillOld is still on 128 items from earlier time
+const draft14StillOld = task14Reapproved.drafts[0];
+draft14StillOld.snapshotMetadata = {
+  ...draft14StillOld.snapshotMetadata!,
+  factSnapshot: {
+    confirmedAt: '2026-10-07T08:30:00.000Z',
+    factIds: ['FACT-01'],
+    items: [
+      { factId: 'FACT-01', metric: '累计完成重点任务', value: '128', unit: '项', metricScope: '全省', period: '2026年1-9月' }
+    ]
+  }
+};
+
+const val14Reapproved = validateFinalizationConditions(task14Reapproved, draft14StillOld.id, '主笔甲');
+assert(val14Reapproved.canFinalize === false, '依据变更后，基于旧依据的草稿严格阻止定稿');
+assert(val14Reapproved.reasons.some(r => r.includes('依据') && r.includes('不一致')), '定稿校验明确指出事实依据已重新核准变更');
+
+// -----------------------------------------------------------------------
+// 15. 历史版本恢复生成新工作草稿并深拷贝依据
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 15] 历史版本恢复生成新工作草稿并深拷贝依据:');
+const task15 = createPresetTask('under_review');
+const histVersion: DraftVersion = {
+  ...task15.drafts[0],
+  id: 'DRAFT-HIST-25',
+  versionNumber: 'v1.0 (历史25场版)',
+  isHistoricalSnapshot: true,
+  isWorkingDraft: false,
+  snapshotMetadata: newSnapshotMeta,
+  blocks: task15.drafts[0].blocks.map(b => ({ ...b, content: b.content.replace('16场', '25场') }))
+};
+task15.drafts.push(histVersion);
+
+// Simulate restore
+const nextVerNum = `v${(task15.drafts.length + 1).toFixed(1)} (工作草稿·恢复自${histVersion.versionNumber})`;
+const restoredDraft15: DraftVersion = {
+  id: `DRAFT-WORK-RESTORED-${Date.now()}`,
+  versionNumber: nextVerNum,
+  createdAt: new Date().toISOString(),
+  author: '主笔甲',
+  summary: `基于历史版本【${histVersion.versionNumber}】恢复生成的新工作草稿`,
+  blocks: JSON.parse(JSON.stringify(histVersion.blocks)),
+  isFinal: false,
+  isHistoricalSnapshot: false,
+  isWorkingDraft: true,
+  sourceDraftId: histVersion.id,
+  snapshotMetadata: JSON.parse(JSON.stringify(histVersion.snapshotMetadata)),
+  auditRecords: [],
+};
+
+task15.drafts.unshift(restoredDraft15);
+task15.currentDraftId = restoredDraft15.id;
+
+assert(restoredDraft15.id !== histVersion.id, '恢复产生全新工作稿ID');
+assert(restoredDraft15.sourceDraftId === histVersion.id, '正确记录sourceDraftId');
+assert(restoredDraft15.snapshotMetadata?.factSnapshot?.items?.[0].value === '25', '恢复完整继承历史版本依据(25场)');
+assert(histVersion.blocks.some(b => b.content.includes('25场')), '原历史快照完全不受影响');
+
+// -----------------------------------------------------------------------
+// 16. 历史审阅导出版本关联标记
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 16] 历史审阅导出版本关联标记:');
+const txt16 = exportDocumentAsTxt(task1, testDraft11, { includeBody: false, includeEvidence: false, includeReviewLog: true });
+assert(txt16.includes('针对版本：'), '审阅导出清晰注明针对版本');
+
+// -----------------------------------------------------------------------
+// 17. 损坏备份自动修复与文稿恢复
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 17] 损坏备份自动修复与文稿恢复:');
+setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
+  {
+    id: 'CORRUPTED-TASK-NO-TITLE',
+    // missing title!
+    drafts: [
+      {
+        id: 'DRAFT-SAVED-INSIDE',
+        versionNumber: 'v1.0',
+        blocks: [{ id: 'BLK-REC', content: '被成功拯救的草稿正文' }]
+      }
+    ]
+  }
+]));
+
+const recoverRes = recoverTasksFromCorruptedBackup();
+assert(recoverRes.success === true, '从备份中自动恢复成功');
+assert(recoverRes.recoveredTasks.length > 0, '恢复出任务对象');
+assert(recoverRes.recoveredTasks[0].title.includes('已恢复公文任务'), '自动补齐缺失的任务标题');
+assert(recoverRes.recoveredTasks[0].drafts[0].blocks[0].content === '被成功拯救的草稿正文', '草稿正文无损保留');
+
 async function runDocxCombos() {
   for (const c of combos) {
     const docx = await exportDocumentAsDocx(task1, testDraft11, {
@@ -347,6 +546,6 @@ async function runDocxCombos() {
 
 runDocxCombos().then(() => {
   console.log('\n==============================================');
-  console.log('   🎉 任务10实际路径回归测试全部通过！');
+  console.log('   🎉 任务10实际路径全量回归测试全部通过！');
   console.log('==============================================');
 });

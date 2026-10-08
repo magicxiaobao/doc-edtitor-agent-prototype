@@ -10,6 +10,7 @@ import {
   loadPersistedState, 
   savePersistedState, 
   resetStorageWithBackup,
+  recoverTasksFromCorruptedBackup,
   getStorageError,
   BACKUP_CORRUPTED_KEY 
 } from './services/storageService';
@@ -109,6 +110,18 @@ export function App() {
     setIsCorrupted(false);
   };
 
+  const handleAttemptRecovery = () => {
+    const res = recoverTasksFromCorruptedBackup();
+    if (res.success && res.recoveredTasks.length > 0) {
+      setTasks(res.recoveredTasks);
+      setCurrentTaskId(res.recoveredTasks[0].id);
+      setIsCorrupted(false);
+      setMigrationMessage(res.message);
+    } else {
+      alert(res.message || '自动恢复失败，建议下载备份文件或重置预置数据。');
+    }
+  };
+
   const handleDownloadCorruptedBackup = () => {
     const raw = localStorage.getItem(BACKUP_CORRUPTED_KEY) || '';
     const blob = new Blob([raw], { type: 'application/json' });
@@ -193,6 +206,13 @@ export function App() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleAttemptRecovery}
+                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>尝试自动修复恢复</span>
+              </button>
               <button
                 onClick={handleDownloadCorruptedBackup}
                 className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 rounded text-xs font-semibold text-amber-900 flex items-center gap-1 cursor-pointer"

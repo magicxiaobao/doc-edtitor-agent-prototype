@@ -286,3 +286,78 @@ export function resetStorageWithBackup(): Task[] {
   savePersistedState(defaultPresets, defaultPresets[0].id, '主笔甲');
   return defaultPresets;
 }
+
+/**
+ * Attempts best-effort recovery of tasks from corrupted backup data.
+ * Fixes missing task titles, metadata, or schema anomalies without data loss.
+ */
+export function recoverTasksFromCorruptedBackup(): { success: boolean; recoveredTasks: Task[]; message: string } {
+  const rawBackup = getStorageItem(BACKUP_CORRUPTED_KEY);
+  if (!rawBackup) {
+    return { success: false, recoveredTasks: [], message: '未找到隔离的损坏备份数据。' };
+  }
+
+  try {
+    const parsed = JSON.parse(rawBackup);
+    let candidates: any[] = [];
+    if (Array.isArray(parsed)) {
+      candidates = parsed;
+    } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) {
+      candidates = parsed.tasks;
+    } else if (parsed && typeof parsed === 'object') {
+      candidates = [parsed];
+    }
+
+    if (candidates.length === 0) {
+      return { success: false, recoveredTasks: [], message: '备份数据中无任何可提取的任务对象。' };
+    }
+
+    const defaultPresets = [
+      createPresetTask('conflict_pending'),
+      createPresetTask('ready_to_draft'),
+      createPresetTask('under_review'),
+      createPresetTask('blank'),
+    ];
+
+    const repairedTasks: Task[] = candidates.map((rawT: any, idx: number) => {
+      const fallbackPreset = defaultPresets[idx % defaultPresets.length];
+      const drafts: DraftVersion[] = Array.isArray(rawT.drafts) ? rawT.drafts : [];
+      return {
+        ...fallbackPreset,
+        ...rawT,
+        id: typeof rawT.id === 'string' && rawT.id ? rawT.id : `RECOVERED-TASK-${Date.now()}-${idx}`,
+        title: typeof rawT.title === 'string' && rawT.title ? rawT.title : `已恢复公文任务 (原未命名 #${idx + 1})`,
+        docType: rawT.docType || fallbackPreset.docType,
+        startDate: rawT.startDate || fallbackPreset.startDate,
+        endDate: rawT.endDate || fallbackPreset.endDate,
+        targetWordCount: typeof rawT.targetWordCount === 'number' ? rawT.targetWordCount : fallbackPreset.targetWordCount,
+        currentStage: rawT.currentStage || 'drafting',
+        documents: Array.isArray(rawT.documents) ? rawT.documents : fallbackPreset.documents,
+        snippets: Array.isArray(rawT.snippets) ? rawT.snippets : fallbackPreset.snippets,
+        facts: Array.isArray(rawT.facts) ? rawT.facts : fallbackPreset.facts,
+        styleRules: Array.isArray(rawT.styleRules) ? rawT.styleRules : fallbackPreset.styleRules,
+        outline: Array.isArray(rawT.outline) ? rawT.outline : fallbackPreset.outline,
+        drafts: drafts.length > 0 ? drafts : fallbackPreset.drafts,
+        currentDraftId: rawT.currentDraftId || (drafts[0]?.id ?? fallbackPreset.currentDraftId),
+        reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : fallbackPreset.reviewComments,
+        auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : fallbackPreset.auditIssues,
+        isFinalized: !!rawT.isFinalized,
+        status: rawT.status || '起草中',
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    savePersistedState(repairedTasks, repairedTasks[0].id, '主笔甲');
+    return {
+      success: true,
+      recoveredTasks: repairedTasks,
+      message: `成功从备份中恢复 ${repairedTasks.length} 个任务（已补齐缺失元数据并无损保留草稿内容）。`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      recoveredTasks: [],
+      message: `解析备份数据失败（${err.message}），无法自动修复。`,
+    };
+  }
+}

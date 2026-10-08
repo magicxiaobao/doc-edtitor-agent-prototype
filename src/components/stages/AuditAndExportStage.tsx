@@ -52,6 +52,13 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const [isExportingDocx, setIsExportingDocx] = useState(false);
   const [exportVersionId, setExportVersionId] = useState<string>(task.currentDraftId || task.drafts[0]?.id || '');
 
+  // Synchronize exportVersionId when task or currentDraftId changes
+  useEffect(() => {
+    if (task.currentDraftId) {
+      setExportVersionId(task.currentDraftId);
+    }
+  }, [task.id, task.currentDraftId]);
+
   // Granular export options for both TXT and DOCX
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     includeBody: true,
@@ -846,7 +853,9 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                   <div className="space-y-1.5 text-xs text-slate-600 bg-white p-3 rounded border border-slate-200">
                     {task.reviewComments.map((cmt, idx) => (
                       <div key={cmt.id} className="pb-1 border-b border-slate-100 last:border-0">
-                        <span className="font-bold">{idx + 1}. [{cmt.reviewer}]</span> 状态：
+                        <span className="font-bold">{idx + 1}. [{cmt.reviewer}]</span>
+                        {cmt.targetVersionId && <span className="text-slate-400 font-mono text-[10px] ml-1">[针对:{cmt.targetVersionId}]</span>}
+                        <span className="ml-1">状态：</span>
                         <span className="font-semibold text-slate-800">{cmt.status}</span> | 意见：{cmt.content}
                         {cmt.authorReply && <span className="text-blue-700 ml-2">答复：{cmt.authorReply}</span>}
                       </div>

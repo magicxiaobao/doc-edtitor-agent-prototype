@@ -4,7 +4,8 @@ import {
   ParagraphBlock, 
   DraftVersion, 
   UserRole, 
-  EvidenceSnippet 
+  EvidenceSnippet,
+  SnapshotMetadata 
 } from '../../types';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -44,6 +45,15 @@ interface DraftingStageProps {
   activeRole: UserRole;
 }
 
+interface DraftCandidate {
+  taskId: string;
+  runId: string;
+  baseDraftId: string;
+  blocks: ParagraphBlock[];
+  snapshotMetadata: SnapshotMetadata;
+  generatedAt: string;
+}
+
 export const DraftingStage: React.FC<DraftingStageProps> = ({
   task,
   onUpdateTask,
@@ -61,11 +71,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Selected block for editing / inspection
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
-  // Generation state
+  // Generation state & strict isolation refs
   const [isGenerating, setIsGenerating] = useState(false);
-  const [pendingCandidateBlocks, setPendingCandidateBlocks] = useState<ParagraphBlock[] | null>(null);
+  const [pendingCandidate, setPendingCandidate] = useState<DraftCandidate | null>(null);
   const draftCancelledRef = useRef(false);
   const [activeDraftRunId, setActiveDraftRunId] = useState<string | null>(null);
+  const activeDraftRunIdRef = useRef<string | null>(null);
+  const currentTaskIdRef = useRef<string>(task.id);
+  const isUnmountedRef = useRef(false);
+  const generateTimerRef = useRef<any>(null);
 
   // Local revision state
   const [revisionSuggestion, setRevisionSuggestion] = useState<RevisionSuggestion | null>(null);
@@ -79,12 +93,31 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Cancel generation and clear isolated results if task changes
   useEffect(() => {
+    currentTaskIdRef.current = task.id;
+    activeDraftRunIdRef.current = null;
     draftCancelledRef.current = true;
+    if (generateTimerRef.current) {
+      clearTimeout(generateTimerRef.current);
+      generateTimerRef.current = null;
+    }
     setIsGenerating(false);
     setActiveDraftRunId(null);
-    setPendingCandidateBlocks(null);
+    setPendingCandidate(null);
     setRevisionSuggestion(null);
   }, [task.id]);
+
+  // Component unmount cleanup
+  useEffect(() => {
+    isUnmountedRef.current = false;
+    return () => {
+      isUnmountedRef.current = true;
+      activeDraftRunIdRef.current = null;
+      if (generateTimerRef.current) {
+        clearTimeout(generateTimerRef.current);
+        generateTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Check role permission
   const canUserEdit = canEditDraft(activeRole);
@@ -130,14 +163,37 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
-    const runId = `DRAFT-RUN-${Date.now().toString(36)}`;
+    const runId = `DRAFT-RUN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const startingTaskId = task.id;
+    const baseDraftId = currentDraft?.id || '';
+    const capturedSnapshotMeta: SnapshotMetadata = {
+      taskTitle: task.title,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      targetWordCount: task.targetWordCount,
+      factSnapshot: task.factSnapshot ? JSON.parse(JSON.stringify(task.factSnapshot)) : undefined,
+      styleSnapshot: task.styleSnapshot ? JSON.parse(JSON.stringify(task.styleSnapshot)) : undefined,
+      outlineSnapshot: task.outlineSnapshot ? JSON.parse(JSON.stringify(task.outlineSnapshot)) : undefined,
+      outlineSections: JSON.parse(JSON.stringify(task.outline)),
+    };
+
+    activeDraftRunIdRef.current = runId;
     draftCancelledRef.current = false;
     setActiveDraftRunId(runId);
     setIsGenerating(true);
 
-    setTimeout(() => {
-      if (draftCancelledRef.current || task.id !== startingTaskId) {
+    if (generateTimerRef.current) {
+      clearTimeout(generateTimerRef.current);
+    }
+
+    generateTimerRef.current = setTimeout(() => {
+      // Strict unmount, cancel, runId, and taskId isolation checks
+      if (
+        isUnmountedRef.current ||
+        draftCancelledRef.current ||
+        activeDraftRunIdRef.current !== runId ||
+        currentTaskIdRef.current !== startingTaskId
+      ) {
         setIsGenerating(false);
         return;
       }
@@ -152,16 +208,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           author: activeRole,
           summary: '系统根据已确认事实及大纲生成的首个完整初稿版本',
           blocks: generatedBlocks,
-          snapshotMetadata: {
-            taskTitle: task.title,
-            startDate: task.startDate,
-            endDate: task.endDate,
-            targetWordCount: task.targetWordCount,
-            factSnapshot: task.factSnapshot,
-            styleSnapshot: task.styleSnapshot,
-            outlineSnapshot: task.outlineSnapshot,
-            outlineSections: JSON.parse(JSON.stringify(task.outline)),
-          },
+          snapshotMetadata: capturedSnapshotMeta,
         };
         onUpdateTask({
           drafts: [initialDraft],
@@ -169,8 +216,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           status: '起草中',
         });
       } else {
-        // Offer candidate blocks for comparison
-        setPendingCandidateBlocks(generatedBlocks);
+        // Offer candidate blocks for comparison with captured snapshot metadata
+        setPendingCandidate({
+          taskId: startingTaskId,
+          runId,
+          baseDraftId,
+          blocks: generatedBlocks,
+          snapshotMetadata: capturedSnapshotMeta,
+          generatedAt: new Date().toISOString(),
+        });
       }
       setIsGenerating(false);
     }, 600);
@@ -178,6 +232,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   const handleCancelGenerate = () => {
     draftCancelledRef.current = true;
+    activeDraftRunIdRef.current = null;
+    if (generateTimerRef.current) {
+      clearTimeout(generateTimerRef.current);
+      generateTimerRef.current = null;
+    }
     setIsGenerating(false);
     setActiveDraftRunId(null);
   };
@@ -188,15 +247,31 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       alert(perm.reason || '当前身份无权采纳新候选稿');
       return;
     }
-    if (!pendingCandidateBlocks) return;
+    if (!pendingCandidate) return;
+
+    // Strict validation: candidate must match current task
+    if (pendingCandidate.taskId !== task.id) {
+      alert('安全隔离拦截：候选稿生成自其他任务，禁止跨任务采纳！');
+      setPendingCandidate(null);
+      return;
+    }
+
+    // Baseline validation: check if draft changed
+    if (currentDraft && pendingCandidate.baseDraftId && currentDraft.id !== pendingCandidate.baseDraftId) {
+      alert('基准冲突：当前草稿版本已发生变更，旧生成候选已失效！请重新生成。');
+      setPendingCandidate(null);
+      return;
+    }
 
     try {
+      // Pass the candidate's atomically captured snapshotMetadata!
       const { updatedTask, workingDraft } = applyDraftContentChange(
         task,
         currentDraft?.id,
-        () => pendingCandidateBlocks,
+        () => pendingCandidate.blocks,
         '采纳重新起草候选稿',
-        activeRole
+        activeRole,
+        pendingCandidate.snapshotMetadata
       );
       onUpdateTask({
         drafts: updatedTask.drafts,
@@ -204,7 +279,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
-      setPendingCandidateBlocks(null);
+      setPendingCandidate(null);
     } catch (err: any) {
       alert(err.message || '采纳候选稿失败');
     }
@@ -346,7 +421,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setVersionSummary('');
   };
 
-  // Restore history draft
+  // Restore history draft (Problem 3 fix: explicitly create new working draft with deep-copied snapshot metadata)
   const handleRestoreDraft = (version: DraftVersion) => {
     const perm = checkPermission(activeRole, 'restore_version');
     if (!perm.allowed) {
@@ -355,18 +430,27 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
 
     try {
-      const { updatedTask, workingDraft } = applyDraftContentChange(
-        task,
-        currentDraft?.id,
-        () => JSON.parse(JSON.stringify(version.blocks)),
-        `恢复自历史版本 ${version.versionNumber}`,
-        activeRole
-      );
+      const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作草稿·恢复自${version.versionNumber})`;
+      const restoredDraft: DraftVersion = {
+        id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        versionNumber: nextVersionNumber,
+        createdAt: new Date().toISOString(),
+        author: activeRole,
+        summary: `基于历史版本【${version.versionNumber}】恢复生成的新工作草稿`,
+        blocks: JSON.parse(JSON.stringify(version.blocks)),
+        isFinal: false,
+        isHistoricalSnapshot: false,
+        isWorkingDraft: true,
+        sourceDraftId: version.id, // 明确记录恢复来源ID
+        snapshotMetadata: version.snapshotMetadata ? JSON.parse(JSON.stringify(version.snapshotMetadata)) : undefined, // 完整深拷贝历史依据快照
+        auditRecords: version.auditRecords ? JSON.parse(JSON.stringify(version.auditRecords)) : [],
+      };
+
       onUpdateTask({
-        drafts: updatedTask.drafts,
-        currentDraftId: workingDraft.id,
-        isFinalized: updatedTask.isFinalized,
-        status: updatedTask.status,
+        drafts: [restoredDraft, ...task.drafts],
+        currentDraftId: restoredDraft.id,
+        isFinalized: false,
+        status: '起草中',
       });
       setShowVersionHistory(false);
     } catch (err: any) {
@@ -540,7 +624,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       )}
 
       {/* Candidate comparison banner if present */}
-      {pendingCandidateBlocks && (
+      {pendingCandidate && (
         <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-lg flex items-center justify-between shadow-xs">
           <div>
             <h4 className="font-bold text-xs text-amber-900 flex items-center gap-1.5">
@@ -553,7 +637,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setPendingCandidateBlocks(null)}
+              onClick={() => setPendingCandidate(null)}
               className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs hover:bg-slate-50 cursor-pointer"
             >
               放弃候选稿
