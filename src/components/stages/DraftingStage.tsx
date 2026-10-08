@@ -11,7 +11,8 @@ import {
   generateDraftFromFactsAndOutline, 
   generateParagraphRevision, 
   RevisionAction, 
-  RevisionSuggestion 
+  RevisionSuggestion,
+  computeContentHash
 } from '../../services/mockDraftService';
 import { 
   checkPermission, 
@@ -45,10 +46,24 @@ interface DraftingStageProps {
   activeRole: UserRole;
 }
 
+function computeDraftBlocksHash(blocks: ParagraphBlock[] = []): string {
+  const combined = blocks.map((b) => `${b.id}::${b.sectionId}::${b.content}`).join('||');
+  return computeContentHash(combined);
+}
+
 interface DraftCandidate {
   taskId: string;
   runId: string;
   baseDraftId: string;
+  baseDraftContentHash: string; // Hash of currentDraft blocks at generation start to detect subsequent manual edits
+  upstreamApprovalVersion: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
   blocks: ParagraphBlock[];
   snapshotMetadata: SnapshotMetadata;
   generatedAt: string;
@@ -166,6 +181,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     const runId = `DRAFT-RUN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const startingTaskId = task.id;
     const baseDraftId = currentDraft?.id || '';
+    const baseDraftContentHash = currentDraft ? computeDraftBlocksHash(currentDraft.blocks) : '';
+    const upstreamApprovalVersion = {
+      factSnapshotConfirmedAt: task.factSnapshot?.confirmedAt,
+      factSnapshotHash: task.factSnapshot?.hash,
+      styleConfirmedAt: task.styleSnapshot?.confirmedAt,
+      styleHash: task.styleSnapshot?.hash,
+      outlineConfirmedAt: task.outlineSnapshot?.confirmedAt,
+      outlineHash: task.outlineSnapshot?.hash,
+    };
     const capturedSnapshotMeta: SnapshotMetadata = {
       taskTitle: task.title,
       startDate: task.startDate,
@@ -221,6 +245,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           taskId: startingTaskId,
           runId,
           baseDraftId,
+          baseDraftContentHash,
+          upstreamApprovalVersion,
           blocks: generatedBlocks,
           snapshotMetadata: capturedSnapshotMeta,
           generatedAt: new Date().toISOString(),
@@ -256,9 +282,64 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
-    // Baseline validation: check if draft changed
+    // Run ID validation: must not be invalidated by cancel or another run
+    if (activeDraftRunIdRef.current && pendingCandidate.runId !== activeDraftRunIdRef.current) {
+      alert('生成运行已失效：该候选生成自已取消或过期的运行！');
+      setPendingCandidate(null);
+      return;
+    }
+
+    // Baseline validation: check if draft changed (ID mismatch)
     if (currentDraft && pendingCandidate.baseDraftId && currentDraft.id !== pendingCandidate.baseDraftId) {
       alert('基准冲突：当前草稿版本已发生变更，旧生成候选已失效！请重新生成。');
+      setPendingCandidate(null);
+      return;
+    }
+
+    // Baseline validation: check if draft content was manually modified after generation started!
+    if (currentDraft && pendingCandidate.baseDraftContentHash) {
+      const currentHash = computeDraftBlocksHash(currentDraft.blocks);
+      if (currentHash !== pendingCandidate.baseDraftContentHash) {
+        alert('基准正文已变更：在此候选生成后，正文已被人工编辑修改，采纳旧候选将覆盖人工修改！候选已失效，请重新生成或先保存快照。');
+        setPendingCandidate(null);
+        return;
+      }
+    }
+
+    // Upstream approvals validation: verify upstream approvals are still valid and have not been invalidated or changed
+    const isUpstreamStillApproved =
+      task.outlineConfirmed === true &&
+      task.styleConfirmed === true &&
+      !!task.factSnapshot;
+
+    if (!isUpstreamStillApproved) {
+      alert('上游依据审批状态已失效（事实快照缺失、文风未核准或大纲审批已撤销），旧候选已失效！');
+      setPendingCandidate(null);
+      return;
+    }
+
+    const curFactTime = task.factSnapshot?.confirmedAt || '';
+    const candFactTime = pendingCandidate.upstreamApprovalVersion?.factSnapshotConfirmedAt || '';
+    const curFactHash = task.factSnapshot?.hash || '';
+    const candFactHash = pendingCandidate.upstreamApprovalVersion?.factSnapshotHash || '';
+    if (curFactTime !== candFactTime || (curFactHash && candFactHash && curFactHash !== candFactHash)) {
+      alert('上游事实依据版本已变更：事实快照已更新，候选稿依据已失效，请重新生成！');
+      setPendingCandidate(null);
+      return;
+    }
+
+    const curStyleTime = task.styleSnapshot?.confirmedAt || '';
+    const candStyleTime = pendingCandidate.upstreamApprovalVersion?.styleConfirmedAt || '';
+    if (curStyleTime !== candStyleTime) {
+      alert('上游文风依据版本已变更：文风规范已重新核准，候选稿依据已失效，请重新生成！');
+      setPendingCandidate(null);
+      return;
+    }
+
+    const curOutlineTime = task.outlineSnapshot?.confirmedAt || '';
+    const candOutlineTime = pendingCandidate.upstreamApprovalVersion?.outlineConfirmedAt || '';
+    if (curOutlineTime !== candOutlineTime) {
+      alert('上游大纲依据版本已变更：大纲结构已重新核准，候选稿依据已失效，请重新生成！');
       setPendingCandidate(null);
       return;
     }
@@ -410,6 +491,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       isWorkingDraft: false,      // Not a working draft
       snapshotMetadata: currentDraft.snapshotMetadata,
       auditRecords: currentDraft.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
+      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结保存时刻的审阅意见快照
     };
 
     onUpdateTask({

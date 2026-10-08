@@ -167,18 +167,59 @@ export function validateFinalizationConditions(
   let isUpstreamValid = task.outlineConfirmed === true && !!task.factSnapshot && task.styleConfirmed === true;
   if (!isUpstreamValid) {
     reasons.push('前序审批已失效（事实快照缺失、文风未核准或大纲审批已撤销），无法定稿');
-  } else if (targetDraft?.snapshotMetadata?.factSnapshot && task.factSnapshot) {
-    // 校验草稿当时的冻结事实快照是否与当前任务核准的事实快照一致
-    const curSnap = task.factSnapshot;
-    const draftSnap = targetDraft.snapshotMetadata.factSnapshot;
-    const curTime = curSnap.confirmedAt || '';
-    const draftTime = draftSnap.confirmedAt || '';
-    const isSameTime = curTime && draftTime && curTime === draftTime;
-    const isSameItems = JSON.stringify(curSnap.items) === JSON.stringify(draftSnap.items);
-
-    if (!isSameTime && !isSameItems) {
+  } else {
+    // 必须具备完整冻结事实快照依据（缺少冻结快照则严禁定稿）
+    if (!targetDraft?.snapshotMetadata?.factSnapshot || !task.factSnapshot) {
       isUpstreamValid = false;
-      reasons.push('当前草稿生成依据与最新核准的事实快照不一致（事实依据已重新核准变更，旧稿需重新起草或同步依据后方可定稿）');
+      reasons.push('草稿缺少冻结事实快照依据（历史依据不完整或未关联核准事实快照），禁止定稿');
+    } else {
+      const curSnap = task.factSnapshot;
+      const draftSnap = targetDraft.snapshotMetadata.factSnapshot;
+      const isItemsIdentical = JSON.stringify(curSnap.items) === JSON.stringify(draftSnap.items);
+      const isConfirmedAtIdentical = (!curSnap.confirmedAt || !draftSnap.confirmedAt) ? true : curSnap.confirmedAt === draftSnap.confirmedAt;
+      const isHashIdentical = (!curSnap.hash || !draftSnap.hash) ? true : curSnap.hash === draftSnap.hash;
+
+      // 确认时间相同不能抵消内容差异！内容不同或审批版本不同均必须严密阻断
+      if (!isItemsIdentical || !isConfirmedAtIdentical || !isHashIdentical) {
+        isUpstreamValid = false;
+        reasons.push('当前草稿生成依据与最新核准的事实快照不一致（事实依据内容或审批版本已变更，旧稿需重新起草或同步依据后方可定稿）');
+      }
+    }
+
+    // 校验文风规范依据完整性与一致性
+    if (task.styleSnapshot) {
+      if (!targetDraft?.snapshotMetadata?.styleSnapshot) {
+        isUpstreamValid = false;
+        reasons.push('草稿缺少冻结文风规范快照依据，禁止定稿');
+      } else {
+        const curStyle = task.styleSnapshot;
+        const draftStyle = targetDraft.snapshotMetadata.styleSnapshot;
+        const isRulesIdentical = JSON.stringify(curStyle.activeRuleIds) === JSON.stringify(draftStyle.activeRuleIds);
+        const isTimeIdentical = (!curStyle.confirmedAt || !draftStyle.confirmedAt) ? true : curStyle.confirmedAt === draftStyle.confirmedAt;
+        const isHashIdentical = (!curStyle.hash || !draftStyle.hash) ? true : curStyle.hash === draftStyle.hash;
+        if (!isRulesIdentical || !isTimeIdentical || !isHashIdentical) {
+          isUpstreamValid = false;
+          reasons.push('当前草稿文风依据与最新核准的文风规范不一致，无法定稿');
+        }
+      }
+    }
+
+    // 校验大纲结构依据完整性与一致性
+    if (task.outlineSnapshot) {
+      if (!targetDraft?.snapshotMetadata?.outlineSnapshot) {
+        isUpstreamValid = false;
+        reasons.push('草稿缺少冻结大纲结构快照依据，禁止定稿');
+      } else {
+        const curOutline = task.outlineSnapshot;
+        const draftOutline = targetDraft.snapshotMetadata.outlineSnapshot;
+        const isSectionsIdentical = JSON.stringify(curOutline.sections) === JSON.stringify(draftOutline.sections);
+        const isTimeIdentical = (!curOutline.confirmedAt || !draftOutline.confirmedAt) ? true : curOutline.confirmedAt === draftOutline.confirmedAt;
+        const isHashIdentical = (!curOutline.hash || !draftOutline.hash) ? true : curOutline.hash === draftOutline.hash;
+        if (!isSectionsIdentical || !isTimeIdentical || !isHashIdentical) {
+          isUpstreamValid = false;
+          reasons.push('当前草稿大纲结构与最新核准的大纲审批版本不一致，无法定稿');
+        }
+      }
     }
   }
 
@@ -303,6 +344,7 @@ export function finalizeDraft(
     sourceDraftId: currentDraft.id,
     snapshotMetadata: currentDraft.snapshotMetadata,
     auditRecords: currentDraft.auditRecords,
+    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结定稿时刻的审阅记录快照
   };
 
   const updatedTask: Task = {

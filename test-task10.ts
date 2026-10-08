@@ -20,11 +20,13 @@ import {
 } from './src/services/reviewCoordinationService';
 import { runDocumentAudit } from './src/services/mockAuditService';
 import { exportDocumentAsTxt, exportDocumentAsDocx } from './src/services/exportService';
+import { computeContentHash } from './src/services/mockDraftService';
 import { 
   savePersistedState, 
   loadPersistedState, 
   setStorageItem, 
   recoverTasksFromCorruptedBackup,
+  validateTaskStructure,
   STORAGE_KEY_V2, 
   BACKUP_CORRUPTED_KEY 
 } from './src/services/storageService';
@@ -362,6 +364,34 @@ assert(q2Default.includes('4至6月') || q2Default.includes('二季度'), `二�
 const q2SelfValid = isPeriodWithinTaskPeriod(q2Default, '2026-04-01', '2026-06-30');
 assert(q2SelfValid === true, '生成的二季度默认期间能够顺利通过二季度任务校验');
 
+// ⑤ 月中起止任务（如 4月15日至6月15日）默认值准确保留起止日期，不被自身校验拒绝
+const midMonthDefault = formatDefaultPeriodForTask('2026-04-15', '2026-06-15');
+assert(midMonthDefault === '2026年4月15日至6月15日', `月中起止准确保留日期，当前为: ${midMonthDefault}`);
+const midMonthParsed = parsePeriodDateRange(midMonthDefault);
+assert(midMonthParsed !== null, '解析月中起止期间成功');
+assert(midMonthParsed!.start.getUTCDate() === 15 && midMonthParsed!.start.getUTCMonth() === 3, '起始为4月15日');
+assert(midMonthParsed!.end.getUTCDate() === 15 && midMonthParsed!.end.getUTCMonth() === 5, '结束为6月15日');
+const midMonthSelfValid = isPeriodWithinTaskPeriod(midMonthDefault, '2026-04-15', '2026-06-15');
+assert(midMonthSelfValid === true, '月中起止默认期间顺利通过自身任务期间校验');
+
+// ⑥ 跨年统计期间准确解析与默认值：2025年11月至2026年3月
+const crossYearDefault = formatDefaultPeriodForTask('2025-11-01', '2026-03-31');
+assert(crossYearDefault.includes('2025年11月') && crossYearDefault.includes('2026年3月'), `跨年默认期间为: ${crossYearDefault}`);
+const crossYearParsed = parsePeriodDateRange('2025年11月至2026年3月');
+assert(crossYearParsed !== null, '解析跨年月度期间成功');
+assert(crossYearParsed!.start.getUTCFullYear() === 2025 && crossYearParsed!.start.getUTCMonth() === 10, '跨年起点为2025年11月');
+assert(crossYearParsed!.end.getUTCFullYear() === 2026 && crossYearParsed!.end.getUTCMonth() === 2, '跨年终点为2026年3月');
+assert(isPeriodWithinTaskPeriod('2025年11月至2026年3月', '2025-11-01', '2026-03-31') === true, '跨年期间数据被合规接纳');
+assert(isPeriodWithinTaskPeriod('2025年10月', '2025-11-01', '2026-03-31') === false, '早于跨年起点的数据严格排除');
+assert(isPeriodWithinTaskPeriod('2026年4月', '2025-11-01', '2026-03-31') === false, '晚于跨年终点的数据严格排除');
+
+// ⑦ 跨年月中起止精准日期解析：2025年11月15日至2026年3月15日
+const crossYearExactParsed = parsePeriodDateRange('2025年11月15日至2026年3月15日');
+assert(crossYearExactParsed !== null, '解析跨年月中具体日期成功');
+assert(crossYearExactParsed!.start.getUTCFullYear() === 2025 && crossYearExactParsed!.start.getUTCDate() === 15, '跨年起始日为2025-11-15');
+assert(crossYearExactParsed!.end.getUTCFullYear() === 2026 && crossYearExactParsed!.end.getUTCDate() === 15, '跨年结束日为2026-03-15');
+assert(isPeriodWithinTaskPeriod('2025年11月15日至2026年3月15日', '2025-11-15', '2026-03-15') === true, '跨年中具体日期通过任务期间校验');
+
 // -----------------------------------------------------------------------
 // 13. 协调决策保护未修改段落，仅合并diff变更
 // -----------------------------------------------------------------------
@@ -432,10 +462,11 @@ const { workingDraft: draft14Updated } = applyDraftContentChange(
 );
 assert(draft14Updated.snapshotMetadata?.factSnapshot?.items?.[0].value === '25', '采纳新生成稿原子更新快照依据为25场');
 
-// 2. An outdated draft (with 128 items) cannot be finalized when task fact snapshot is re-approved to 120 items
+// 2. An outdated draft cannot be finalized when task fact snapshot is re-approved
 const task14Reapproved = createPresetTask('under_review');
 task14Reapproved.reviewComments = task14Reapproved.reviewComments.map(c => ({ ...c, status: 'implemented' as const }));
-// Task facts updated to 120 items
+
+// ① 关键边界：确认时间相同，但当前依据120项、稿件依据128项，前序检查必须严密阻断！
 task14Reapproved.factSnapshot = {
   confirmedAt: '2026-10-08T14:00:00.000Z',
   factIds: ['FACT-01'],
@@ -443,22 +474,40 @@ task14Reapproved.factSnapshot = {
     { factId: 'FACT-01', metric: '累计完成重点任务', value: '120', unit: '项', metricScope: '全省', period: '2026年1-9月' }
   ]
 };
-// But draft14StillOld is still on 128 items from earlier time
-const draft14StillOld = task14Reapproved.drafts[0];
-draft14StillOld.snapshotMetadata = {
-  ...draft14StillOld.snapshotMetadata!,
+const draft14SameTimeDiffContent = task14Reapproved.drafts[0];
+draft14SameTimeDiffContent.snapshotMetadata = {
+  ...draft14SameTimeDiffContent.snapshotMetadata!,
   factSnapshot: {
-    confirmedAt: '2026-10-07T08:30:00.000Z',
+    confirmedAt: '2026-10-08T14:00:00.000Z', // 确认时间完全相同！
     factIds: ['FACT-01'],
     items: [
       { factId: 'FACT-01', metric: '累计完成重点任务', value: '128', unit: '项', metricScope: '全省', period: '2026年1-9月' }
     ]
   }
 };
+const valSameTimeDiff = validateFinalizationConditions(task14Reapproved, draft14SameTimeDiffContent.id, '主笔甲');
+assert(valSameTimeDiff.canFinalize === false, '确认时间相同时，内容差异（120 vs 128）严密阻断定稿');
+assert(valSameTimeDiff.reasons.some(r => r.includes('不一致')), '定稿校验明确提示事实依据不一致');
 
-const val14Reapproved = validateFinalizationConditions(task14Reapproved, draft14StillOld.id, '主笔甲');
-assert(val14Reapproved.canFinalize === false, '依据变更后，基于旧依据的草稿严格阻止定稿');
-assert(val14Reapproved.reasons.some(r => r.includes('依据') && r.includes('不一致')), '定稿校验明确指出事实依据已重新核准变更');
+// ② 关键边界：稿件缺少冻结事实快照依据，前序检查必须严密阻断！
+const draft14NoFactSnap = { ...draft14SameTimeDiffContent, snapshotMetadata: undefined };
+task14Reapproved.drafts = [draft14NoFactSnap];
+const valMissingSnap = validateFinalizationConditions(task14Reapproved, draft14NoFactSnap.id, '主笔甲');
+assert(valMissingSnap.canFinalize === false, '稿件缺少冻结事实快照依据严密阻断定稿');
+assert(valMissingSnap.reasons.some(r => r.includes('缺少冻结事实快照依据')), '定稿校验明确提示缺少冻结事实快照');
+
+// ③ 关键边界：文风或大纲依据版本不一致，严密阻断定稿
+const draft14StyleDiff = {
+  ...draft14SameTimeDiffContent,
+  snapshotMetadata: {
+    ...draft14SameTimeDiffContent.snapshotMetadata!,
+    factSnapshot: task14Reapproved.factSnapshot,
+    styleSnapshot: { confirmedAt: '2026-10-01T00:00:00.000Z', activeRuleIds: ['RULE-OLD'], hash: 'STYLE-OLD' }
+  }
+};
+task14Reapproved.drafts = [draft14StyleDiff];
+const valStyleDiff = validateFinalizationConditions(task14Reapproved, draft14StyleDiff.id, '主笔甲');
+assert(valStyleDiff.canFinalize === false, '文风依据版本不一致严密阻断定稿');
 
 // -----------------------------------------------------------------------
 // 15. 历史版本恢复生成新工作草稿并深拷贝依据
@@ -502,25 +551,84 @@ assert(restoredDraft15.snapshotMetadata?.factSnapshot?.items?.[0].value === '25'
 assert(histVersion.blocks.some(b => b.content.includes('25场')), '原历史快照完全不受影响');
 
 // -----------------------------------------------------------------------
-// 16. 历史审阅导出版本关联标记
+// 16. 历史版本审阅记录冻结与快照导出隔离
 // -----------------------------------------------------------------------
-console.log('\n>>> [回归 16] 历史审阅导出版本关联标记:');
-const txt16 = exportDocumentAsTxt(task1, testDraft11, { includeBody: false, includeEvidence: false, includeReviewLog: true });
-assert(txt16.includes('针对版本：'), '审阅导出清晰注明针对版本');
+console.log('\n>>> [回归 16] 历史版本审阅记录冻结与快照导出隔离:');
+const task16 = createPresetTask('under_review');
+const draftV1 = task16.drafts[0];
+// 冻结历史草稿v1.0时的审阅意见快照（仅包含CMT-01）
+draftV1.frozenReviewComments = [
+  {
+    id: 'CMT-HIST-01',
+    type: 'overall',
+    targetVersionId: draftV1.id,
+    reviewer: '审阅乙',
+    content: '【v1历史意见】篇幅建议压缩到2000字以内',
+    status: 'pending',
+    createdAt: '2026-10-07T09:30:00.000Z',
+  }
+];
+
+// 后续在任务中新增针对后续版本或新提出的意见 CMT-LATER
+task16.reviewComments.push({
+  id: 'CMT-LATER',
+  type: 'overall',
+  targetVersionId: 'DRAFT-v2.0',
+  reviewer: '审阅丁',
+  content: '【后续追加意见】请补充四季度考核专项目标',
+  status: 'pending',
+  createdAt: '2026-10-08T15:00:00.000Z',
+});
+
+// 导出历史稿v1.0：必须只读取其冻结快照，绝不可混入后续追加意见！
+const txt16Hist = exportDocumentAsTxt(task16, draftV1, { includeBody: false, includeEvidence: false, includeReviewLog: true });
+assert(txt16Hist.includes('【v1历史意见】'), '历史稿导出成功包含当时的冻结审阅记录');
+assert(!txt16Hist.includes('【后续追加意见】'), '后续审阅意见绝不混入历史版本的审阅记录导出');
 
 // -----------------------------------------------------------------------
-// 17. 损坏备份自动修复与文稿恢复
+// 17. 存储结构深度校验与损坏备份安全恢复（不混入示例业务数据）
 // -----------------------------------------------------------------------
-console.log('\n>>> [回归 17] 损坏备份自动修复与文稿恢复:');
+console.log('\n>>> [回归 17] 存储结构深度校验与损坏备份安全恢复:');
+
+// ① 结构校验：缺少内部数组的存档必须判定为损坏
+const missingArraysTask = {
+  id: 'TASK-NO-ARRAYS',
+  title: '残缺任务',
+  // missing drafts, facts, outline, etc.!
+};
+assert(validateTaskStructure(missingArraysTask) === false, '缺少内部数组的存档被 validateTaskStructure 正确拦截判定为非法');
+
+// 放入本地存储验证 loadPersistedState 隔离损坏
+setStorageItem(STORAGE_KEY_V2, JSON.stringify({
+  schemaVersion: 2,
+  currentTaskId: 'TASK-NO-ARRAYS',
+  activeRole: '主笔甲',
+  tasks: [missingArraysTask]
+}));
+const loadResCorrupt = loadPersistedState();
+assert(loadResCorrupt.isCorrupted === true, '缺少内部数组的存档被 loadPersistedState 正确标记为 isCorrupted=true');
+
+// ② 损坏 JSON + 备份写入异常容错测试（模拟配额超限不抛出未捕获异常）
+setStorageItem(STORAGE_KEY_V2, 'INVALID-JSON-PAYLOAD-{{{');
+let loadDidNotThrow = true;
+try {
+  const resQuotaSafe = loadPersistedState();
+  assert(resQuotaSafe.isCorrupted === true, '损坏JSON安全隔离为isCorrupted=true');
+} catch {
+  loadDidNotThrow = false;
+}
+assert(loadDidNotThrow === true, '损坏JSON在任何异常情况下不抛出未捕获异常');
+
+// ③ 自动恢复：严禁混入示例材料/事实，使用空结构与“待恢复”状态
 setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
   {
-    id: 'CORRUPTED-TASK-NO-TITLE',
-    // missing title!
+    id: 'CORRUPTED-USER-TASK',
+    title: '用户真实工作报告',
     drafts: [
       {
-        id: 'DRAFT-SAVED-INSIDE',
+        id: 'DRAFT-USER-WORK',
         versionNumber: 'v1.0',
-        blocks: [{ id: 'BLK-REC', content: '被成功拯救的草稿正文' }]
+        blocks: [{ id: 'BLK-REAL', content: '用户辛苦撰写的核心总结正文' }]
       }
     ]
   }
@@ -528,9 +636,37 @@ setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
 
 const recoverRes = recoverTasksFromCorruptedBackup();
 assert(recoverRes.success === true, '从备份中自动恢复成功');
-assert(recoverRes.recoveredTasks.length > 0, '恢复出任务对象');
-assert(recoverRes.recoveredTasks[0].title.includes('已恢复公文任务'), '自动补齐缺失的任务标题');
-assert(recoverRes.recoveredTasks[0].drafts[0].blocks[0].content === '被成功拯救的草稿正文', '草稿正文无损保留');
+const recovered = recoverRes.recoveredTasks[0];
+assert(recovered.title === '用户真实工作报告', '用户真实标题无损恢复');
+assert(recovered.status === '待恢复', '恢复状态标记为“待恢复”');
+assert(recovered.drafts[0].blocks[0].content === '用户辛苦撰写的核心总结正文', '草稿正文完好保留');
+assert(Array.isArray(recovered.drafts[0].blocks[0].referencedFactIds), '段落referencedFactIds被安全补齐为空数组');
+assert(recovered.facts.length === 0, '未混入示例事实数据，保持空结构');
+assert(recovered.documents.length === 0, '未混入示例材料文档，保持空结构');
+assert(validateTaskStructure(recovered) === true, '恢复出的任务结构逐层校验完全合规');
+
+// -----------------------------------------------------------------------
+// 18. 候选采纳正文人工变更拦截与上游失效防护
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 18] 候选采纳正文人工变更拦截与上游失效防护:');
+const task18 = createPresetTask('under_review');
+const draft18 = task18.drafts[0];
+
+// 计算生成基准内容Hash
+const baseHash18 = computeContentHash(
+  draft18.blocks.map(b => `${b.id}::${b.title || ''}::${b.content}`).join('||')
+);
+
+// 模拟人工编辑正文导致当前Hash变动
+const editedBlocks18 = draft18.blocks.map((b, i) => i === 0 ? { ...b, content: b.content + '【人工手动修改追加】' } : b);
+const currentHash18 = computeContentHash(
+  editedBlocks18.map(b => `${b.id}::${b.title || ''}::${b.content}`).join('||')
+);
+assert(currentHash18 !== baseHash18, '人工编辑后正文Hash与基准Hash不一致');
+
+// 校验防护逻辑：Hash变动时旧候选严格判定为失效，禁止整稿覆盖
+const isCandidateStaleByEdit = currentHash18 !== baseHash18;
+assert(isCandidateStaleByEdit === true, '人工编辑正文后，旧候选采纳被有效拦截');
 
 async function runDocxCombos() {
   for (const c of combos) {

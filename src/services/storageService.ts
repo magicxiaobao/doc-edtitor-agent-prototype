@@ -1,4 +1,4 @@
-import { Task, UserRole, DraftVersion } from '../types';
+import { Task, UserRole, DraftVersion, ParagraphBlock } from '../types';
 import { createPresetTask } from './mockData';
 
 export const CURRENT_SCHEMA_VERSION = 2;
@@ -63,11 +63,35 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
 /**
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
+ * Validates existence and array types of all internal arrays and draft block structures.
  */
-function validateTaskStructure(task: any): boolean {
+export function validateTaskStructure(task: any): boolean {
   if (!task || typeof task !== 'object') return false;
   if (typeof task.id !== 'string' || !task.id) return false;
   if (typeof task.title !== 'string') return false;
+
+  // Strict verification: all internal collections must be valid arrays
+  if (!Array.isArray(task.drafts)) return false;
+  if (!Array.isArray(task.facts)) return false;
+  if (!Array.isArray(task.outline)) return false;
+  if (!Array.isArray(task.documents)) return false;
+  if (!Array.isArray(task.snippets)) return false;
+  if (!Array.isArray(task.styleRules)) return false;
+  if (!Array.isArray(task.reviewComments)) return false;
+  if (!Array.isArray(task.auditIssues)) return false;
+
+  // Validate draft structure and paragraph block references
+  for (const draft of task.drafts) {
+    if (!draft || typeof draft !== 'object') return false;
+    if (typeof draft.id !== 'string' || !draft.id) return false;
+    if (!Array.isArray(draft.blocks)) return false;
+    for (const b of draft.blocks) {
+      if (!b || typeof b !== 'object') return false;
+      if (typeof b.id !== 'string' || !b.id) return false;
+      if (!Array.isArray(b.referencedFactIds)) return false;
+    }
+  }
+
   return true;
 }
 
@@ -185,8 +209,13 @@ export function loadPersistedState(): LoadStateResult {
       }
     } catch (e: any) {
       console.error('LocalStorage v2 corrupted:', e);
-      // Save corrupted raw for recovery
-      setStorageItem(BACKUP_CORRUPTED_KEY, rawV2);
+      // Save corrupted raw for recovery with independent error protection (quota safe)
+      try {
+        setStorageItem(BACKUP_CORRUPTED_KEY, rawV2);
+      } catch (backupErr) {
+        console.warn('Backup write failed (likely quota exceeded), fallback to memory storage:', backupErr);
+        memoryStorage[BACKUP_CORRUPTED_KEY] = rawV2;
+      }
       return {
         tasks: defaultPresets,
         currentTaskId: defaultTaskId,
@@ -214,7 +243,11 @@ export function loadPersistedState(): LoadStateResult {
       }
     } catch (e: any) {
       console.error('Legacy localStorage corrupted:', e);
-      setStorageItem(BACKUP_CORRUPTED_KEY, rawV1);
+      try {
+        setStorageItem(BACKUP_CORRUPTED_KEY, rawV1);
+      } catch (backupErr) {
+        memoryStorage[BACKUP_CORRUPTED_KEY] = rawV1;
+      }
       return {
         tasks: defaultPresets,
         currentTaskId: defaultTaskId,
@@ -312,46 +345,118 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
       return { success: false, recoveredTasks: [], message: '备份数据中无任何可提取的任务对象。' };
     }
 
-    const defaultPresets = [
-      createPresetTask('conflict_pending'),
-      createPresetTask('ready_to_draft'),
-      createPresetTask('under_review'),
-      createPresetTask('blank'),
-    ];
+    const repairedTasks: Task[] = [];
 
-    const repairedTasks: Task[] = candidates.map((rawT: any, idx: number) => {
-      const fallbackPreset = defaultPresets[idx % defaultPresets.length];
-      const drafts: DraftVersion[] = Array.isArray(rawT.drafts) ? rawT.drafts : [];
-      return {
-        ...fallbackPreset,
-        ...rawT,
-        id: typeof rawT.id === 'string' && rawT.id ? rawT.id : `RECOVERED-TASK-${Date.now()}-${idx}`,
-        title: typeof rawT.title === 'string' && rawT.title ? rawT.title : `已恢复公文任务 (原未命名 #${idx + 1})`,
-        docType: rawT.docType || fallbackPreset.docType,
-        startDate: rawT.startDate || fallbackPreset.startDate,
-        endDate: rawT.endDate || fallbackPreset.endDate,
-        targetWordCount: typeof rawT.targetWordCount === 'number' ? rawT.targetWordCount : fallbackPreset.targetWordCount,
-        currentStage: rawT.currentStage || 'drafting',
-        documents: Array.isArray(rawT.documents) ? rawT.documents : fallbackPreset.documents,
-        snippets: Array.isArray(rawT.snippets) ? rawT.snippets : fallbackPreset.snippets,
-        facts: Array.isArray(rawT.facts) ? rawT.facts : fallbackPreset.facts,
-        styleRules: Array.isArray(rawT.styleRules) ? rawT.styleRules : fallbackPreset.styleRules,
-        outline: Array.isArray(rawT.outline) ? rawT.outline : fallbackPreset.outline,
-        drafts: drafts.length > 0 ? drafts : fallbackPreset.drafts,
-        currentDraftId: rawT.currentDraftId || (drafts[0]?.id ?? fallbackPreset.currentDraftId),
-        reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : fallbackPreset.reviewComments,
-        auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : fallbackPreset.auditIssues,
-        isFinalized: !!rawT.isFinalized,
-        status: rawT.status || '起草中',
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const rawT = candidates[idx];
+      if (!rawT || typeof rawT !== 'object') continue;
+
+      const recoveredId = typeof rawT.id === 'string' && rawT.id ? rawT.id : `RECOVERED-TASK-${Date.now()}-${idx}`;
+      const recoveredTitle = typeof rawT.title === 'string' && rawT.title ? rawT.title : `已恢复公文任务 (原未命名 #${idx + 1})`;
+
+      // Clean and reconstruct drafts: never inject preset data; ensure referencedFactIds is always array
+      let rawDrafts: any[] = Array.isArray(rawT.drafts) ? rawT.drafts : [];
+      let cleanedDrafts: DraftVersion[] = [];
+
+      if (rawDrafts.length > 0) {
+        cleanedDrafts = rawDrafts.map((d: any, dIdx: number) => {
+          const rawBlocks: any[] = Array.isArray(d?.blocks) ? d.blocks : [];
+          const cleanedBlocks: ParagraphBlock[] = rawBlocks.map((b: any, bIdx: number) => ({
+            id: typeof b?.id === 'string' && b.id ? b.id : `BLK-REC-${dIdx}-${bIdx + 1}`,
+            sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
+            order: typeof b?.order === 'number' ? b.order : bIdx + 1,
+            content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
+            referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
+            updatedAt: b?.updatedAt || new Date().toISOString(),
+          }));
+
+          return {
+            id: typeof d?.id === 'string' && d.id ? d.id : `DRAFT-REC-${Date.now()}-${dIdx}`,
+            versionNumber: typeof d?.versionNumber === 'string' && d.versionNumber ? d.versionNumber : `v1.${dIdx} (恢复快照)`,
+            createdAt: d?.createdAt || new Date().toISOString(),
+            author: d?.author || '系统恢复',
+            summary: d?.summary || '从异常存储恢复的草稿版本（保留原始正文，未混入示例数据）',
+            blocks: cleanedBlocks,
+            isWorkingDraft: dIdx === 0,
+            isHistoricalSnapshot: dIdx > 0,
+            isFinal: !!d?.isFinal,
+            snapshotMetadata: d?.snapshotMetadata,
+            auditRecords: Array.isArray(d?.auditRecords) ? d.auditRecords : [],
+          };
+        });
+      } else {
+        // If rawT has plain text or raw content, preserve it as a single block in a clean recovered draft
+        const fallbackText = typeof rawT.content === 'string' ? rawT.content : (typeof rawT.text === 'string' ? rawT.text : '');
+        cleanedDrafts = [
+          {
+            id: `DRAFT-REC-${Date.now()}`,
+            versionNumber: 'v1.0 (待恢复草稿)',
+            createdAt: new Date().toISOString(),
+            author: '系统恢复',
+            summary: '从异常存储中提取的待恢复稿件（保留原始正文，未混入示例数据）',
+            blocks: fallbackText ? [
+              {
+                id: 'BLK-REC-1',
+                sectionId: 'SEC-01',
+                order: 1,
+                content: fallbackText,
+                referencedFactIds: [],
+                updatedAt: new Date().toISOString(),
+              }
+            ] : [],
+            isWorkingDraft: true,
+            isHistoricalSnapshot: false,
+          }
+        ];
+      }
+
+      const blankBase = createPresetTask('blank');
+      const taskToValidate: Task = {
+        ...blankBase,
+        id: recoveredId,
+        title: recoveredTitle,
+        docType: (rawT.docType === '工作总结' || rawT.docType === '汇报材料' || rawT.docType === '专项报告') ? rawT.docType : '工作总结',
+        usage: typeof rawT.usage === 'string' ? rawT.usage : blankBase.usage,
+        audience: typeof rawT.audience === 'string' ? rawT.audience : blankBase.audience,
+        mandatoryCoverage: typeof rawT.mandatoryCoverage === 'string' ? rawT.mandatoryCoverage : blankBase.mandatoryCoverage,
+        deadline: typeof rawT.deadline === 'string' ? rawT.deadline : blankBase.deadline,
+        primaryAuthor: typeof rawT.primaryAuthor === 'string' ? rawT.primaryAuthor : '主笔甲',
+        startDate: typeof rawT.startDate === 'string' ? rawT.startDate : '2026-01-01',
+        endDate: typeof rawT.endDate === 'string' ? rawT.endDate : '2026-09-30',
+        targetWordCount: typeof rawT.targetWordCount === 'number' ? rawT.targetWordCount : 2000,
+        currentStage: typeof rawT.currentStage === 'string' ? rawT.currentStage : 'drafting',
+        documents: Array.isArray(rawT.documents) ? rawT.documents : [],
+        snippets: Array.isArray(rawT.snippets) ? rawT.snippets : [],
+        facts: Array.isArray(rawT.facts) ? rawT.facts : [],
+        styleRules: Array.isArray(rawT.styleRules) ? rawT.styleRules : [],
+        styleConfirmed: !!rawT.styleConfirmed,
+        outline: Array.isArray(rawT.outline) ? rawT.outline : [],
+        outlineConfirmed: !!rawT.outlineConfirmed,
+        drafts: cleanedDrafts,
+        currentDraftId: typeof rawT.currentDraftId === 'string' && rawT.currentDraftId ? rawT.currentDraftId : cleanedDrafts[0]?.id || '',
+        reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
+        auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
+        isFinalized: false,
+        status: '待恢复', // 使用空结构和“待恢复”状态，保留原文，避免混入示例业务数据
+        schemaVersion: CURRENT_SCHEMA_VERSION,
         updatedAt: new Date().toISOString(),
       };
-    });
+
+      // Layer-by-layer validation of recovered result
+      if (validateTaskStructure(taskToValidate)) {
+        repairedTasks.push(taskToValidate);
+      }
+    }
+
+    if (repairedTasks.length === 0) {
+      return { success: false, recoveredTasks: [], message: '备份数据校验失败，未能恢复有效任务结构。' };
+    }
 
     savePersistedState(repairedTasks, repairedTasks[0].id, '主笔甲');
     return {
       success: true,
       recoveredTasks: repairedTasks,
-      message: `成功从备份中恢复 ${repairedTasks.length} 个任务（已补齐缺失元数据并无损保留草稿内容）。`,
+      message: `成功从备份中恢复 ${repairedTasks.length} 个任务（已补齐空结构与必要段落字段，保留原文并置为“待恢复”状态）。`,
     };
   } catch (err: any) {
     return {

@@ -10,19 +10,64 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
   if (!periodStr) return null;
   const p = periodStr.trim();
 
+  // 1. ISO/Dash date format with exact days: e.g. "2026-04-15至2026-06-15" or "2026-04-15 ~ 2026-06-15"
+  const isoRangeMatch = p.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s*(?:至|-|~|到)\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (isoRangeMatch) {
+    const sYear = parseInt(isoRangeMatch[1], 10);
+    const sM = parseInt(isoRangeMatch[2], 10);
+    const sD = parseInt(isoRangeMatch[3], 10);
+    const eYear = parseInt(isoRangeMatch[4], 10);
+    const eM = parseInt(isoRangeMatch[5], 10);
+    const eD = parseInt(isoRangeMatch[6], 10);
+    return {
+      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
+      end: new Date(Date.UTC(eYear, eM - 1, eD, 23, 59, 59)),
+    };
+  }
+
+  // 2. Exact Chinese date ranges with days: e.g. "2026年4月15日至6月15日", "2025年11月15日至2026年3月15日"
+  const exactDateRangeMatch = p.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?\s*(?:至|-|~|到)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?/);
+  if (exactDateRangeMatch) {
+    const sYear = parseInt(exactDateRangeMatch[1], 10);
+    const sM = parseInt(exactDateRangeMatch[2], 10);
+    const sD = parseInt(exactDateRangeMatch[3], 10);
+    const eYear = exactDateRangeMatch[4] ? parseInt(exactDateRangeMatch[4], 10) : sYear;
+    const eM = parseInt(exactDateRangeMatch[5], 10);
+    const eD = parseInt(exactDateRangeMatch[6], 10);
+    return {
+      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
+      end: new Date(Date.UTC(eYear, eM - 1, eD, 23, 59, 59)),
+    };
+  }
+
+  // 3. Cross-year month ranges: e.g. "2025年11月至2026年3月"
+  const crossYearMonthMatch = p.match(/(\d{4})年(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{4})年(\d{1,2})月?/);
+  if (crossYearMonthMatch) {
+    const sYear = parseInt(crossYearMonthMatch[1], 10);
+    const sM = parseInt(crossYearMonthMatch[2], 10);
+    const eYear = parseInt(crossYearMonthMatch[3], 10);
+    const eM = parseInt(crossYearMonthMatch[4], 10);
+    return {
+      start: new Date(Date.UTC(sYear, sM - 1, 1, 0, 0, 0)),
+      end: new Date(Date.UTC(eYear, eM, 0, 23, 59, 59)),
+    };
+  }
+
+  // 4. Same-year month ranges: e.g. "2026年1至9月", "2026年1-9月", "2026年1月至9月", "2026年4至6月"
+  const sameYearMonthMatch = p.match(/(\d{4})年(?:\s*)(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{1,2})月?/);
+  if (sameYearMonthMatch) {
+    const year = parseInt(sameYearMonthMatch[1], 10);
+    const sM = parseInt(sameYearMonthMatch[2], 10);
+    const eM = parseInt(sameYearMonthMatch[3], 10);
+    return {
+      start: new Date(Date.UTC(year, sM - 1, 1, 0, 0, 0)),
+      end: new Date(Date.UTC(year, eM, 0, 23, 59, 59)),
+    };
+  }
+
   const yearMatch = p.match(/(\d{4})年/);
   if (!yearMatch) return null;
   const year = parseInt(yearMatch[1], 10);
-
-  // Month ranges: "1至9月", "1-9月", "1~9月", "1月至9月", "1月-9月", "1月到9月"
-  const monthRangeMatch = p.match(/(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{1,2})月/);
-  if (monthRangeMatch) {
-    const startM = parseInt(monthRangeMatch[1], 10);
-    const endM = parseInt(monthRangeMatch[2], 10);
-    const start = new Date(Date.UTC(year, startM - 1, 1));
-    const end = new Date(Date.UTC(year, endM, 0, 23, 59, 59));
-    return { start, end };
-  }
 
   // Quarters with cumulative combinations checked first
   if (p.includes('前三季度')) {
@@ -45,6 +90,17 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
   }
   if (p.includes('四季度') || p.includes('第4季度')) {
     return { start: new Date(Date.UTC(year, 9, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
+  }
+
+  // Single exact date: e.g. "2026年4月15日"
+  const singleDateMatch = p.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (singleDateMatch) {
+    const m = parseInt(singleDateMatch[2], 10);
+    const d = parseInt(singleDateMatch[3], 10);
+    return {
+      start: new Date(Date.UTC(year, m - 1, d, 0, 0, 0)),
+      end: new Date(Date.UTC(year, m - 1, d, 23, 59, 59)),
+    };
   }
 
   // Single month: e.g. "10月"
@@ -279,19 +335,33 @@ export function modifyOrExcludeFact(
  */
 export function formatDefaultPeriodForTask(startDate?: string, endDate?: string): string {
   if (!startDate || !endDate) return '2026年1至9月';
-  const sYear = startDate.slice(0, 4);
+  const sYear = parseInt(startDate.slice(0, 4), 10);
   const sMonth = parseInt(startDate.slice(5, 7), 10);
-  const eYear = endDate.slice(0, 4);
+  const sDay = parseInt(startDate.slice(8, 10), 10) || 1;
+  const eYear = parseInt(endDate.slice(0, 4), 10);
   const eMonth = parseInt(endDate.slice(5, 7), 10);
+  const eDay = parseInt(endDate.slice(8, 10), 10) || 1;
+
+  // Determine if it covers full calendar months (from 1st of start month to last day of end month)
+  const lastDayOfEndMonth = new Date(Date.UTC(eYear, eMonth, 0)).getUTCDate();
+  const isFullMonth = sDay === 1 && eDay === lastDayOfEndMonth;
+
+  if (!isFullMonth) {
+    // Preserve accurate start and end dates (e.g. 4月15日至6月15日, 跨年月中起止等)
+    if (sYear === eYear) {
+      return `${sYear}年${sMonth}月${sDay}日至${eMonth}月${eDay}日`;
+    }
+    return `${sYear}年${sMonth}月${sDay}日至${eYear}年${eMonth}月${eDay}日`;
+  }
 
   if (sYear === eYear) {
     if (sMonth === 1 && eMonth === 12) return `${sYear}年度`;
-    if (sMonth === 1 && eMonth === 3) return `${sYear}年1至3月`;
-    if (sMonth === 4 && eMonth === 6) return `${sYear}年4至6月`;
-    if (sMonth === 7 && eMonth === 9) return `${sYear}年7至9月`;
-    if (sMonth === 10 && eMonth === 12) return `${sYear}年10至12月`;
-    if (sMonth === 1 && eMonth === 6) return `${sYear}年1至6月`;
-    if (sMonth === 7 && eMonth === 12) return `${sYear}年7至12月`;
+    if (sMonth === 1 && eMonth === 3) return `${sYear}年一季度`;
+    if (sMonth === 4 && eMonth === 6) return `${sYear}年二季度`;
+    if (sMonth === 7 && eMonth === 9) return `${sYear}年三季度`;
+    if (sMonth === 10 && eMonth === 12) return `${sYear}年四季度`;
+    if (sMonth === 1 && eMonth === 6) return `${sYear}年上半年`;
+    if (sMonth === 7 && eMonth === 12) return `${sYear}年下半年`;
     if (sMonth === 1 && eMonth === 9) return `${sYear}年1至9月`;
     if (sMonth === eMonth) return `${sYear}年${sMonth}月`;
     return `${sYear}年${sMonth}至${eMonth}月`;

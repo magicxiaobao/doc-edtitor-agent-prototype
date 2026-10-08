@@ -12,7 +12,7 @@ import {
   BorderStyle,
   convertInchesToTwip
 } from 'docx';
-import { Task, DraftVersion, ExportOptions } from '../types';
+import { Task, DraftVersion, ExportOptions, ReviewComment } from '../types';
 
 /**
  * Normalizes boolean or ExportOptions
@@ -128,8 +128,21 @@ export function exportDocumentAsTxt(
   if (opts.includeReviewLog) {
     content += `\n====================================================\n`;
     content += `【附：审阅意见与落实处理记录】\n`;
-    if (task.reviewComments.length > 0) {
-      task.reviewComments.forEach((cmt, idx) => {
+
+    // 优先读取该版本冻结的审阅快照；若为历史快照未存冻结快照，则严格过滤生成时刻及针对该版本的意见，防止后续意见混入旧稿
+    const reviewCommentsToExport: ReviewComment[] =
+      draft.frozenReviewComments !== undefined
+        ? draft.frozenReviewComments
+        : (draft.isHistoricalSnapshot || draft.isFinal)
+        ? task.reviewComments.filter(
+            (cmt) =>
+              cmt.targetVersionId === draft.id ||
+              (cmt.createdAt && draft.createdAt && new Date(cmt.createdAt).getTime() <= new Date(draft.createdAt).getTime())
+          )
+        : task.reviewComments;
+
+    if (reviewCommentsToExport.length > 0) {
+      reviewCommentsToExport.forEach((cmt, idx) => {
         const statusLabel = 
           cmt.status === 'implemented' ? '已修改落实' :
           cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
@@ -469,54 +482,82 @@ export async function exportDocumentAsDocx(
       })
     );
 
+    // 优先读取该版本冻结的审阅快照；若为历史快照未存冻结快照，则严格过滤生成时刻及针对该版本的意见
+    const reviewCommentsToExport: ReviewComment[] =
+      draft.frozenReviewComments !== undefined
+        ? draft.frozenReviewComments
+        : (draft.isHistoricalSnapshot || draft.isFinal)
+        ? task.reviewComments.filter(
+            (cmt) =>
+              cmt.targetVersionId === draft.id ||
+              (cmt.createdAt && draft.createdAt && new Date(cmt.createdAt).getTime() <= new Date(draft.createdAt).getTime())
+          )
+        : task.reviewComments;
+
     // Data Rows
-    task.reviewComments.forEach((cmt, idx) => {
-      const statusLabel = 
-        cmt.status === 'implemented' ? '已修改落实' :
-        cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
-        cmt.status === 'rejected' ? '拒绝并说明' :
-        cmt.status === 'need_discussion' ? '待沟通' : '待处理';
+    if (reviewCommentsToExport.length > 0) {
+      reviewCommentsToExport.forEach((cmt, idx) => {
+        const statusLabel = 
+          cmt.status === 'implemented' ? '已修改落实' :
+          cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
+          cmt.status === 'rejected' ? '拒绝并说明' :
+          cmt.status === 'need_discussion' ? '待沟通' : '待处理';
 
-      const replyContent = [
-        cmt.decisionReason ? `【研判理由】${cmt.decisionReason}` : '',
-        cmt.authorReply ? `【答复】${cmt.authorReply}` : '',
-        cmt.implementationDraftId ? `【落实版本】${cmt.implementationDraftId}` : '',
-      ].filter(Boolean).join('\n') || '尚未处理';
+        const replyContent = [
+          cmt.decisionReason ? `【研判理由】${cmt.decisionReason}` : '',
+          cmt.authorReply ? `【答复】${cmt.authorReply}` : '',
+          cmt.implementationDraftId ? `【落实版本】${cmt.implementationDraftId}` : '',
+        ].filter(Boolean).join('\n') || '尚未处理';
 
-      const suggestionContent = [
-        cmt.content,
-        cmt.suggestedChange ? `【建议文案】${cmt.suggestedChange}` : '',
-      ].filter(Boolean).join('\n');
+        const suggestionContent = [
+          cmt.content,
+          cmt.suggestedChange ? `【建议文案】${cmt.suggestedChange}` : '',
+        ].filter(Boolean).join('\n');
 
-      tableRows.push(
-        new TableRow({
-          children: [
-            new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: `${idx + 1}`, size: 18, font: 'FangSong' })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: `${cmt.reviewer}\n(${cmt.type === 'overall' ? '整体' : '段落'})\n[针对: ${cmt.targetVersionId || '未指定'}]`, size: 18, font: 'FangSong' })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: statusLabel, size: 18, font: 'FangSong' })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: suggestionContent, size: 18, font: 'FangSong' })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ children: [new TextRun({ text: replyContent, size: 18, font: 'FangSong' })] })],
-            }),
-          ],
+        tableRows.push(
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text: `${idx + 1}`, size: 18, font: 'FangSong' })] })],
+              }),
+              new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text: `${cmt.reviewer}\n(${cmt.type === 'overall' ? '整体' : '段落'})\n[针对: ${cmt.targetVersionId || '未指定'}]`, size: 18, font: 'FangSong' })] })],
+              }),
+              new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text: statusLabel, size: 18, font: 'FangSong' })] })],
+              }),
+              new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text: suggestionContent, size: 18, font: 'FangSong' })] })],
+              }),
+              new TableCell({
+                children: [new Paragraph({ children: [new TextRun({ text: replyContent, size: 18, font: 'FangSong' })] })],
+              }),
+            ],
+          })
+        );
+      });
+
+      docParagraphs.push(
+        new Table({
+          rows: tableRows,
+          width: { size: 100, type: WidthType.PERCENTAGE },
         })
       );
-    });
-
-    docParagraphs.push(
-      new Table({
-        rows: tableRows,
-        width: { size: 100, type: WidthType.PERCENTAGE },
-      })
-    );
+    } else {
+      docParagraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '（本版本无待处理或已登记的审阅意见记录）',
+              size: 20,
+              font: 'FangSong',
+              color: '666666',
+            }),
+          ],
+          spacing: { after: 200 },
+        })
+      );
+    }
 
     if (draft.auditRecords && draft.auditRecords.length > 0) {
       docParagraphs.push(
