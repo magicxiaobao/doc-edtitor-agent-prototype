@@ -12,6 +12,7 @@ import {
   resetStorageWithBackup,
   recoverTasksFromCorruptedBackup,
   getStorageError,
+  getCorruptedBackupData,
   BACKUP_CORRUPTED_KEY 
 } from './services/storageService';
 import { Navbar } from './components/Navbar';
@@ -41,13 +42,17 @@ export function App() {
 
   // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
   useEffect(() => {
+    // 损坏待恢复状态时暂停自动保存，保留原始存储与备份，避免被默认预置数据覆盖
+    if (isCorrupted) {
+      return;
+    }
     const success = savePersistedState(tasks, currentTaskId, activeRole);
     if (!success) {
       setStorageError(getStorageError() || '本地存储配额不足或写入失败。内存中文稿完好无损，建议及时导出文件备份。');
     } else {
       setStorageError(null);
     }
-  }, [tasks, currentTaskId, activeRole]);
+  }, [tasks, currentTaskId, activeRole, isCorrupted]);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId) || tasks[0];
 
@@ -123,7 +128,11 @@ export function App() {
   };
 
   const handleDownloadCorruptedBackup = () => {
-    const raw = localStorage.getItem(BACKUP_CORRUPTED_KEY) || '';
+    const raw = getCorruptedBackupData() || '';
+    if (!raw) {
+      alert('未找到可下载的备份数据');
+      return;
+    }
     const blob = new Blob([raw], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

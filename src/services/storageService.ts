@@ -37,18 +37,32 @@ export function clearStorageError(): void {
 }
 
 export function getStorageItem(key: string): string | null {
-  if (typeof localStorage !== 'undefined') {
-    return localStorage.getItem(key);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const val = localStorage.getItem(key);
+      if (val !== null && val !== undefined) {
+        return val;
+      }
+    }
+  } catch (e) {
+    // ignore access error
   }
   return memoryStorage[key] ?? null;
 }
 
 export function setStorageItem(key: string, value: string): void {
+  // Always update in-memory fallback
+  memoryStorage[key] = value;
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(key, value);
-  } else {
-    memoryStorage[key] = value;
   }
+}
+
+/**
+ * Unified backup retrieval: reads from localStorage or memoryStorage fallback
+ */
+export function getCorruptedBackupData(): string | null {
+  return getStorageItem(BACKUP_CORRUPTED_KEY) || memoryStorage[BACKUP_CORRUPTED_KEY] || null;
 }
 
 /**
@@ -64,6 +78,8 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
  * Validates existence and array types of all internal arrays and draft block structures.
+ * Also verifies content, sectionId, order, and referencedFactIds on all blocks,
+ * and ensures currentDraftId points to an existing draft in task.drafts.
  */
 export function validateTaskStructure(task: any): boolean {
   if (!task || typeof task !== 'object') return false;
@@ -88,7 +104,17 @@ export function validateTaskStructure(task: any): boolean {
     for (const b of draft.blocks) {
       if (!b || typeof b !== 'object') return false;
       if (typeof b.id !== 'string' || !b.id) return false;
+      if (typeof b.content !== 'string') return false; // Prevent content.length TypeError!
+      if (typeof b.sectionId !== 'string') return false;
+      if (typeof b.order !== 'number') return false;
       if (!Array.isArray(b.referencedFactIds)) return false;
+    }
+  }
+
+  // Validate currentDraftId must point to an actual existing draft in task.drafts
+  if (task.drafts.length > 0) {
+    if (typeof task.currentDraftId !== 'string' || !task.drafts.some((d: any) => d.id === task.currentDraftId)) {
+      return false;
     }
   }
 
@@ -102,10 +128,43 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
   const migratedTasks: Task[] = rawTasks.map((rawT: any) => {
     const drafts: DraftVersion[] = Array.isArray(rawT.drafts) ? rawT.drafts : [];
     
+    let styleSnapshot = rawT.styleSnapshot;
+    if (!styleSnapshot && rawT.styleConfirmed && Array.isArray(rawT.styleRules)) {
+      styleSnapshot = {
+        confirmedAt: rawT.updatedAt || new Date().toISOString(),
+        activeRuleIds: rawT.styleRules.filter((r: any) => r.confirmed).map((r: any) => r.id),
+        hash: `STYLE-MIGRATED-${rawT.id || 'task'}`,
+      };
+    }
+
+    let outlineSnapshot = rawT.outlineSnapshot;
+    if (!outlineSnapshot && rawT.outlineConfirmed && Array.isArray(rawT.outline)) {
+      outlineSnapshot = {
+        confirmedAt: rawT.updatedAt || new Date().toISOString(),
+        sections: rawT.outline.map((s: any) => ({
+          sectionId: s.id,
+          title: s.title,
+          suggestedWordCount: s.suggestedWordCount || 500,
+          assignedFactIds: Array.isArray(s.assignedFactIds) ? s.assignedFactIds : [],
+        })),
+        hash: `OUTLINE-MIGRATED-${rawT.id || 'task'}`,
+      };
+    }
+
     const migratedDrafts = drafts.map((d: any) => {
+      const draftBlocks: ParagraphBlock[] = Array.isArray(d?.blocks) ? d.blocks.map((b: any, bIdx: number) => ({
+        id: typeof b?.id === 'string' && b.id ? b.id : `BLK-MIG-${bIdx + 1}`,
+        sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
+        order: typeof b?.order === 'number' ? b.order : bIdx + 1,
+        content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
+        referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
+        updatedAt: b?.updatedAt || new Date().toISOString(),
+      })) : [];
+
       if (!d.snapshotMetadata) {
         return {
           ...d,
+          blocks: draftBlocks,
           snapshotMetadata: {
             taskTitle: rawT.title || '工作总结',
             startDate: rawT.startDate || '2026-01-01',
@@ -113,19 +172,34 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
             targetWordCount: rawT.targetWordCount || 3000,
             outlineSections: Array.isArray(rawT.outline) ? rawT.outline : [],
             factSnapshot: rawT.factSnapshot,
-            styleSnapshot: rawT.styleSnapshot,
+            styleSnapshot: styleSnapshot || rawT.styleSnapshot,
+            outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
           },
         };
       }
-      return d;
+      return {
+        ...d,
+        blocks: draftBlocks,
+        snapshotMetadata: {
+          ...d.snapshotMetadata,
+          styleSnapshot: d.snapshotMetadata.styleSnapshot || styleSnapshot || rawT.styleSnapshot,
+          outlineSnapshot: d.snapshotMetadata.outlineSnapshot || outlineSnapshot || rawT.outlineSnapshot,
+        },
+      };
     });
+
+    const targetCurrentDraftId = (migratedDrafts.some((d) => d.id === rawT.currentDraftId))
+      ? rawT.currentDraftId
+      : (migratedDrafts[0]?.id || '');
 
     return {
       ...rawT,
-      currentDraftId: rawT.currentDraftId || migratedDrafts[0]?.id || '',
+      currentDraftId: targetCurrentDraftId,
       drafts: migratedDrafts,
       facts: Array.isArray(rawT.facts) ? rawT.facts : [],
       outline: Array.isArray(rawT.outline) ? rawT.outline : [],
+      styleSnapshot: styleSnapshot || rawT.styleSnapshot,
+      outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
       reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
       auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
       isFinalized: !!rawT.isFinalized,
@@ -325,7 +399,7 @@ export function resetStorageWithBackup(): Task[] {
  * Fixes missing task titles, metadata, or schema anomalies without data loss.
  */
 export function recoverTasksFromCorruptedBackup(): { success: boolean; recoveredTasks: Task[]; message: string } {
-  const rawBackup = getStorageItem(BACKUP_CORRUPTED_KEY);
+  const rawBackup = getCorruptedBackupData();
   if (!rawBackup) {
     return { success: false, recoveredTasks: [], message: '未找到隔离的损坏备份数据。' };
   }
@@ -380,8 +454,10 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             isWorkingDraft: dIdx === 0,
             isHistoricalSnapshot: dIdx > 0,
             isFinal: !!d?.isFinal,
+            sourceDraftId: typeof d?.sourceDraftId === 'string' ? d.sourceDraftId : undefined,
             snapshotMetadata: d?.snapshotMetadata,
             auditRecords: Array.isArray(d?.auditRecords) ? d.auditRecords : [],
+            frozenReviewComments: Array.isArray(d?.frozenReviewComments) ? d.frozenReviewComments : undefined,
           };
         });
       } else {
@@ -410,6 +486,9 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
         ];
       }
 
+      const hasCurrentDraft = cleanedDrafts.some((d) => d.id === rawT.currentDraftId);
+      const resolvedCurrentDraftId = hasCurrentDraft ? rawT.currentDraftId : (cleanedDrafts[0]?.id || '');
+
       const blankBase = createPresetTask('blank');
       const taskToValidate: Task = {
         ...blankBase,
@@ -433,7 +512,7 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
         outline: Array.isArray(rawT.outline) ? rawT.outline : [],
         outlineConfirmed: !!rawT.outlineConfirmed,
         drafts: cleanedDrafts,
-        currentDraftId: typeof rawT.currentDraftId === 'string' && rawT.currentDraftId ? rawT.currentDraftId : cleanedDrafts[0]?.id || '',
+        currentDraftId: resolvedCurrentDraftId,
         reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
         auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
         isFinalized: false,

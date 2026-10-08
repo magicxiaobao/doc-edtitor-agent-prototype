@@ -2,7 +2,10 @@ import { createPresetTask } from './src/services/mockData';
 import { 
   applyDraftContentChange, 
   validateFinalizationConditions, 
-  finalizeDraft 
+  finalizeDraft,
+  computeDraftBlocksHash,
+  validateCandidateAcceptance,
+  acceptDraftCandidate
 } from './src/services/draftLifecycleService';
 import { 
   createFactCandidate, 
@@ -25,12 +28,15 @@ import {
   savePersistedState, 
   loadPersistedState, 
   setStorageItem, 
+  getStorageItem,
+  getCorruptedBackupData,
+  getStorageError,
   recoverTasksFromCorruptedBackup,
   validateTaskStructure,
   STORAGE_KEY_V2, 
   BACKUP_CORRUPTED_KEY 
 } from './src/services/storageService';
-import { Task, DraftVersion, EvidenceSnippet, SourceDocument } from './src/types';
+import { Task, DraftVersion, EvidenceSnippet, SourceDocument, DraftCandidate, ReviewComment } from './src/types';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -598,7 +604,43 @@ const missingArraysTask = {
 };
 assert(validateTaskStructure(missingArraysTask) === false, '缺少内部数组的存档被 validateTaskStructure 正确拦截判定为非法');
 
-// 放入本地存储验证 loadPersistedState 隔离损坏
+// ② 结构校验：段落缺少 content 字段时必须判定为非法（防止起草页 content.length 报错）
+const blockWithoutContentTask = {
+  ...createPresetTask('blank'),
+  id: 'TASK-NO-BLOCK-CONTENT',
+  drafts: [
+    {
+      id: 'D-1',
+      versionNumber: 'v1.0',
+      createdAt: '2026-10-08',
+      author: '主笔甲',
+      summary: '测试缺少content',
+      blocks: [{ id: 'BLK-1', sectionId: 'SEC-01', order: 1, referencedFactIds: [] }], // missing content!
+    }
+  ],
+  currentDraftId: 'D-1'
+};
+assert(validateTaskStructure(blockWithoutContentTask) === false, '段落缺少 content 字段时被 validateTaskStructure 严格拦截判定为非法');
+
+// ③ 结构校验：currentDraftId 指向不存在草稿时必须判定为非法
+const invalidCurrentDraftIdTask = {
+  ...createPresetTask('blank'),
+  id: 'TASK-INVALID-CURR-DRAFT',
+  drafts: [
+    {
+      id: 'D-EXIST',
+      versionNumber: 'v1.0',
+      createdAt: '2026-10-08',
+      author: '主笔甲',
+      summary: '存在',
+      blocks: [{ id: 'BLK-1', sectionId: 'SEC-01', order: 1, content: '文本', referencedFactIds: [] }],
+    }
+  ],
+  currentDraftId: 'D-PHANTOM-DOES-NOT-EXIST'
+};
+assert(validateTaskStructure(invalidCurrentDraftIdTask) === false, 'currentDraftId 指向不存在草稿时被 validateTaskStructure 严格拦截');
+
+// ④ 放入本地存储验证 loadPersistedState 隔离损坏
 setStorageItem(STORAGE_KEY_V2, JSON.stringify({
   schemaVersion: 2,
   currentTaskId: 'TASK-NO-ARRAYS',
@@ -608,65 +650,236 @@ setStorageItem(STORAGE_KEY_V2, JSON.stringify({
 const loadResCorrupt = loadPersistedState();
 assert(loadResCorrupt.isCorrupted === true, '缺少内部数组的存档被 loadPersistedState 正确标记为 isCorrupted=true');
 
-// ② 损坏 JSON + 备份写入异常容错测试（模拟配额超限不抛出未捕获异常）
-setStorageItem(STORAGE_KEY_V2, 'INVALID-JSON-PAYLOAD-{{{');
-let loadDidNotThrow = true;
+// ⑤ 模拟配额超限写入抛错与内存回退备份读取/恢复验证
+const originalLocalStorage = globalThis.localStorage;
+let throwQuotaError = true;
+const mockStorage: Record<string, string> = {};
+(globalThis as any).localStorage = {
+  getItem: (k: string) => mockStorage[k] ?? null,
+  setItem: (k: string, v: string) => {
+    if (throwQuotaError) {
+      throw new Error('QuotaExceededError: LocalStorage quota exceeded');
+    }
+    mockStorage[k] = v;
+  },
+  removeItem: (k: string) => { delete mockStorage[k]; },
+  clear: () => { for (const k in mockStorage) delete mockStorage[k]; }
+};
+
+// 模拟写入抛错：savePersistedState 回退到内存备份并记录错误提示
+const saveOk = savePersistedState([createPresetTask('under_review')], 'TASK-REVIEW', '主笔甲');
+assert(saveOk === false, '配额超限抛错时 savePersistedState 安全返回 false');
+assert(getStorageError() !== null, '存储错误消息被正确捕获');
+
+// 模拟损坏数据隔离到备份时 localStorage.setItem 抛错，安全降级写入 memoryStorage
 try {
-  const resQuotaSafe = loadPersistedState();
-  assert(resQuotaSafe.isCorrupted === true, '损坏JSON安全隔离为isCorrupted=true');
+  setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
+    {
+      id: 'QUOTA-CORRUPTED-TASK',
+      title: '用户真实工作报告',
+      currentDraftId: 'D-GHOST',
+      drafts: [
+        {
+          id: 'D-REAL-1',
+          versionNumber: 'v1.0',
+          blocks: [{ id: 'BLK-Q', content: '用户辛苦撰写的核心总结正文' }],
+          frozenReviewComments: [{ id: 'CMT-FROZEN', reviewer: '审阅乙', content: '冻结审阅', status: 'pending' }]
+        }
+      ]
+    }
+  ]));
 } catch {
-  loadDidNotThrow = false;
+  // 预期行为：localStorage 抛出配额异常，但 memoryStorage 已先行写入保障内存安全
 }
-assert(loadDidNotThrow === true, '损坏JSON在任何异常情况下不抛出未捕获异常');
 
-// ③ 自动恢复：严禁混入示例材料/事实，使用空结构与“待恢复”状态
-setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
-  {
-    id: 'CORRUPTED-USER-TASK',
-    title: '用户真实工作报告',
-    drafts: [
-      {
-        id: 'DRAFT-USER-WORK',
-        versionNumber: 'v1.0',
-        blocks: [{ id: 'BLK-REAL', content: '用户辛苦撰写的核心总结正文' }]
-      }
-    ]
-  }
-]));
+// 验证统一备份读取接口 getCorruptedBackupData 成功读取内存回退备份
+const memoryBackup = getCorruptedBackupData();
+assert(memoryBackup !== null && memoryBackup.includes('QUOTA-CORRUPTED-TASK'), '统一备份读取接口 getCorruptedBackupData 成功读取内存回退备份');
 
+// 验证自动恢复：严禁混入示例材料/事实，使用空结构与“待恢复”状态，并保留冻结审阅快照和修正当前草稿ID
 const recoverRes = recoverTasksFromCorruptedBackup();
-assert(recoverRes.success === true, '从备份中自动恢复成功');
+assert(recoverRes.success === true, '从内存回退备份中自动恢复成功');
 const recovered = recoverRes.recoveredTasks[0];
 assert(recovered.title === '用户真实工作报告', '用户真实标题无损恢复');
 assert(recovered.status === '待恢复', '恢复状态标记为“待恢复”');
 assert(recovered.drafts[0].blocks[0].content === '用户辛苦撰写的核心总结正文', '草稿正文完好保留');
+assert(recovered.drafts[0].frozenReviewComments?.[0]?.content === '冻结审阅', '恢复时完整保留草稿的冻结审阅记录快照');
+assert(recovered.currentDraftId === 'D-REAL-1', '恢复后 currentDraftId 自动修复为实际存在的草稿ID');
 assert(Array.isArray(recovered.drafts[0].blocks[0].referencedFactIds), '段落referencedFactIds被安全补齐为空数组');
 assert(recovered.facts.length === 0, '未混入示例事实数据，保持空结构');
 assert(recovered.documents.length === 0, '未混入示例材料文档，保持空结构');
 assert(validateTaskStructure(recovered) === true, '恢复出的任务结构逐层校验完全合规');
 
+// 还原全局 mock
+(globalThis as any).localStorage = originalLocalStorage;
+
 // -----------------------------------------------------------------------
-// 18. 候选采纳正文人工变更拦截与上游失效防护
+// 18. 候选采纳全生命周期、取消失效与旧稿自动归档测试
 // -----------------------------------------------------------------------
-console.log('\n>>> [回归 18] 候选采纳正文人工变更拦截与上游失效防护:');
+console.log('\n>>> [回归 18] 候选采纳全生命周期、取消失效与旧稿自动归档测试:');
 const task18 = createPresetTask('under_review');
 const draft18 = task18.drafts[0];
+const candidate18: DraftCandidate = {
+  taskId: task18.id,
+  runId: 'RUN-18-A',
+  baseDraftId: draft18.id,
+  baseDraftContentHash: computeDraftBlocksHash(draft18.blocks),
+  upstreamApprovalVersion: {
+    factSnapshotConfirmedAt: task18.factSnapshot?.confirmedAt,
+    factSnapshotHash: task18.factSnapshot?.hash,
+    styleConfirmedAt: task18.styleSnapshot?.confirmedAt,
+    styleHash: task18.styleSnapshot?.hash,
+    outlineConfirmedAt: task18.outlineSnapshot?.confirmedAt,
+    outlineHash: task18.outlineSnapshot?.hash,
+  },
+  blocks: draft18.blocks.map(b => ({ ...b, content: b.content + '【AI生成新正文】' })),
+  snapshotMetadata: JSON.parse(JSON.stringify(draft18.snapshotMetadata!)),
+  generatedAt: new Date().toISOString(),
+};
 
-// 计算生成基准内容Hash
-const baseHash18 = computeContentHash(
-  draft18.blocks.map(b => `${b.id}::${b.title || ''}::${b.content}`).join('||')
+// 1) 验证 取消运行 (activeCompletedRunId = null) 严格阻断采纳
+const valCancel = validateCandidateAcceptance(task18, draft18, candidate18, null, '主笔甲');
+assert(valCancel.valid === false, '运行取消或失效时(runId为null)，validateCandidateAcceptance 严格阻断采纳');
+assert(valCancel.reason?.includes('失效'), '给出明确的运行失效提示');
+
+// 2) 验证 开启新运行后旧候选 (RUN-18-A vs RUN-18-B) 严格阻断采纳
+const valOtherRun = validateCandidateAcceptance(task18, draft18, candidate18, 'RUN-18-B', '主笔甲');
+assert(valOtherRun.valid === false, '新运行产生后旧候选被严格阻断采纳');
+
+// 3) 验证 人工编辑正文后 (currentHash !== baseHash) 严格阻断采纳
+const editedDraft18: DraftVersion = {
+  ...draft18,
+  blocks: draft18.blocks.map((b, i) => i === 0 ? { ...b, content: b.content + '【人工修改正文】' } : b)
+};
+const valEdited = validateCandidateAcceptance(task18, editedDraft18, candidate18, 'RUN-18-A', '主笔甲');
+assert(valEdited.valid === false, '人工修改正文后，旧候选采纳被严格拦截，防止覆盖人工编辑');
+
+// 4) 验证 上游文风/大纲 Hash 变更时严格阻断采纳
+const candStaleStyle: DraftCandidate = {
+  ...candidate18,
+  upstreamApprovalVersion: {
+    ...candidate18.upstreamApprovalVersion,
+    styleHash: 'OLD-STYLE-HASH'
+  }
+};
+const valStyleStale = validateCandidateAcceptance(task18, draft18, candStaleStyle, 'RUN-18-A', '主笔甲');
+assert(valStyleStale.valid === false, '上游文风依据 Hash 变动时严格阻断候选采纳');
+
+const candStaleOutline: DraftCandidate = {
+  ...candidate18,
+  upstreamApprovalVersion: {
+    ...candidate18.upstreamApprovalVersion,
+    outlineHash: 'OLD-OUTLINE-HASH'
+  }
+};
+const valOutlineStale = validateCandidateAcceptance(task18, draft18, candStaleOutline, 'RUN-18-A', '主笔甲');
+assert(valOutlineStale.valid === false, '上游大纲依据 Hash 变动时严格阻断候选采纳');
+
+// 5) 验证 合法采纳调用 acceptDraftCandidate：
+// 必须把旧稿自动归档为只读历史快照（保存旧稿快照，带 frozenReviewComments），并创建全新工作稿
+const valOk = validateCandidateAcceptance(task18, draft18, candidate18, 'RUN-18-A', '主笔甲');
+assert(valOk.valid === true, '基准与依据一致且运行匹配时，候选采纳校验顺利通过');
+
+const { updatedTask: taskAfterAccept, workingDraft: candidateWorkDraft, archivedDraft } = acceptDraftCandidate(
+  task18,
+  draft18,
+  candidate18,
+  '主笔甲'
 );
+assert(archivedDraft !== undefined, '采纳前旧草稿成功生成归档快照');
+assert(archivedDraft?.isHistoricalSnapshot === true, '旧草稿被标记为历史快照');
+assert(archivedDraft?.isWorkingDraft === false, '旧草稿不再是工作草稿');
+assert(Array.isArray(archivedDraft?.frozenReviewComments), '旧草稿冻结了当前审阅记录快照');
+assert(candidateWorkDraft.id !== draft18.id, '采纳候选产生全新草稿ID，未原地覆盖旧稿');
+assert(candidateWorkDraft.sourceDraftId === draft18.id, '新工作稿正确记录 sourceDraftId 为旧草稿ID');
+assert(candidateWorkDraft.isWorkingDraft === true, '新工作稿标记为工作稿');
+assert(taskAfterAccept.currentDraftId === candidateWorkDraft.id, '任务当前草稿指向新工作稿');
+assert(taskAfterAccept.drafts.length === task18.drafts.length + 1, '旧草稿归档快照与新工作稿同时保留在草稿列表中');
 
-// 模拟人工编辑正文导致当前Hash变动
-const editedBlocks18 = draft18.blocks.map((b, i) => i === 0 ? { ...b, content: b.content + '【人工手动修改追加】' } : b);
-const currentHash18 = computeContentHash(
-  editedBlocks18.map(b => `${b.id}::${b.title || ''}::${b.content}`).join('||')
-);
-assert(currentHash18 !== baseHash18, '人工编辑后正文Hash与基准Hash不一致');
+// -----------------------------------------------------------------------
+// 19. 文风、大纲审批快照缺失与不一致的定稿严格拦截
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 19] 文风、大纲审批快照缺失与不一致的定稿严格拦截:');
+const task19 = createPresetTask('under_review');
+const validDraft19 = task19.drafts[0];
 
-// 校验防护逻辑：Hash变动时旧候选严格判定为失效，禁止整稿覆盖
-const isCandidateStaleByEdit = currentHash18 !== baseHash18;
-assert(isCandidateStaleByEdit === true, '人工编辑正文后，旧候选采纳被有效拦截');
+// 1) 草稿缺少 styleSnapshot -> 阻断
+const draftNoStyle: DraftVersion = {
+  ...validDraft19,
+  snapshotMetadata: {
+    ...validDraft19.snapshotMetadata!,
+    styleSnapshot: undefined,
+  }
+};
+const task19NoStyleDraft = { ...task19, drafts: [draftNoStyle], currentDraftId: draftNoStyle.id };
+const resNoStyle = validateFinalizationConditions(task19NoStyleDraft, draftNoStyle.id, '主笔甲');
+assert(resNoStyle.canFinalize === false, '草稿缺少文风快照依据时严格阻断定稿');
+assert(resNoStyle.reasons.some(r => r.includes('文风')), '包含明确文风快照缺失提示');
+
+// 2) 草稿缺少 outlineSnapshot -> 阻断
+const draftNoOutline: DraftVersion = {
+  ...validDraft19,
+  snapshotMetadata: {
+    ...validDraft19.snapshotMetadata!,
+    outlineSnapshot: undefined,
+  }
+};
+const task19NoOutlineDraft = { ...task19, drafts: [draftNoOutline], currentDraftId: draftNoOutline.id };
+const resNoOutline = validateFinalizationConditions(task19NoOutlineDraft, draftNoOutline.id, '主笔甲');
+assert(resNoOutline.canFinalize === false, '草稿缺少大纲快照依据时严格阻断定稿');
+assert(resNoOutline.reasons.some(r => r.includes('大纲')), '包含明确大纲快照缺失提示');
+
+// 3) 任务自身缺少 styleSnapshot 或 outlineSnapshot -> 阻断
+const task19NoTaskStyle = { ...task19, styleSnapshot: undefined };
+const resNoTaskStyle = validateFinalizationConditions(task19NoTaskStyle, validDraft19.id, '主笔甲');
+assert(resNoTaskStyle.canFinalize === false, '任务自身缺少文风审批快照时严格阻断定稿');
+
+const task19NoTaskOutline = { ...task19, outlineSnapshot: undefined };
+const resNoTaskOutline = validateFinalizationConditions(task19NoTaskOutline, validDraft19.id, '主笔甲');
+assert(resNoTaskOutline.canFinalize === false, '任务自身缺少大纲审批快照时严格阻断定稿');
+
+// 4) 大纲段落结构或Hash不一致 -> 阻断
+const draftDiffOutline: DraftVersion = {
+  ...validDraft19,
+  snapshotMetadata: {
+    ...validDraft19.snapshotMetadata!,
+    outlineSnapshot: {
+      confirmedAt: '2026-10-07T08:40:00.000Z',
+      sections: [],
+      hash: 'OUTLINE-HASH-CHANGED',
+    }
+  }
+};
+const task19DiffOutline = { ...task19, drafts: [draftDiffOutline], currentDraftId: draftDiffOutline.id };
+const resDiffOutline = validateFinalizationConditions(task19DiffOutline, draftDiffOutline.id, '主笔甲');
+assert(resDiffOutline.canFinalize === false, '大纲依据内容与最新核准大纲不一致时严格阻断定稿');
+
+// -----------------------------------------------------------------------
+// 20. 恢复后历史导出无冻结记录明确提示与审阅状态隔离
+// -----------------------------------------------------------------------
+console.log('\n>>> [回归 20] 恢复后历史导出无冻结记录明确提示与审阅状态隔离:');
+const task20 = createPresetTask('under_review');
+// 构造一个老版本历史草稿（未存 frozenReviewComments）
+const legacyHistoricalDraft: DraftVersion = {
+  id: 'DRAFT-LEGACY-HIST',
+  versionNumber: 'v0.9 (恢复的老历史快照)',
+  createdAt: '2026-10-06T10:00:00.000Z',
+  author: '主笔甲',
+  summary: '缺少冻结审阅记录的老版本',
+  blocks: validDraft19.blocks,
+  isHistoricalSnapshot: true,
+  isWorkingDraft: false,
+  snapshotMetadata: validDraft19.snapshotMetadata,
+  // frozenReviewComments is undefined!
+};
+const task20WithLegacy = {
+  ...task20,
+  drafts: [task20.drafts[0], legacyHistoricalDraft],
+};
+
+const txtLegacy = exportDocumentAsTxt(task20WithLegacy, legacyHistoricalDraft, { includeBody: false, includeEvidence: false, includeReviewLog: true });
+assert(txtLegacy.includes('未包含冻结审阅记录快照') && txtLegacy.includes('无法还原当时审阅状态'), '缺少冻结记录的历史稿导出明确提示无法还原，未混入当前最新审阅意见');
+assert(!txtLegacy.includes('CMT-01'), '当前任务最新审阅意见绝不混入缺少快照的历史稿');
 
 async function runDocxCombos() {
   for (const c of combos) {

@@ -337,3 +337,21 @@ export interface Task {
   reviewComments: ReviewComment[];
   auditIssues: AuditIssue[];
 }
+
+export interface DraftCandidate {
+  taskId: string;
+  runId: string;
+  baseDraftId: string;
+  baseDraftContentHash: string; // Hash of currentDraft blocks at generation start to detect subsequent manual edits
+  upstreamApprovalVersion: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
+  blocks: ParagraphBlock[];
+  snapshotMetadata: SnapshotMetadata;
+  generatedAt: string;
+}

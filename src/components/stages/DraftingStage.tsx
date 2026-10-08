@@ -5,7 +5,8 @@ import {
   DraftVersion, 
   UserRole, 
   EvidenceSnippet,
-  SnapshotMetadata 
+  SnapshotMetadata,
+  DraftCandidate 
 } from '../../types';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -19,7 +20,12 @@ import {
   canEditDraft, 
   canRestoreVersion 
 } from '../../services/permissionService';
-import { applyDraftContentChange } from '../../services/draftLifecycleService';
+import { 
+  applyDraftContentChange,
+  computeDraftBlocksHash,
+  validateCandidateAcceptance,
+  acceptDraftCandidate
+} from '../../services/draftLifecycleService';
 import { 
   PenTool, 
   Sparkles, 
@@ -46,29 +52,6 @@ interface DraftingStageProps {
   activeRole: UserRole;
 }
 
-function computeDraftBlocksHash(blocks: ParagraphBlock[] = []): string {
-  const combined = blocks.map((b) => `${b.id}::${b.sectionId}::${b.content}`).join('||');
-  return computeContentHash(combined);
-}
-
-interface DraftCandidate {
-  taskId: string;
-  runId: string;
-  baseDraftId: string;
-  baseDraftContentHash: string; // Hash of currentDraft blocks at generation start to detect subsequent manual edits
-  upstreamApprovalVersion: {
-    factSnapshotConfirmedAt?: string;
-    factSnapshotHash?: string;
-    styleConfirmedAt?: string;
-    styleHash?: string;
-    outlineConfirmedAt?: string;
-    outlineHash?: string;
-  };
-  blocks: ParagraphBlock[];
-  snapshotMetadata: SnapshotMetadata;
-  generatedAt: string;
-}
-
 export const DraftingStage: React.FC<DraftingStageProps> = ({
   task,
   onUpdateTask,
@@ -92,6 +75,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const draftCancelledRef = useRef(false);
   const [activeDraftRunId, setActiveDraftRunId] = useState<string | null>(null);
   const activeDraftRunIdRef = useRef<string | null>(null);
+  const completedCandidateRunIdRef = useRef<string | null>(null);
   const currentTaskIdRef = useRef<string>(task.id);
   const isUnmountedRef = useRef(false);
   const generateTimerRef = useRef<any>(null);
@@ -110,6 +94,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   useEffect(() => {
     currentTaskIdRef.current = task.id;
     activeDraftRunIdRef.current = null;
+    completedCandidateRunIdRef.current = null;
     draftCancelledRef.current = true;
     if (generateTimerRef.current) {
       clearTimeout(generateTimerRef.current);
@@ -201,6 +186,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       outlineSections: JSON.parse(JSON.stringify(task.outline)),
     };
 
+    setPendingCandidate(null);
+    completedCandidateRunIdRef.current = null;
     activeDraftRunIdRef.current = runId;
     draftCancelledRef.current = false;
     setActiveDraftRunId(runId);
@@ -241,6 +228,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         });
       } else {
         // Offer candidate blocks for comparison with captured snapshot metadata
+        completedCandidateRunIdRef.current = runId;
         setPendingCandidate({
           taskId: startingTaskId,
           runId,
@@ -259,100 +247,41 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const handleCancelGenerate = () => {
     draftCancelledRef.current = true;
     activeDraftRunIdRef.current = null;
+    completedCandidateRunIdRef.current = null;
     if (generateTimerRef.current) {
       clearTimeout(generateTimerRef.current);
       generateTimerRef.current = null;
     }
     setIsGenerating(false);
     setActiveDraftRunId(null);
+    setPendingCandidate(null);
   };
 
   const handleAcceptCandidate = () => {
-    const perm = checkPermission(activeRole, 'edit_draft');
-    if (!perm.allowed) {
-      alert(perm.reason || '当前身份无权采纳新候选稿');
-      return;
-    }
     if (!pendingCandidate) return;
 
-    // Strict validation: candidate must match current task
-    if (pendingCandidate.taskId !== task.id) {
-      alert('安全隔离拦截：候选稿生成自其他任务，禁止跨任务采纳！');
+    const validation = validateCandidateAcceptance(
+      task,
+      currentDraft,
+      pendingCandidate,
+      completedCandidateRunIdRef.current,
+      activeRole
+    );
+
+    if (!validation.valid) {
+      alert(validation.reason || '候选稿校验失败，无法采纳！');
       setPendingCandidate(null);
-      return;
-    }
-
-    // Run ID validation: must not be invalidated by cancel or another run
-    if (activeDraftRunIdRef.current && pendingCandidate.runId !== activeDraftRunIdRef.current) {
-      alert('生成运行已失效：该候选生成自已取消或过期的运行！');
-      setPendingCandidate(null);
-      return;
-    }
-
-    // Baseline validation: check if draft changed (ID mismatch)
-    if (currentDraft && pendingCandidate.baseDraftId && currentDraft.id !== pendingCandidate.baseDraftId) {
-      alert('基准冲突：当前草稿版本已发生变更，旧生成候选已失效！请重新生成。');
-      setPendingCandidate(null);
-      return;
-    }
-
-    // Baseline validation: check if draft content was manually modified after generation started!
-    if (currentDraft && pendingCandidate.baseDraftContentHash) {
-      const currentHash = computeDraftBlocksHash(currentDraft.blocks);
-      if (currentHash !== pendingCandidate.baseDraftContentHash) {
-        alert('基准正文已变更：在此候选生成后，正文已被人工编辑修改，采纳旧候选将覆盖人工修改！候选已失效，请重新生成或先保存快照。');
-        setPendingCandidate(null);
-        return;
-      }
-    }
-
-    // Upstream approvals validation: verify upstream approvals are still valid and have not been invalidated or changed
-    const isUpstreamStillApproved =
-      task.outlineConfirmed === true &&
-      task.styleConfirmed === true &&
-      !!task.factSnapshot;
-
-    if (!isUpstreamStillApproved) {
-      alert('上游依据审批状态已失效（事实快照缺失、文风未核准或大纲审批已撤销），旧候选已失效！');
-      setPendingCandidate(null);
-      return;
-    }
-
-    const curFactTime = task.factSnapshot?.confirmedAt || '';
-    const candFactTime = pendingCandidate.upstreamApprovalVersion?.factSnapshotConfirmedAt || '';
-    const curFactHash = task.factSnapshot?.hash || '';
-    const candFactHash = pendingCandidate.upstreamApprovalVersion?.factSnapshotHash || '';
-    if (curFactTime !== candFactTime || (curFactHash && candFactHash && curFactHash !== candFactHash)) {
-      alert('上游事实依据版本已变更：事实快照已更新，候选稿依据已失效，请重新生成！');
-      setPendingCandidate(null);
-      return;
-    }
-
-    const curStyleTime = task.styleSnapshot?.confirmedAt || '';
-    const candStyleTime = pendingCandidate.upstreamApprovalVersion?.styleConfirmedAt || '';
-    if (curStyleTime !== candStyleTime) {
-      alert('上游文风依据版本已变更：文风规范已重新核准，候选稿依据已失效，请重新生成！');
-      setPendingCandidate(null);
-      return;
-    }
-
-    const curOutlineTime = task.outlineSnapshot?.confirmedAt || '';
-    const candOutlineTime = pendingCandidate.upstreamApprovalVersion?.outlineConfirmedAt || '';
-    if (curOutlineTime !== candOutlineTime) {
-      alert('上游大纲依据版本已变更：大纲结构已重新核准，候选稿依据已失效，请重新生成！');
-      setPendingCandidate(null);
+      completedCandidateRunIdRef.current = null;
       return;
     }
 
     try {
-      // Pass the candidate's atomically captured snapshotMetadata!
-      const { updatedTask, workingDraft } = applyDraftContentChange(
+      // 采纳前自动归档旧稿为只读历史快照，并创建新工作稿
+      const { updatedTask, workingDraft } = acceptDraftCandidate(
         task,
-        currentDraft?.id,
-        () => pendingCandidate.blocks,
-        '采纳重新起草候选稿',
-        activeRole,
-        pendingCandidate.snapshotMetadata
+        currentDraft,
+        pendingCandidate,
+        activeRole
       );
       onUpdateTask({
         drafts: updatedTask.drafts,
@@ -361,6 +290,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         status: updatedTask.status,
       });
       setPendingCandidate(null);
+      completedCandidateRunIdRef.current = null;
     } catch (err: any) {
       alert(err.message || '采纳候选稿失败');
     }

@@ -446,7 +446,22 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
       hash: 'SNAPSHOT-HASH-CONFIRMED-128',
     };
     baseTask.styleConfirmed = true;
+    baseTask.styleSnapshot = {
+      confirmedAt: '2026-10-07T08:35:00.000Z',
+      activeRuleIds: baseTask.styleRules.filter((r) => r.confirmed).map((r) => r.id),
+      hash: 'STYLE-HASH-CONFIRMED',
+    };
     baseTask.outlineConfirmed = true;
+    baseTask.outlineSnapshot = {
+      confirmedAt: '2026-10-07T08:40:00.000Z',
+      sections: baseTask.outline.map((s) => ({
+        sectionId: s.id,
+        title: s.title,
+        suggestedWordCount: s.suggestedWordCount,
+        assignedFactIds: s.assignedFactIds,
+      })),
+      hash: 'OUTLINE-HASH-CONFIRMED',
+    };
     return baseTask;
   }
 

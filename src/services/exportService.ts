@@ -129,45 +129,68 @@ export function exportDocumentAsTxt(
     content += `\n====================================================\n`;
     content += `【附：审阅意见与落实处理记录】\n`;
 
-    // 优先读取该版本冻结的审阅快照；若为历史快照未存冻结快照，则严格过滤生成时刻及针对该版本的意见，防止后续意见混入旧稿
-    const reviewCommentsToExport: ReviewComment[] =
-      draft.frozenReviewComments !== undefined
-        ? draft.frozenReviewComments
-        : (draft.isHistoricalSnapshot || draft.isFinal)
-        ? task.reviewComments.filter(
-            (cmt) =>
-              cmt.targetVersionId === draft.id ||
-              (cmt.createdAt && draft.createdAt && new Date(cmt.createdAt).getTime() <= new Date(draft.createdAt).getTime())
-          )
-        : task.reviewComments;
+    if (draft.frozenReviewComments !== undefined) {
+      if (draft.frozenReviewComments.length > 0) {
+        draft.frozenReviewComments.forEach((cmt, idx) => {
+          const statusLabel = 
+            cmt.status === 'implemented' ? '已修改落实' :
+            cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
+            cmt.status === 'rejected' ? '拒绝并说明' :
+            cmt.status === 'need_discussion' ? '待沟通' : '待处理';
 
-    if (reviewCommentsToExport.length > 0) {
-      reviewCommentsToExport.forEach((cmt, idx) => {
-        const statusLabel = 
-          cmt.status === 'implemented' ? '已修改落实' :
-          cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
-          cmt.status === 'rejected' ? '拒绝并说明' :
-          cmt.status === 'need_discussion' ? '待沟通' : '待处理';
-
-        const targetVersionInfo = cmt.targetVersionId ? ` 针对版本：${cmt.targetVersionId}` : '';
-        content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}]${targetVersionInfo} | 状态：${statusLabel}\n`;
-        content += `   意见内容：${cmt.content}\n`;
-        if (cmt.suggestedChange) {
-          content += `   修改建议：${cmt.suggestedChange}\n`;
-        }
-        if (cmt.decisionReason) {
-          content += `   研判理由：${cmt.decisionReason}\n`;
-        }
-        if (cmt.authorReply) {
-          content += `   主笔答复：${cmt.authorReply}\n`;
-        }
-        if (cmt.implementationDraftId) {
-          content += `   落实版本：${cmt.implementationDraftId}${cmt.implementationBlockId ? ' (段落: ' + cmt.implementationBlockId + ')' : ''}\n`;
-        }
-        content += `\n`;
-      });
+          const targetVersionInfo = cmt.targetVersionId ? ` 针对版本：${cmt.targetVersionId}` : '';
+          content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}]${targetVersionInfo} | 状态：${statusLabel}\n`;
+          content += `   意见内容：${cmt.content}\n`;
+          if (cmt.suggestedChange) {
+            content += `   修改建议：${cmt.suggestedChange}\n`;
+          }
+          if (cmt.decisionReason) {
+            content += `   研判理由：${cmt.decisionReason}\n`;
+          }
+          if (cmt.authorReply) {
+            content += `   主笔答复：${cmt.authorReply}\n`;
+          }
+          if (cmt.implementationDraftId) {
+            content += `   落实版本：${cmt.implementationDraftId}${cmt.implementationBlockId ? ' (段落: ' + cmt.implementationBlockId + ')' : ''}\n`;
+          }
+          content += `\n`;
+        });
+      } else {
+        content += `（本版本生成/定稿时无审阅意见记录）\n`;
+      }
+    } else if (draft.isHistoricalSnapshot || draft.isFinal) {
+      // 缺少冻结记录的历史或定稿版本，明确标记“无法还原当时审阅状态”，避免把当前记录当成历史记录
+      content += `【提示】此历史/定稿版本未包含冻结审阅记录快照，无法还原当时审阅状态；为防止后续意见混入，不直接采用当前审阅记录。\n`;
     } else {
-      content += `（本版本无待处理或已登记的审阅意见记录）\n`;
+      // 当前活动工作稿：输出当前全部审阅意见与落实处理
+      if (task.reviewComments.length > 0) {
+        task.reviewComments.forEach((cmt, idx) => {
+          const statusLabel = 
+            cmt.status === 'implemented' ? '已修改落实' :
+            cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
+            cmt.status === 'rejected' ? '拒绝并说明' :
+            cmt.status === 'need_discussion' ? '待沟通' : '待处理';
+
+          const targetVersionInfo = cmt.targetVersionId ? ` 针对版本：${cmt.targetVersionId}` : '';
+          content += `${idx + 1}. [${cmt.reviewer} - ${cmt.type === 'overall' ? '整体意见' : '段落批注'}]${targetVersionInfo} | 状态：${statusLabel}\n`;
+          content += `   意见内容：${cmt.content}\n`;
+          if (cmt.suggestedChange) {
+            content += `   修改建议：${cmt.suggestedChange}\n`;
+          }
+          if (cmt.decisionReason) {
+            content += `   研判理由：${cmt.decisionReason}\n`;
+          }
+          if (cmt.authorReply) {
+            content += `   主笔答复：${cmt.authorReply}\n`;
+          }
+          if (cmt.implementationDraftId) {
+            content += `   落实版本：${cmt.implementationDraftId}${cmt.implementationBlockId ? ' (段落: ' + cmt.implementationBlockId + ')' : ''}\n`;
+          }
+          content += `\n`;
+        });
+      } else {
+        content += `（本版本无待处理或已登记的审阅意见记录）\n`;
+      }
     }
 
     if (draft.auditRecords && draft.auditRecords.length > 0) {
@@ -482,20 +505,34 @@ export async function exportDocumentAsDocx(
       })
     );
 
-    // 优先读取该版本冻结的审阅快照；若为历史快照未存冻结快照，则严格过滤生成时刻及针对该版本的意见
-    const reviewCommentsToExport: ReviewComment[] =
-      draft.frozenReviewComments !== undefined
-        ? draft.frozenReviewComments
-        : (draft.isHistoricalSnapshot || draft.isFinal)
-        ? task.reviewComments.filter(
-            (cmt) =>
-              cmt.targetVersionId === draft.id ||
-              (cmt.createdAt && draft.createdAt && new Date(cmt.createdAt).getTime() <= new Date(draft.createdAt).getTime())
-          )
-        : task.reviewComments;
+    let reviewCommentsToExport: ReviewComment[] = [];
+    let isMissingHistoricalReviewSnapshot = false;
+    let emptyReviewNotice = '（本版本无待处理或已登记的审阅意见记录）';
 
-    // Data Rows
-    if (reviewCommentsToExport.length > 0) {
+    if (draft.frozenReviewComments !== undefined) {
+      reviewCommentsToExport = draft.frozenReviewComments;
+      emptyReviewNotice = '（本版本生成/定稿时无审阅意见记录）';
+    } else if (draft.isHistoricalSnapshot || draft.isFinal) {
+      isMissingHistoricalReviewSnapshot = true;
+    } else {
+      reviewCommentsToExport = task.reviewComments;
+    }
+
+    if (isMissingHistoricalReviewSnapshot) {
+      docParagraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: '【提示】此历史/定稿版本未包含冻结审阅记录快照，系统无法还原该版本历史时刻的审阅与答复状态；为保证审计真实性，不直接混入当前最新审阅记录。',
+              size: 20,
+              font: 'FangSong',
+              color: '666666',
+            }),
+          ],
+          spacing: { after: 200 },
+        })
+      );
+    } else if (reviewCommentsToExport.length > 0) {
       reviewCommentsToExport.forEach((cmt, idx) => {
         const statusLabel = 
           cmt.status === 'implemented' ? '已修改落实' :
@@ -548,7 +585,7 @@ export async function exportDocumentAsDocx(
         new Paragraph({
           children: [
             new TextRun({
-              text: '（本版本无待处理或已登记的审阅意见记录）',
+              text: emptyReviewNotice,
               size: 20,
               font: 'FangSong',
               color: '666666',
