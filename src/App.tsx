@@ -289,6 +289,7 @@ export function App() {
             onViewSnippet={setViewingSnippet}
             onProceedToNextStage={() => handleProceedStage('review')}
             activeRole={activeRole}
+            onSelectStage={handleSelectStage}
           />
         )}
 
@@ -315,6 +316,8 @@ export function App() {
         snippet={viewingSnippet}
         documents={currentTask.documents}
         onClose={() => setViewingSnippet(null)}
+        task={currentTask}
+        currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId)}
       />
     </div>
   );

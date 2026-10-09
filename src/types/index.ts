@@ -367,4 +367,18 @@ export interface DraftCandidate {
   blocks: ParagraphBlock[];
   snapshotMetadata: SnapshotMetadata;
   generatedAt: string;
+  instructionPrompt?: string; // 本轮写作要求（例如“突出成效，减少铺垫”）
+  requestSummary?: string;    // 请求摘要说明
+  isUnsupportedPrompt?: boolean;
+  unsupportedPromptNotice?: string;
+}
+
+export type CandidateComparisonViewMode = 'split' | 'diff' | 'candidate' | 'current';
+
+export interface AlignedParagraphRow {
+  type: 'identical' | 'modified' | 'added' | 'removed';
+  blockId: string;
+  currentBlock?: ParagraphBlock;
+  candidateBlock?: ParagraphBlock;
+  diffSegments?: DiffSegment[];
 }

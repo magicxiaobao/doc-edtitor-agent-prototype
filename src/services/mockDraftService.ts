@@ -107,12 +107,40 @@ export function isValidFactForDraft(fact: Fact, task: Task): boolean {
   return true;
 }
 
+export interface WholeDraftGenerationOptions {
+  instructionPrompt?: string;
+}
+
+/**
+ * Checks if custom drafting prompt is recognized in the deterministic prototype simulation
+ */
+export function isSupportedDraftInstruction(prompt?: string): boolean {
+  if (!prompt || !prompt.trim()) return true;
+  const p = prompt.trim();
+  return (
+    p.includes('成效') ||
+    p.includes('铺垫') ||
+    p.includes('精简') ||
+    p.includes('压缩') ||
+    p.includes('汇报口吻') ||
+    p.includes('单位负责人') ||
+    p.includes('对应') ||
+    p.includes('举措') ||
+    p.includes('标准') ||
+    p.includes('规范')
+  );
+}
+
 /**
  * Deterministically generates draft paragraphs strictly driven by
  * confirmed outline sections and their assigned confirmed facts.
  * NO fallback values (no hardcoded 128, 16, 800, 12, or fixed 2026 dates).
+ * Supports explicit round writing instructions (e.g. 突出成效, 减少铺垫, 优化问题与安排对应, 汇报口吻).
  */
-export function generateDraftFromFactsAndOutline(task: Task): ParagraphBlock[] {
+export function generateDraftFromFactsAndOutline(
+  task: Task,
+  options?: WholeDraftGenerationOptions
+): ParagraphBlock[] {
   if (!task.outline || task.outline.length === 0) {
     return [];
   }
@@ -121,6 +149,12 @@ export function generateDraftFromFactsAndOutline(task: Task): ParagraphBlock[] {
   const activeStyleRules = task.styleRules.filter((r) => r.confirmed && !r.excluded);
   const hasMeasureAndFact = activeStyleRules.some((r) => r.category === '举措事实');
   const hasFormalTone = activeStyleRules.some((r) => r.category === '行文正式度');
+
+  const rawPrompt = options?.instructionPrompt?.trim() || '';
+  const isHighlightOutcomes = rawPrompt.includes('成效');
+  const isConcise = rawPrompt.includes('精简') || rawPrompt.includes('铺垫') || rawPrompt.includes('压缩');
+  const isAlignment = rawPrompt.includes('对应') || rawPrompt.includes('问题与安排');
+  const isReportingTone = rawPrompt.includes('汇报口吻') || rawPrompt.includes('单位负责人');
 
   const blocks: ParagraphBlock[] = [];
   let blockOrder = 1;
@@ -159,12 +193,23 @@ export function generateDraftFromFactsAndOutline(task: Task): ParagraphBlock[] {
     if (trainingFact && attendeeFact && trainingFact.id !== attendeeFact.id) {
       // Generate paired training paragraph
       const factIds = [trainingFact.id, attendeeFact.id];
-      const leadIn = hasMeasureAndFact
-        ? `在干部队伍履职能力建设方面，坚持需求导向，深化分级分类专业实操培养。`
-        : `扎实开展干部业务培训工作。`;
-
       const tPeriod = trainingFact.period || periodStr;
-      const content = `${leadIn}${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，有效强化了专业化履职能力与规范执行水平。`;
+      let content = '';
+
+      if (isHighlightOutcomes) {
+        content = `在干部队伍履职能力建设方面，紧扣高素质实战需求，业务赋能质效大幅跃升。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，专业实操水平与规范执行能力取得显著成效。`;
+      } else if (isConcise) {
+        content = `${tPeriod}，组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，参训${attendeeFact.value}${attendeeFact.unit}，有效强化干部队伍履职执行水平。`;
+      } else if (isAlignment) {
+        content = `紧扣基层履职能力薄弱短板，靶向开展专业实操培训。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，推动培训举措与岗位实际需求紧密对应。`;
+      } else if (isReportingTone) {
+        content = `聚焦高素质专业化干部队伍建设，高位推动业务赋能。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，全流程赋能机制健全运转。`;
+      } else {
+        const leadIn = hasMeasureAndFact
+          ? `在干部队伍履职能力建设方面，坚持需求导向，深化分级分类专业实操培养。`
+          : `扎实开展干部业务培训工作。`;
+        content = `${leadIn}${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，有效强化了专业化履职能力与规范执行水平。`;
+      }
 
       blocks.push({
         id: `BLK-${section.id}-${blockOrder}`,
@@ -181,13 +226,29 @@ export function generateDraftFromFactsAndOutline(task: Task): ParagraphBlock[] {
       );
 
       remainingFacts.forEach((fact) => {
-        const singleBlock = buildSingleFactParagraph(section, fact, periodStr, hasMeasureAndFact, hasFormalTone, blockOrder++);
+        const singleBlock = buildSingleFactParagraph(
+          section,
+          fact,
+          periodStr,
+          hasMeasureAndFact,
+          hasFormalTone,
+          blockOrder++,
+          rawPrompt
+        );
         blocks.push(singleBlock);
       });
     } else {
       // Individual fact generation
       validAssignedFacts.forEach((fact) => {
-        const singleBlock = buildSingleFactParagraph(section, fact, periodStr, hasMeasureAndFact, hasFormalTone, blockOrder++);
+        const singleBlock = buildSingleFactParagraph(
+          section,
+          fact,
+          periodStr,
+          hasMeasureAndFact,
+          hasFormalTone,
+          blockOrder++,
+          rawPrompt
+        );
         blocks.push(singleBlock);
       });
     }
@@ -202,31 +263,72 @@ function buildSingleFactParagraph(
   periodStr: string,
   hasMeasureAndFact: boolean,
   hasFormalTone: boolean,
-  order: number
+  order: number,
+  instructionPrompt?: string
 ): ParagraphBlock {
   const fPeriod = fact.period || periodStr;
   const val = fact.value;
   const unit = fact.unit;
   const metric = fact.metric;
 
+  const prompt = instructionPrompt || '';
+  const isHighlightOutcomes = prompt.includes('成效');
+  const isConcise = prompt.includes('精简') || prompt.includes('铺垫') || prompt.includes('压缩');
+  const isAlignment = prompt.includes('对应') || prompt.includes('问题与安排');
+  const isReportingTone = prompt.includes('汇报口吻') || prompt.includes('单位负责人');
+
   let content = '';
 
-  if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
-    const lead = hasMeasureAndFact
-      ? `全系统强化统筹联动与机制创新，各项重点部署紧盯节点有序推进。`
-      : `各项既定重点任务平稳有序开展。`;
-    content = `${fPeriod}，${lead}截至统计期末，${metric}${val}${unit}，各项既定序时指标平稳达成，重点攻坚成效显著。`;
-  } else if (metric.includes('调研')) {
-    const lead = hasMeasureAndFact
-      ? `深入推进调查研究，紧扣基层一线急难愁盼诉求，`
-      : `扎实开展常态化专项调研，`;
-    content = `在调查研究方面，${lead}${fPeriod}累计${metric}${val}${unit}，推动形成一系列制度优化与流程改进举措。`;
+  if (isHighlightOutcomes) {
+    if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
+      content = `全系统强化攻坚突破，各项部署紧盯节点攻坚克难，取得扎实成效。${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标高效达成，重点攻坚成效显著。`;
+    } else if (metric.includes('调研')) {
+      content = `【重点成效】在调查研究方面，紧扣基层急难愁盼深入调研，${fPeriod}累计${metric}${val}${unit}，推动形成一系列制度优化与长效机制。`;
+    } else {
+      content = `【重点成效】立足业务发展需要，紧扣核心指标狠抓工作质效。${fPeriod}，${metric}完成${val}${unit}，有力保障全系统高质量运转。`;
+    }
+  } else if (isConcise) {
+    if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
+      content = `${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标平稳达成。`;
+    } else if (metric.includes('调研')) {
+      content = `在调查研究方面，${fPeriod}累计${metric}${val}${unit}，形成制度优化举措。`;
+    } else {
+      content = `${fPeriod}，${metric}完成${val}${unit}，保障系统运转。`;
+    }
+  } else if (isAlignment) {
+    if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
+      content = `紧扣工作堵点破局突围，坚持靶向发力与清单化推进。${fPeriod}，截至统计期末，${metric}${val}${unit}，确保问题清单与具体安排紧密对应、如期销号。`;
+    } else if (metric.includes('调研')) {
+      content = `坚持以问题为导向，紧密对接一线实际诉求。在调查研究方面，${fPeriod}累计${metric}${val}${unit}，推动问题发现在一线、举措落实在一线。`;
+    } else {
+      content = `对标业务短板清单统筹推进整改治理。${fPeriod}，${metric}完成${val}${unit}，确保整改举措与序时安排有序对应。`;
+    }
+  } else if (isReportingTone) {
+    if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
+      content = `紧扣全局中心工作部署，统筹推进全流程规范治理。${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标高位推进、平稳达成。`;
+    } else if (metric.includes('调研')) {
+      content = `深入贯彻大兴调查研究部署要求，立足单位高标准履职定位，${fPeriod}累计${metric}${val}${unit}，为科学决策提供扎实依据。`;
+    } else {
+      content = `紧扣中心大局与核心指标，统筹推进全流程规范治理。${fPeriod}，${metric}完成${val}${unit}，有力保障全系统平稳高效运转。`;
+    }
   } else {
-    // Generic administrative fact format
-    const lead = hasFormalTone
-      ? `立足业务发展需要，严谨抓好各项工作落实。`
-      : `抓细抓实各项日常工作。`;
-    content = `${lead}${fPeriod}，${metric}完成${val}${unit}，保障全系统平稳高效运转。`;
+    // Standard default generation
+    if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
+      const lead = hasMeasureAndFact
+        ? `全系统强化统筹联动与机制创新，各项重点部署紧盯节点有序推进。`
+        : `各项既定重点任务平稳有序开展。`;
+      content = `${fPeriod}，${lead}截至统计期末，${metric}${val}${unit}，各项既定序时指标平稳达成，重点攻坚成效显著。`;
+    } else if (metric.includes('调研')) {
+      const lead = hasMeasureAndFact
+        ? `深入推进调查研究，紧扣基层一线急难愁盼诉求，`
+        : `扎实开展常态化专项调研，`;
+      content = `在调查研究方面，${lead}${fPeriod}累计${metric}${val}${unit}，推动形成一系列制度优化与流程改进举措。`;
+    } else {
+      const lead = hasFormalTone
+        ? `立足业务发展需要，严谨抓好各项工作落实。`
+        : `抓细抓实各项日常工作。`;
+      content = `${lead}${fPeriod}，${metric}完成${val}${unit}，保障全系统平稳高效运转。`;
+    }
   }
 
   return {
@@ -238,6 +340,7 @@ function buildSingleFactParagraph(
     updatedAt: new Date().toISOString(),
   };
 }
+
 
 /**
  * Paragraph revision assistant (compress, expand, formal, highlight, custom).

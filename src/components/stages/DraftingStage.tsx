@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Task, 
+  TaskStage,
   ParagraphBlock, 
   DraftVersion, 
   UserRole, 
@@ -12,8 +13,11 @@ import {
 } from '../../types';
 import { 
   generateDraftFromFactsAndOutline, 
-  computeContentHash 
+  computeContentHash,
+  formatTaskPeriod,
+  isSupportedDraftInstruction
 } from '../../services/mockDraftService';
+import { CandidateComparisonModal } from '../CandidateComparisonModal';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -60,7 +64,10 @@ import {
   CornerDownRight, 
   Tag, 
   Lock,
-  Layers
+  Layers,
+  ChevronDown,
+  FileDiff,
+  Info
 } from 'lucide-react';
 
 interface DraftingStageProps {
@@ -69,6 +76,7 @@ interface DraftingStageProps {
   onViewSnippet: (snippet: EvidenceSnippet) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
+  onSelectStage?: (stage: TaskStage) => void;
 }
 
 export const DraftingStage: React.FC<DraftingStageProps> = ({
@@ -77,6 +85,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   onViewSnippet,
   onProceedToNextStage,
   activeRole,
+  onSelectStage,
 }) => {
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
@@ -91,9 +100,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Selected block for editing / inspection
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
+  // Inspected fact ID for targeted evidence examination
+  const [inspectingFactId, setInspectingFactId] = useState<string | null>(null);
+
   // Draft regeneration / candidate state & strict isolation refs
   const [isGenerating, setIsGenerating] = useState(false);
   const [pendingCandidate, setPendingCandidate] = useState<DraftCandidate | null>(null);
+  const [showCandidateComparisonModal, setShowCandidateComparisonModal] = useState(false);
+  const [draftInstructionInput, setDraftInstructionInput] = useState<string>('突出成效，减少铺垫');
+  const [showPrepDetails, setShowPrepDetails] = useState(false);
   const draftCancelledRef = useRef(false);
   const [activeDraftRunId, setActiveDraftRunId] = useState<string | null>(null);
   const activeDraftRunIdRef = useRef<string | null>(null);
@@ -172,8 +187,33 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Check if current draft is an immutable snapshot (historical snapshot or finalized)
   const isCurrentDraftImmutable = Boolean(currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal);
 
+  // Calculation of preparation statuses
+  const confirmedFactsCount = task.facts.filter((f) => f.status === 'confirmed').length;
+  const isFactReady = Boolean(task.factSnapshot && confirmedFactsCount > 0);
+  const activeStyleRulesCount = task.styleRules.filter((r) => r.confirmed && !r.excluded).length;
+  const isStyleReady = Boolean(task.styleConfirmed && task.styleSnapshot);
+  const outlineSectionsCount = task.outline.length;
+  const isOutlineReady = Boolean(task.outlineConfirmed && task.outlineSnapshot);
+  const taskPeriodStr = formatTaskPeriod(task.startDate, task.endDate);
+  const isPeriodReady = Boolean(task.startDate && task.endDate);
+
   // Prerequisite check: facts, style, outline must all be confirmed
-  const isPrerequisiteMet = task.outlineConfirmed && !!task.factSnapshot && task.styleConfirmed;
+  const isPrerequisiteMet = isFactReady && isStyleReady && isOutlineReady && isPeriodReady;
+
+  const handleJumpStage = (stage: TaskStage) => {
+    if (onSelectStage) {
+      onSelectStage(stage);
+    } else {
+      onUpdateTask({ currentStage: stage });
+    }
+  };
+
+  const handleInspectFact = (factId: string, blockId?: string) => {
+    if (blockId) setSelectedBlockId(blockId);
+    setInspectingFactId(factId);
+    setShowRightInspector(true);
+    setInspectorTab('material_evidence');
+  };
 
   // Selected block object
   const activeBlock = currentDraft?.blocks.find((b) => b.id === selectedBlockId) || currentDraft?.blocks[0];
@@ -205,17 +245,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   });
 
   // Handle Generate / Regenerate Whole Draft
-  const handleStartGenerate = () => {
+  const handleStartGenerate = (promptToUse?: string) => {
     const perm = checkPermission(activeRole, 'generate_draft');
     if (!perm.allowed) {
       alert(perm.reason || '当前身份无权起草正文');
       return;
     }
 
-    if (!task.outlineConfirmed || !task.factSnapshot || !task.styleConfirmed) {
+    if (!isPrerequisiteMet) {
       alert('前序事实清单未确认/已失效、文风未核准或大纲批准已失效，无法生成正文。请先前往前序阶段重新核准。现有文稿已保留浏览，未自动覆盖旧稿。');
       return;
     }
+
+    const instructionToApply = (promptToUse !== undefined ? promptToUse : draftInstructionInput).trim();
 
     const runId = `DRAFT-RUN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const startingTaskId = task.id;
@@ -263,7 +305,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         return;
       }
 
-      const generatedBlocks = generateDraftFromFactsAndOutline(task);
+      const generatedBlocks = generateDraftFromFactsAndOutline(task, {
+        instructionPrompt: instructionToApply,
+      });
+
       if (task.drafts.length === 0) {
         // Direct initial draft
         const initialDraft: DraftVersion = {
@@ -271,7 +316,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           versionNumber: 'v1.0 (初稿)',
           createdAt: new Date().toISOString(),
           author: activeRole,
-          summary: '系统根据已确认事实及大纲生成的首个完整初稿版本',
+          summary: instructionToApply
+            ? `系统按写作要求【${instructionToApply}】生成的首个完整初稿版本`
+            : '系统根据已确认事实及大纲生成的首个完整初稿版本',
           blocks: generatedBlocks,
           snapshotMetadata: capturedSnapshotMeta,
           isWorkingDraft: true,
@@ -286,7 +333,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       } else {
         // Offer candidate blocks for comparison with captured snapshot metadata
         completedCandidateRunIdRef.current = runId;
-        setPendingCandidate({
+        const isSupported = isSupportedDraftInstruction(instructionToApply);
+        const cand: DraftCandidate = {
           taskId: startingTaskId,
           runId,
           baseDraftId,
@@ -295,11 +343,20 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           blocks: generatedBlocks,
           snapshotMetadata: capturedSnapshotMeta,
           generatedAt: new Date().toISOString(),
-        });
+          instructionPrompt: instructionToApply,
+          requestSummary: instructionToApply ? `写作要求：${instructionToApply}` : '标准公文起草规范',
+          isUnsupportedPrompt: !isSupported,
+          unsupportedPromptNotice: !isSupported
+            ? `当前原型模拟服务暂未支持自定义起草指令“${instructionToApply}”。原型支持明确的演示指令（如“突出成效，减少铺垫”、“精简表达”、“优化问题与安排的对应”、“改成面向单位负责人的汇报口吻”）。已基于标准公文规范生成。`
+            : undefined,
+        };
+        setPendingCandidate(cand);
+        setShowCandidateComparisonModal(true);
       }
       setIsGenerating(false);
     }, 600);
   };
+
 
   const handleCancelGenerate = () => {
     draftCancelledRef.current = true;
@@ -796,95 +853,264 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             </button>
           )}
 
-          {task.drafts.length === 0 ? (
+          {/* If on immutable draft, offer "Fork new working draft" */}
+          {isCurrentDraftImmutable && (
             <button
-              onClick={handleStartGenerate}
-              disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
-              className={`px-4 py-2 rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors ${
-                !isPrerequisiteMet || isGenerating || !canUserEdit
-                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
-              }`}
-              title={
-                !canUserEdit
-                  ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
-                  : !isPrerequisiteMet
-                  ? '前序事实未确认/文风未核准/大纲批准失效，无法起草'
-                  : '生成首轮初稿'
-              }
+              onClick={handleForkWorkingDraftFromImmutable}
+              disabled={!canUserEdit}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium flex items-center gap-1 shadow-xs cursor-pointer disabled:opacity-40"
+              title="以此只读快照为基准，创建新的可编辑工作草稿"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{isGenerating ? '起草生成中...' : '生成首轮初稿'}</span>
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>基于此稿继续编辑</span>
             </button>
-          ) : (
-            <>
-              {/* If on immutable draft, offer "Fork new working draft" */}
-              {isCurrentDraftImmutable && (
+          )}
+
+          <button
+            onClick={() => setShowSaveVersionModal(true)}
+            disabled={!canUserEdit || isCurrentDraftImmutable}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
+            title={
+              !canUserEdit
+                ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可保存版本`
+                : isCurrentDraftImmutable
+                ? '当前已是只读快照版本，无需重复保存快照'
+                : '将当前工作稿保存为只读历史版本快照'
+            }
+          >
+            <Save className="w-3.5 h-3.5 text-slate-500" />
+            <span>保存版本快照</span>
+          </button>
+
+          <button
+            onClick={() => setShowVersionHistory(true)}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            title="查看与恢复历史版本快照"
+          >
+            <History className="w-3.5 h-3.5 text-slate-500" />
+            <span>版本历史 ({task.drafts.length})</span>
+          </button>
+
+          <button
+            onClick={onProceedToNextStage}
+            className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
+          >
+            <span>下一步：审阅修改</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Preparation Status Bar */}
+      <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2.5">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-800 flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-blue-700" />
+              起草前准备状态
+            </span>
+            <span
+              className={`text-[11px] px-2 py-0.5 rounded font-medium flex items-center gap-1 ${
+                isPrerequisiteMet
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  : 'bg-amber-50 text-amber-800 border border-amber-200'
+              }`}
+            >
+              {isPrerequisiteMet ? (
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              ) : (
+                <AlertTriangle className="w-3 h-3 text-amber-600" />
+              )}
+              <span>{isPrerequisiteMet ? '前序审批完备 · 具备起草条件' : '准备条件未满足'}</span>
+            </span>
+          </div>
+
+          <button
+            onClick={() => setShowPrepDetails(!showPrepDetails)}
+            className="text-slate-500 hover:text-slate-800 text-[11px] flex items-center gap-1 cursor-pointer"
+          >
+            <span>{showPrepDetails ? '收起说明' : '展开指标口径说明'}</span>
+            <ChevronDown
+              className={`w-3 h-3 transition-transform ${showPrepDetails ? 'rotate-180' : ''}`}
+            />
+          </button>
+        </div>
+
+        {/* 5 Indicator Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
+          <div
+            className={`p-2 rounded border ${
+              isFactReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+            }`}
+          >
+            <div className="text-[10px] text-slate-500">1. 事实清单</div>
+            <div className="font-bold mt-0.5 text-slate-800">{confirmedFactsCount} 项已核准</div>
+            <div className="text-[10px] text-slate-400">
+              {task.factSnapshot ? '快照已锁定' : '快照未生成'}
+            </div>
+          </div>
+
+          <div
+            className={`p-2 rounded border ${
+              isStyleReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+            }`}
+          >
+            <div className="text-[10px] text-slate-500">2. 单位文风</div>
+            <div className="font-bold mt-0.5 text-slate-800">{activeStyleRulesCount} 条规则生效</div>
+            <div className="text-[10px] text-slate-400">
+              {task.styleConfirmed ? '已核准通过' : '未核准'}
+            </div>
+          </div>
+
+          <div
+            className={`p-2 rounded border ${
+              isOutlineReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+            }`}
+          >
+            <div className="text-[10px] text-slate-500">3. 章节大纲</div>
+            <div className="font-bold mt-0.5 text-slate-800">{outlineSectionsCount} 个章节</div>
+            <div className="text-[10px] text-slate-400">
+              {task.outlineConfirmed ? '大纲已审批' : '未审批'}
+            </div>
+          </div>
+
+          <div
+            className={`p-2 rounded border ${
+              isPeriodReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+            }`}
+          >
+            <div className="text-[10px] text-slate-500">4. 统计期间</div>
+            <div className="font-bold mt-0.5 text-slate-800">{taskPeriodStr}</div>
+            <div className="text-[10px] text-slate-400">
+              {isPeriodReady ? '口径已设定' : '未设定'}
+            </div>
+          </div>
+
+          <div className="p-2 rounded border bg-slate-50/80 border-slate-200">
+            <div className="text-[10px] text-slate-500">5. 目标字数</div>
+            <div className="font-bold mt-0.5 text-slate-800">{task.targetWordCount || 2000} 字</div>
+            <div className="text-[10px] text-slate-400">
+              当前文稿 {currentWordCount} 字
+            </div>
+          </div>
+        </div>
+
+        {/* Deficiency alert if not met */}
+        {!isPrerequisiteMet && (
+          <div className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-2">
+            <div className="flex items-center gap-1.5 font-semibold text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>起草条件不足说明：</span>
+            </div>
+            <ul className="list-disc list-inside text-[11px] text-amber-800 space-y-0.5">
+              {!isFactReady && <li>事实清单尚未核准或事实快照缺失/已失效（需包含有效核准事实）。</li>}
+              {!isStyleReady && <li>单位文风规范尚未核准或快照缺失。</li>}
+              {!isOutlineReady && <li>章节大纲规划尚未确认审批通过。</li>}
+              {!isPeriodReady && <li>任务起止日期及统计期间未设定完整。</li>}
+            </ul>
+            <p className="text-[11px] text-amber-700">
+              系统保护现有文稿，<strong>旧正文保持可浏览与手动编辑</strong>。请先前往前序阶段完成审批后再执行整稿起草。
+            </p>
+            <div className="flex items-center gap-2 pt-1 flex-wrap">
+              {!isFactReady && (
                 <button
-                  onClick={handleForkWorkingDraftFromImmutable}
-                  disabled={!canUserEdit}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium flex items-center gap-1 shadow-xs cursor-pointer disabled:opacity-40"
-                  title="以此只读快照为基准，创建新的可编辑工作草稿"
+                  onClick={() => handleJumpStage('material_fact')}
+                  className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
                 >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>基于此稿继续编辑</span>
+                  前往核准事实清单
                 </button>
               )}
+              {(!isStyleReady || !isOutlineReady) && (
+                <button
+                  onClick={() => handleJumpStage('style_outline')}
+                  className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
+                >
+                  前往确认文风与大纲
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
-              <button
-                onClick={() => setShowSaveVersionModal(true)}
-                disabled={!canUserEdit || isCurrentDraftImmutable}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                title={
-                  !canUserEdit
-                    ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可保存版本`
-                    : isCurrentDraftImmutable
-                    ? '当前已是只读快照版本，无需重复保存快照'
-                    : '将当前工作稿保存为只读历史版本快照'
-                }
-              >
-                <Save className="w-3.5 h-3.5 text-slate-500" />
-                <span>保存版本快照</span>
-              </button>
+        {/* Collapsible Explanations */}
+        {showPrepDetails && isPrerequisiteMet && (
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-600 space-y-1">
+            <div>• 事实依据：已核准事实与台账口径一致，起草服务将严格保留所有数值、单位与期间。</div>
+            <div>• 文风大纲：按已确认大纲结构进行确定性合成，各章节按分配事实生成，无虚构案例。</div>
+            <div>• 版本继承：起草生成的整稿将作为候选稿供主笔在差异对比后决定是否整体采纳。</div>
+          </div>
+        )}
+      </div>
 
-              <button
-                onClick={() => setShowVersionHistory(true)}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
-                title="查看与恢复历史版本快照"
-              >
-                <History className="w-3.5 h-3.5 text-slate-500" />
-                <span>版本历史 ({task.drafts.length})</span>
-              </button>
-
-              <button
-                onClick={handleStartGenerate}
-                disabled={isGenerating || !canUserEdit || !isPrerequisiteMet}
-                className={`px-3 py-1.5 border rounded text-xs font-medium flex items-center gap-1 transition-colors ${
-                  !isPrerequisiteMet || !canUserEdit || isGenerating
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border-blue-200 cursor-pointer'
-                }`}
-                title={
-                  !canUserEdit
-                    ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
-                    : !isPrerequisiteMet
-                    ? '前序事实或大纲审批已失效，无法重新生成。请先前往前序阶段核准。'
-                    : '重新生成整稿候选稿'
-                }
-              >
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                <span>重新生成候选稿</span>
-              </button>
-
-              <button
-                onClick={onProceedToNextStage}
-                className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
-              >
-                <span>下一步：审阅修改</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
+      {/* 3. Round Drafting Instruction Input Bar */}
+      <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-1">
+          <label htmlFor="round-draft-instruction" className="font-bold text-slate-800 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-blue-700" />
+            <span>本轮写作要求（表达意图与行文侧重）：</span>
+          </label>
+          <span className="text-[11px] text-slate-400">受已核准事实、文风与大纲严格约束</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            id="round-draft-instruction"
+            type="text"
+            value={draftInstructionInput}
+            onChange={(e) => setDraftInstructionInput(e.target.value)}
+            placeholder="例如：突出成效，减少铺垫；优化问题与安排的对应；改成面向单位负责人的汇报口吻..."
+            className="flex-1 p-2 bg-slate-50 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white focus:outline-hidden"
+          />
+          <button
+            onClick={() => handleStartGenerate(draftInstructionInput)}
+            disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
+            className={`px-4 py-2 rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+              !isPrerequisiteMet || isGenerating || !canUserEdit
+                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                : 'bg-blue-700 hover:bg-blue-800 text-white'
+            }`}
+            title={
+              !canUserEdit
+                ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
+                : !isPrerequisiteMet
+                ? '前序审批未就绪，无法起草'
+                : task.drafts.length === 0
+                ? '生成首轮初稿'
+                : '生成整稿候选稿'
+            }
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>
+              {isGenerating
+                ? '起草生成中...'
+                : task.drafts.length === 0
+                ? '生成首轮初稿'
+                : '生成整稿候选'}
+            </span>
+          </button>
+        </div>
+        {/* Preset Instruction Chips */}
+        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+          <span className="text-[11px] text-slate-400 font-medium">常用指令预设：</span>
+          {[
+            '突出成效，减少铺垫',
+            '减少铺垫，精简表达',
+            '优化问题与安排的对应',
+            '改成面向单位负责人的汇报口吻',
+            '标准公文规范起草',
+          ].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setDraftInstructionInput(preset)}
+              className={`text-[11px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                draftInstructionInput === preset
+                  ? 'bg-blue-50 text-blue-800 border-blue-300 font-medium'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+              }`}
+            >
+              {preset}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -912,72 +1138,101 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         </div>
       )}
 
-      {/* Review & Invalidation Alert Banner when upstream approvals changed */}
-      {!isPrerequisiteMet && currentDraft && (
-        <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r text-xs text-amber-900 space-y-2">
-          <div className="flex items-center gap-2 font-bold text-amber-900">
-            <AlertCircle className="w-4 h-4 text-amber-600" />
-            <span>流程复核提示：前序事实已撤销/变更、文风未核准或大纲批准已失效</span>
-          </div>
-          <p className="text-amber-800">
-            检测到上游决策状态发生变动，下游起草批准已失效。系统已保护现有文稿，<strong>未自动覆盖旧稿</strong>，支持继续浏览与手动修订。文风未确认或事实快照无效时不能重新生成正文。
-          </p>
-          {blocksNeedingReview.length > 0 ? (
-            <div className="mt-1 pt-1 border-t border-amber-200/80">
-              <span className="font-semibold text-amber-900">以下正文段落引用的事实已失效或撤销，需主笔重点复核：</span>
-              <ul className="list-disc list-inside mt-1 space-y-0.5 text-[11px] text-amber-800">
-                {blocksNeedingReview.map((b) => {
-                  const changedFact = task.facts.find((f) => b.referencedFactIds.includes(f.id));
-                  return (
-                    <li key={b.id}>
-                      第 {b.order} 段：引用事实“{changedFact?.metric || '已删除事实'}”当前状态为【
-                      {changedFact?.status === 'pending'
-                        ? '待核定（已从confirmed撤销）'
-                        : changedFact?.status === 'excluded'
-                        ? '已明确排除'
-                        : changedFact ? '口径已变动' : '已不存在'}
-                      】
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : (
-            <p className="text-[11px] text-amber-700">
-              当前文稿暂无受影响的事实段落，但重新起草需先返回前序阶段重新确认大纲。
-            </p>
-          )}
-        </div>
-      )}
-
       {/* Candidate comparison banner if present */}
-      {pendingCandidate && (
-        <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-          <div>
-            <h4 className="font-bold text-xs text-amber-900 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-amber-600" />
-              已生成新一轮候选文稿（基于最新已确认事实）
-            </h4>
-            <p className="text-[11px] text-amber-800 mt-0.5">
-              请主笔审阅是否采纳替换现有文稿。采纳后旧工作稿将自动归档为只读历史快照，并生成新工作稿。
-            </p>
+      {pendingCandidate && (() => {
+        const candWordCount = pendingCandidate.blocks.reduce((acc, b) => acc + b.content.length, 0);
+        const isModifiedLive =
+          currentDraft &&
+          pendingCandidate.baseDraftContentHash &&
+          computeDraftBlocksHash(currentDraft.blocks) !== pendingCandidate.baseDraftContentHash;
+        const hasPromptMismatch = Boolean(
+          draftInstructionInput.trim() &&
+            pendingCandidate.instructionPrompt &&
+            draftInstructionInput.trim() !== pendingCandidate.instructionPrompt.trim()
+        );
+
+        return (
+          <div
+            className={`p-4 rounded-lg border-2 shadow-xs space-y-2.5 ${
+              isModifiedLive
+                ? 'bg-rose-50 border-rose-300'
+                : 'bg-blue-50/80 border-blue-300'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-blue-600" />
+                  已生成整稿候选稿（共 {candWordCount} 字 · 依据最新已核准事实与大纲）
+                </h4>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  生成要求：<strong className="text-slate-800">{pendingCandidate.instructionPrompt || '标准公文规范起草'}</strong>
+                  <span className="mx-1.5 text-slate-300">|</span>
+                  生成时刻：
+                  {new Date(pendingCandidate.generatedAt).toLocaleTimeString('zh-CN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  onClick={() => setPendingCandidate(null)}
+                  className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs hover:bg-slate-50 cursor-pointer font-medium"
+                >
+                  放弃候选稿
+                </button>
+                <button
+                  onClick={() => setShowCandidateComparisonModal(true)}
+                  className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
+                >
+                  <FileDiff className="w-3.5 h-3.5" />
+                  <span>查看完整候选对比与差异</span>
+                </button>
+                <button
+                  onClick={handleAcceptCandidate}
+                  disabled={Boolean(isModifiedLive) || activeRole !== '主笔甲'}
+                  className={`px-4 py-1.5 rounded text-xs font-semibold shadow-xs cursor-pointer ${
+                    isModifiedLive || activeRole !== '主笔甲'
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                  }`}
+                  title={
+                    isModifiedLive
+                      ? '正文已被编辑修改，候选已失效，禁止采纳覆盖'
+                      : '整体采纳并自动归档旧稿，创建新工作稿'
+                  }
+                >
+                  整体采纳并创建新工作稿
+                </button>
+              </div>
+            </div>
+
+            {/* Invalidation warning */}
+            {isModifiedLive && (
+              <div className="p-2 bg-rose-100/80 border border-rose-300 rounded text-[11px] text-rose-900 flex items-center gap-1.5 font-medium">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                <span>
+                  候选稿已失效：正文在此候选生成后已被人工编辑修改，采纳旧候选将覆盖人工编辑！请点击上方“生成整稿候选”以最新正文为基准重新起草。
+                </span>
+              </div>
+            )}
+
+            {/* Instruction prompt mismatch notice */}
+            {hasPromptMismatch && !isModifiedLive && (
+              <div className="p-2 bg-amber-100/70 border border-amber-300 rounded text-[11px] text-amber-900 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                <span>
+                  提示：输入框已调整为新要求【{draftInstructionInput}】，当前候选稿系基于上一轮要求【
+                  {pendingCandidate.instructionPrompt}】生成。如需按新要求起草，可点击“生成整稿候选”。
+                </span>
+              </div>
+            )}
           </div>
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => setPendingCandidate(null)}
-              className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs hover:bg-slate-50 cursor-pointer"
-            >
-              放弃候选稿
-            </button>
-            <button
-              onClick={handleAcceptCandidate}
-              className="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-semibold shadow-xs cursor-pointer"
-            >
-              采纳并替换为新版本
-            </button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
+
 
       {/* 3-Column Document Workspace */}
       <div className="grid grid-cols-12 gap-4 items-start min-h-[640px]">
@@ -1188,7 +1443,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 </p>
               </div>
               <button
-                onClick={handleStartGenerate}
+                onClick={() => handleStartGenerate()}
                 disabled={isGenerating}
                 className="px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
               >
@@ -1641,9 +1896,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 {/* TAB 2: 材料依据 */}
                 {inspectorTab === 'material_evidence' && (
                   <div className="space-y-3">
-                    <span className="text-[11px] font-bold text-slate-700 block">
-                      第{activeBlock.order}段关联事实与出处：
-                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-slate-700 block">
+                        第 {activeBlock.order} 段关联事实与出处：
+                      </span>
+                      {inspectingFactId && (
+                        <button
+                          onClick={() => setInspectingFactId(null)}
+                          className="text-[10px] text-blue-600 hover:text-blue-800 cursor-pointer"
+                        >
+                          清除聚焦
+                        </button>
+                      )}
+                    </div>
 
                     {activeBlock.referencedFactIds.length > 0 ? (
                       activeBlock.referencedFactIds.map((factId) => {
@@ -1651,59 +1916,100 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                         const snippet = task.snippets.find((s) => s.id === fact?.primaryEvidenceId);
                         if (!fact) return null;
 
+                        const isFocused = inspectingFactId === fact.id;
+
                         // Check frozen snapshot value if exists
                         const snapItem = currentDraft?.snapshotMetadata?.factSnapshot?.items?.find(
                           (item) => item.factId === fact.id
                         );
-                        const hasSnapshotDiff = snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit);
+                        const hasSnapshotDiff =
+                          snapItem &&
+                          (snapItem.value !== fact.value || snapItem.unit !== fact.unit);
+
+                        const adoptedVal = snapItem
+                          ? `${snapItem.value} ${snapItem.unit}`
+                          : `${fact.value} ${fact.unit}`;
+                        const currentVal = `${fact.value} ${fact.unit}`;
 
                         return (
                           <div
                             key={fact.id}
-                            className="p-2.5 bg-slate-50 rounded-md border border-slate-200 text-xs space-y-1.5"
+                            className={`p-3 rounded-lg border text-xs space-y-2 transition-all ${
+                              isFocused
+                                ? 'bg-blue-50/70 border-blue-400 ring-2 ring-blue-100 shadow-2xs'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
                           >
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-slate-900">{fact.metric}</span>
                               <span
-                                className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
                                   fact.status === 'confirmed'
                                     ? 'bg-emerald-100 text-emerald-800'
                                     : 'bg-amber-100 text-amber-800'
                                 }`}
                               >
-                                {fact.status === 'confirmed' ? '已核准' : '待确认'}
+                                {fact.status === 'confirmed' ? '当前已核准' : '待确认'}
                               </span>
                             </div>
 
-                            <div className="text-[11px] text-blue-700 font-semibold flex items-center justify-between">
-                              <span>当前事实值：{fact.value} {fact.unit}</span>
-                              <span className="text-[10px] text-slate-400 font-normal">{fact.period}</span>
+                            {/* Comparison of Adopted value vs Current confirmed value */}
+                            <div className="grid grid-cols-2 gap-1.5 text-[11px] bg-white p-2 rounded border border-slate-200/80">
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">
+                                  {isCurrentDraftImmutable ? '稿件冻结采用值' : '当前稿采用值'}
+                                </span>
+                                <span className="font-bold text-slate-900 font-mono">
+                                  {adoptedVal}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-400 block">任务最新核准值</span>
+                                <span className="font-bold text-blue-800 font-mono">
+                                  {currentVal}
+                                </span>
+                              </div>
                             </div>
 
-                            {/* Frozen snapshot check comparison */}
-                            {snapItem && (
-                              <div className="text-[10px] text-slate-500 bg-white p-1 rounded border border-slate-100">
-                                <span>稿件冻结依据：{snapItem.value} {snapItem.unit}</span>
-                                {hasSnapshotDiff && (
-                                  <span className="text-rose-600 font-bold ml-1">（与当前事实存在版本差异！）</span>
-                                )}
+                            {/* Version discrepancy notice */}
+                            {hasSnapshotDiff && (
+                              <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
+                                <div className="font-semibold flex items-center gap-1">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                  <span>版本差异提示</span>
+                                </div>
+                                <p className="text-[10px] text-amber-800 leading-normal">
+                                  {isCurrentDraftImmutable
+                                    ? `本稿属于历史只读快照，按规则优先保持当时冻结依据（${adoptedVal}），当前最新核准值不回填旧稿。`
+                                    : `当前工作稿采用值为【${adoptedVal}】，材料库最新核准为【${currentVal}】。如需更新正文，可重新生成整稿候选或通过段落修改建议更新。`}
+                                </p>
                               </div>
                             )}
 
-                            {fact.metricScope && (
-                              <div className="text-[10px] text-slate-500">
-                                口径：{fact.metricScope}
-                              </div>
-                            )}
+                            <div className="text-[11px] text-slate-500 space-y-0.5 pt-0.5">
+                              <div>统计期间：<strong className="text-slate-700 font-medium">{fact.period}</strong></div>
+                              {fact.metricScope && (
+                                <div>统计口径：<strong className="text-slate-700 font-medium">{fact.metricScope}</strong></div>
+                              )}
+                            </div>
 
-                            {snippet && (
-                              <button
-                                onClick={() => onViewSnippet(snippet)}
-                                className="text-[11px] text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 cursor-pointer pt-0.5"
-                              >
-                                <span>来源：{snippet.docName} ({snippet.location})</span>
-                                <ExternalLink className="w-2.5 h-2.5" />
-                              </button>
+                            {snippet ? (
+                              <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
+                                <span className="text-[10px] text-slate-500">
+                                  出处：{snippet.docName} ({snippet.location || '段落索引'})
+                                </span>
+                                <button
+                                  onClick={() => onViewSnippet(snippet)}
+                                  className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>在抽屉中核验全文</span>
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-amber-800 italic pt-1 border-t border-slate-200/60">
+                                材料库未关联特定摘录片段（出处未登记或台账录入，无纸质页码）
+                              </div>
                             )}
                           </div>
                         );
@@ -1743,6 +2049,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     </div>
                   </div>
                 )}
+
               </div>
             ) : (
               <p className="text-xs text-slate-400 text-center py-8">点击文稿中的段落以查看依据与修改建议</p>
@@ -1871,6 +2178,32 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </div>
         </div>
       )}
+
+      {/* Candidate Comparison & Difference Modal */}
+      <CandidateComparisonModal
+        isOpen={showCandidateComparisonModal}
+        onClose={() => setShowCandidateComparisonModal(false)}
+        task={task}
+        currentDraft={currentDraft}
+        candidate={pendingCandidate}
+        onAccept={() => {
+          handleAcceptCandidate();
+          setShowCandidateComparisonModal(false);
+        }}
+        onDiscard={() => {
+          setPendingCandidate(null);
+          setShowCandidateComparisonModal(false);
+        }}
+        onRegenerate={() => {
+          setShowCandidateComparisonModal(false);
+          handleStartGenerate(draftInstructionInput);
+        }}
+        activeRole={activeRole}
+        onViewSnippet={onViewSnippet}
+        currentInstructionInput={draftInstructionInput}
+        onInspectFact={handleInspectFact}
+      />
     </div>
   );
 };
+
