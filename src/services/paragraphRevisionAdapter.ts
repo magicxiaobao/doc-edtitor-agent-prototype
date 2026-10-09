@@ -3,7 +3,8 @@ import {
   ParagraphBlock, 
   DraftVersion, 
   RevisionAction, 
-  RevisionSuggestion 
+  RevisionSuggestion,
+  ReviewComment
 } from '../types';
 import { generateParagraphRevision } from './mockDraftService';
 
@@ -17,6 +18,7 @@ export interface RevisionAsyncRequest {
   signal?: AbortSignal;
   simulateFailure?: boolean;
   delayMs?: number;
+  sourceComment?: ReviewComment;
 }
 
 /**
@@ -37,6 +39,7 @@ export async function requestParagraphRevisionAsync(
     signal,
     simulateFailure = false,
     delayMs = 350,
+    sourceComment,
   } = req;
 
   // Immediate check if already aborted
@@ -81,6 +84,7 @@ export async function requestParagraphRevisionAsync(
       customPrompt,
       task,
       currentDraft,
+      sourceComment,
     }
   );
 

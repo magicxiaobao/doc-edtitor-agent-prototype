@@ -9,7 +9,9 @@ import {
   SnapshotMetadata, 
   DraftCandidate,
   RevisionAction, 
-  RevisionSuggestion 
+  RevisionSuggestion,
+  ReviewComment,
+  ReviewCommentStatus
 } from '../../types';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -29,7 +31,10 @@ import {
   applyDraftContentChange, 
   computeDraftBlocksHash, 
   validateCandidateAcceptance, 
-  acceptDraftCandidate 
+  acceptDraftCandidate,
+  createDraftSnapshot,
+  restoreDraftVersion,
+  submitDraftForReview
 } from '../../services/draftLifecycleService';
 import { 
   computeTextDiff 
@@ -39,7 +44,14 @@ import {
 } from '../../services/storageService';
 import { 
   isValidAuthenticCase, 
-  getAuthenticCaseCandidates 
+  getAuthenticCaseCandidates,
+  getReviewCommentLocation,
+  implementReviewCommentWithText,
+  updateReviewCommentDecision,
+  rebindReviewCommentTargetBlock,
+  generateCoordinationDiff,
+  applyCoordinationDecision,
+  findAuthenticCaseSnippet
 } from '../../services/reviewCoordinationService';
 import { 
   PenTool, 
@@ -63,11 +75,17 @@ import {
   AlertTriangle, 
   CornerDownRight, 
   Tag, 
-  Lock,
-  Layers,
-  ChevronDown,
-  FileDiff,
-  Info
+  Lock, 
+  Layers, 
+  ChevronDown, 
+  FileDiff, 
+  Info,
+  MessageSquare,
+  Send,
+  UserCheck,
+  MessageCircle,
+  HelpCircle,
+  XCircle
 } from 'lucide-react';
 
 interface DraftingStageProps {
@@ -94,8 +112,37 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [showLeftNav, setShowLeftNav] = useState(true);
   const [showRightInspector, setShowRightInspector] = useState(true);
 
-  // Inspector tab: 'ai_suggestions' | 'material_evidence'
-  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'material_evidence'>('ai_suggestions');
+  // Inspector tab: 'ai_suggestions' | 'review_comments' | 'material_evidence'
+  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>('ai_suggestions');
+
+  // Review comments filtering and modal state
+  const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
+  const [commentReviewerFilter, setCommentReviewerFilter] = useState<'all' | '审阅乙' | '审阅丁'>('all');
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+
+  // Manual implement comment modal
+  const [implementingComment, setImplementingComment] = useState<ReviewComment | null>(null);
+  const [implBlockContent, setImplBlockContent] = useState<string>('');
+  const [implAuthorReply, setImplAuthorReply] = useState<string>('');
+
+  // Reject comment modal
+  const [rejectingComment, setRejectingComment] = useState<ReviewComment | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
+
+  // Discuss comment modal
+  const [discussingComment, setDiscussingComment] = useState<ReviewComment | null>(null);
+  const [discussNote, setDiscussNote] = useState<string>('');
+
+  // Re-bind comment block modal
+  const [reboundingComment, setReboundingComment] = useState<ReviewComment | null>(null);
+  const [reboundBlockId, setReboundBlockId] = useState<string>('');
+
+  // Contradiction resolution panel
+  const [showContradictionModal, setShowContradictionModal] = useState(false);
+  const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
+  const [strategyReason, setStrategyReason] = useState(
+    '综合两位审阅领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研代表性成效，控制全篇在2500字左右。'
+  );
 
   // Selected block for editing / inspection
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -131,6 +178,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     block: ParagraphBlock;
     action: RevisionAction;
     customPrompt?: string;
+    sourceComment?: ReviewComment;
   } | null>(null);
 
   // Manual Version Save Modal
@@ -243,6 +291,21 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return false;
     });
   });
+
+  // Active review comments associated with current draft:
+  // If viewing historical snapshot or finalized draft, read frozen review comments; otherwise read task.reviewComments
+  const activeReviewComments: ReviewComment[] =
+    isCurrentDraftImmutable && currentDraft?.frozenReviewComments
+      ? currentDraft.frozenReviewComments
+      : task.reviewComments;
+
+  const totalCommentsCount = activeReviewComments.length;
+  const pendingCommentsCount = activeReviewComments.filter((c) => c.status === 'pending').length;
+  const acceptedPendingCount = activeReviewComments.filter((c) => c.status === 'accepted_pending_implementation').length;
+  const implementedCount = activeReviewComments.filter((c) => c.status === 'implemented').length;
+  const needDiscussionCount = activeReviewComments.filter((c) => c.status === 'need_discussion').length;
+  const rejectedCount = activeReviewComments.filter((c) => c.status === 'rejected').length;
+  const pendingOrAcceptedCommentsCount = pendingCommentsCount + acceptedPendingCount + needDiscussionCount;
 
   // Handle Generate / Regenerate Whole Draft
   const handleStartGenerate = (promptToUse?: string) => {
@@ -480,7 +543,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const executeRevisionRequest = async (
     targetBlock: ParagraphBlock,
     action: RevisionAction,
-    customPrompt?: string
+    customPrompt?: string,
+    sourceComment?: ReviewComment
   ) => {
     if (!currentDraft) return;
 
@@ -496,6 +560,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       block: targetBlock,
       action,
       customPrompt,
+      sourceComment,
     };
 
     const runId = `REV-RUN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -512,6 +577,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         block: targetBlock,
         action,
         customPrompt,
+        sourceComment,
         task,
         currentDraft,
         runId,
@@ -569,8 +635,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Retry failed revision request
   const handleRetryRevision = () => {
     if (lastRevisionRequestRef.current) {
-      const { block, action, customPrompt } = lastRevisionRequestRef.current;
-      executeRevisionRequest(block, action, customPrompt);
+      const { block, action, customPrompt, sourceComment } = lastRevisionRequestRef.current;
+      executeRevisionRequest(block, action, customPrompt, sourceComment);
     }
   };
 
@@ -582,7 +648,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       alert('未找到原目标段落，无法重新生成。');
       return;
     }
-    executeRevisionRequest(targetBlock, revisionSuggestion.action, revisionSuggestion.customPrompt);
+    const matchingComment = revisionSuggestion.sourceCommentId
+      ? task.reviewComments.find((c) => c.id === revisionSuggestion.sourceCommentId)
+      : undefined;
+    executeRevisionRequest(targetBlock, revisionSuggestion.action, revisionSuggestion.customPrompt, matchingComment);
   };
 
   // Adopt revision into target block
@@ -646,9 +715,31 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         actionName,
         activeRole
       );
+
+      // Rule: If revision was generated from a review comment, update ONLY this comment to implemented!
+      let updatedComments = updatedTask.reviewComments;
+      if (revisionSuggestion.sourceCommentId) {
+        const commentId = revisionSuggestion.sourceCommentId;
+        updatedComments = updatedTask.reviewComments.map((cmt) => {
+          if (cmt.id === commentId) {
+            return {
+              ...cmt,
+              status: 'implemented' as const,
+              authorReply: `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`,
+              decisionReason: revisionSuggestion.diffExplanation,
+              resolutionType: 'text_modified' as const,
+              implementationDraftId: workingDraft.id,
+              implementationBlockId: targetBlock.id,
+            };
+          }
+          return cmt;
+        });
+      }
+
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
+        reviewComments: updatedComments,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -694,75 +785,394 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
   };
 
-  // Save version snapshot
-  const handleSaveVersion = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentDraft) return;
-
+  // Generate revision for review comment
+  const handleGenerateRevisionFromComment = (cmt: ReviewComment) => {
     const perm = checkPermission(activeRole, 'edit_draft');
     if (!perm.allowed) {
-      alert(perm.reason || '当前身份无权手动保存版本快照');
+      alert(perm.reason || '权限受限：仅主笔甲可根据意见生成修改建议');
       return;
     }
 
-    const snapshotVersion: DraftVersion = {
-      id: `DRAFT-${Date.now()}`,
-      versionNumber: `v1.${task.drafts.length} (${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })})`,
-      createdAt: new Date().toISOString(),
-      author: activeRole,
-      summary: versionSummary.trim() || '主笔手动保存的只读稿件快照',
-      blocks: JSON.parse(JSON.stringify(currentDraft.blocks)),
-      isFinal: false,
-      isHistoricalSnapshot: true, // Read-only immutable
-      isWorkingDraft: false,      // Not a working draft
-      snapshotMetadata: currentDraft.snapshotMetadata,
-      auditRecords: currentDraft.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
-      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])), // 冻结保存时刻的审阅意见快照
-    };
+    if (!currentDraft) return;
+    const loc = getReviewCommentLocation(cmt, currentDraft);
+    if (!loc.isLocated || !loc.targetBlock) {
+      alert(loc.warning || '该意见原目标段落已在正文中删除或合并，定位失效，请先点击【重新指定目标段落】！');
+      return;
+    }
 
-    onUpdateTask({
-      drafts: [snapshotVersion, ...task.drafts],
-      currentDraftId: snapshotVersion.id,
-    });
-
-    setShowSaveVersionModal(false);
-    setVersionSummary('');
+    setSelectedBlockId(loc.targetBlock.id);
+    executeRevisionRequest(
+      loc.targetBlock,
+      'custom',
+      cmt.suggestedChange || cmt.content,
+      cmt
+    );
   };
 
-  // Restore history draft (creates new working draft with deep-copied snapshot metadata)
-  const handleRestoreDraft = (version: DraftVersion) => {
-    const perm = checkPermission(activeRole, 'restore_version');
+  // Accept comment decision only (marks as accepted_pending_implementation, does not mark implemented!)
+  const handleAcceptCommentDecisionOnly = (cmt: ReviewComment) => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
-      alert(perm.reason || '当前身份无权恢复历史版本');
+      alert(perm.reason || '权限受限：仅主笔甲可处理审阅意见');
+      return;
+    }
+
+    const note = prompt(
+      '请输入采纳处理决定说明（此操作仅记录决定为【决定采纳，待落实】，在正文中实际修改前不会标记为已落实）：',
+      cmt.authorReply || '主笔决定采纳此意见方向，待后续统筹落实篇幅与正文'
+    );
+    if (note === null) return;
+
+    try {
+      const { updatedTask } = updateReviewCommentDecision(
+        task,
+        cmt.id,
+        'accepted_pending_implementation',
+        note.trim(),
+        activeRole
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
+    } catch (err: any) {
+      alert(err.message || '记录采纳决定失败');
+    }
+  };
+
+  // Open direct implement modal
+  const handleOpenDirectImplementModal = (cmt: ReviewComment) => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可在正文中落实审阅意见');
+      return;
+    }
+
+    const loc = getReviewCommentLocation(cmt, currentDraft);
+    if (!loc.isLocated || !loc.targetBlock) {
+      alert(loc.warning || '该意见原目标段落已在正文中删除或合并，请先重新指定目标段落！');
+      return;
+    }
+
+    setImplementingComment(cmt);
+    setImplBlockContent(cmt.suggestedChange || loc.targetBlock.content);
+    setImplAuthorReply(`采纳【${cmt.reviewer}】意见，已在第${loc.targetBlock.order}段完成正文落实。`);
+  };
+
+  const handleConfirmDirectImplement = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!implementingComment || !currentDraft) return;
+
+    try {
+      const { updatedTask, workingDraft } = implementReviewCommentWithText(
+        task,
+        implementingComment.id,
+        currentDraft.id,
+        implBlockContent,
+        implAuthorReply,
+        activeRole
+      );
+
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        reviewComments: updatedTask.reviewComments,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+
+      setImplementingComment(null);
+    } catch (err: any) {
+      alert(err.message || '落实修改失败');
+    }
+  };
+
+  // Open reject modal
+  const handleOpenRejectModal = (cmt: ReviewComment) => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可处理审阅意见');
+      return;
+    }
+    setRejectingComment(cmt);
+    setRejectReason(cmt.decisionReason || '');
+  };
+
+  const handleConfirmReject = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingComment) return;
+    if (!rejectReason.trim()) {
+      alert('拒绝审阅意见必须填写具体理由说明！');
       return;
     }
 
     try {
-      const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作草稿·恢复自${version.versionNumber})`;
-      const restoredDraft: DraftVersion = {
-        id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-        versionNumber: nextVersionNumber,
-        createdAt: new Date().toISOString(),
-        author: activeRole,
-        summary: `基于历史版本【${version.versionNumber}】恢复生成的新工作草稿`,
-        blocks: JSON.parse(JSON.stringify(version.blocks)),
-        isFinal: false,
-        isHistoricalSnapshot: false,
-        isWorkingDraft: true,
-        sourceDraftId: version.id, // 明确记录恢复来源ID
-        snapshotMetadata: version.snapshotMetadata ? JSON.parse(JSON.stringify(version.snapshotMetadata)) : undefined, // 完整深拷贝历史依据快照
-        auditRecords: version.auditRecords ? JSON.parse(JSON.stringify(version.auditRecords)) : [],
-      };
+      const { updatedTask } = updateReviewCommentDecision(
+        task,
+        rejectingComment.id,
+        'rejected',
+        rejectReason.trim(),
+        activeRole
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
+      setRejectingComment(null);
+    } catch (err: any) {
+      alert(err.message || '拒绝操作失败');
+    }
+  };
+
+  // Open discuss modal
+  const handleOpenDiscussModal = (cmt: ReviewComment) => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可处理审阅意见');
+      return;
+    }
+    setDiscussingComment(cmt);
+    setDiscussNote(cmt.authorReply || '');
+  };
+
+  const handleConfirmDiscuss = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!discussingComment) return;
+
+    try {
+      const { updatedTask } = updateReviewCommentDecision(
+        task,
+        discussingComment.id,
+        'need_discussion',
+        discussNote.trim() || '需进一步沟通讨论',
+        activeRole
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
+      setDiscussingComment(null);
+    } catch (err: any) {
+      alert(err.message || '操作失败');
+    }
+  };
+
+  // Open rebind modal
+  const handleOpenRebindModal = (cmt: ReviewComment) => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可重新指定意见目标段落');
+      return;
+    }
+    setReboundingComment(cmt);
+    setReboundBlockId(currentDraft?.blocks[0]?.id || '');
+  };
+
+  const handleConfirmRebind = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reboundingComment || !reboundBlockId) return;
+
+    try {
+      const { updatedTask } = rebindReviewCommentTargetBlock(
+        task,
+        reboundingComment.id,
+        reboundBlockId,
+        activeRole
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
+      setReboundingComment(null);
+    } catch (err: any) {
+      alert(err.message || '重新指定段落失败');
+    }
+  };
+
+  // Resolve contradiction between CMT-01 and CMT-02
+  const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可裁决审阅矛盾意见');
+      return;
+    }
+
+    if (!currentDraft) return;
+
+    const mappedStrategy = 
+      selectedStrategy === 'compress_priority' ? ('compress' as const) :
+      selectedStrategy === 'case_priority' ? ('expand_case' as const) : ('balanced' as const);
+
+    const diff = generateCoordinationDiff(task, currentDraft, mappedStrategy);
+
+    if (mode === 'strategy_only') {
+      const updatedComments = task.reviewComments.map((c) => {
+        if (c.id === 'CMT-01' || c.id === 'CMT-02') {
+          return {
+            ...c,
+            status: 'accepted_pending_implementation' as const,
+            authorReply: `【主笔协调裁决策略·待落实】：${diff.strategyExplanation}`,
+            decisionReason: strategyReason.trim() || diff.strategyExplanation,
+            resolutionType: 'strategy_decided' as const,
+          };
+        }
+        return c;
+      });
+
+      onUpdateTask({ reviewComments: updatedComments });
+      setShowContradictionModal(false);
+      return;
+    }
+
+    // mode === 'implement_now'
+    if (diff.diffPreview.length === 0) {
+      alert('未检测到正文文本差异（零差异），不能标记审阅意见为已落实！');
+      return;
+    }
+
+    try {
+      const { updatedTask, workingDraft } = applyCoordinationDecision(
+        task,
+        currentDraft.id,
+        diff,
+        activeRole,
+        ['CMT-01', 'CMT-02']
+      );
 
       onUpdateTask({
-        drafts: [restoredDraft, ...task.drafts],
-        currentDraftId: restoredDraft.id,
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        reviewComments: updatedTask.reviewComments,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+
+      setShowContradictionModal(false);
+    } catch (err: any) {
+      alert(err.message || '落实审阅协调失败');
+    }
+  };
+
+  // Submit draft for review click
+  const handleSubmitDraftForReviewClick = () => {
+    const perm = checkPermission(activeRole, 'edit_draft');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可提交审阅');
+      return;
+    }
+    if (!currentDraft) return;
+
+    if (!window.confirm(`确认将当前版本【${currentDraft.versionNumber}】提交审阅吗？系统将自动冻结只读审阅基准快照，任务状态将变更为“审阅中”。`)) {
+      return;
+    }
+
+    try {
+      const { updatedTask } = submitDraftForReview(
+        task,
+        currentDraft.id,
+        activeRole,
+        true
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentStage: 'review',
+        status: '审阅中',
+      });
+      if (onSelectStage) {
+        onSelectStage('review');
+      } else {
+        onProceedToNextStage();
+      }
+    } catch (err: any) {
+      alert(err.message || '提交审阅失败');
+    }
+  };
+
+  // Save version snapshot using unified helper
+  const handleSaveVersion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentDraft) return;
+
+    try {
+      const { updatedTask } = createDraftSnapshot(
+        task,
+        currentDraft.id,
+        versionSummary,
+        activeRole
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: updatedTask.drafts[0].id,
+      });
+
+      setShowSaveVersionModal(false);
+      setVersionSummary('');
+    } catch (err: any) {
+      alert(err.message || '保存版本快照失败');
+    }
+  };
+
+  // Restore history draft using unified helper
+  const handleRestoreDraft = (version: DraftVersion) => {
+    try {
+      const { updatedTask, workingDraft } = restoreDraftVersion(
+        task,
+        version.id,
+        activeRole
+      );
+
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
         isFinalized: false,
         status: '起草中',
       });
+
       setShowVersionHistory(false);
     } catch (err: any) {
-      alert(err.message || '恢复历史版本失败');
+      alert(err.message || '恢复版本失败');
+    }
+  };
+
+  const mappedStrategy = 
+    selectedStrategy === 'compress_priority' ? ('compress' as const) :
+    selectedStrategy === 'case_priority' ? ('expand_case' as const) : ('balanced' as const);
+
+  const currentCoordinationDiff = currentDraft ? generateCoordinationDiff(task, currentDraft, mappedStrategy) : null;
+
+  const handleApplyCoordination = (mode: 'strategy_only' | 'implement_now') => {
+    const perm = checkPermission(activeRole, 'resolve_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅主笔甲可协调裁决篇幅冲突');
+      return;
+    }
+
+    if (!currentDraft || !currentCoordinationDiff) return;
+
+    if (mode === 'strategy_only') {
+      const updatedComments = task.reviewComments.map((c) => {
+        if (c.id === 'CMT-01' || c.id === 'CMT-02') {
+          return {
+            ...c,
+            status: 'accepted_pending_implementation' as const,
+            authorReply: `【主笔协调裁决策略·待落实】：${currentCoordinationDiff.strategyExplanation}`,
+            decisionReason: strategyReason.trim() || currentCoordinationDiff.strategyExplanation,
+            resolutionType: 'strategy_decided' as const,
+          };
+        }
+        return c;
+      });
+      onUpdateTask({ reviewComments: updatedComments });
+      setShowContradictionModal(false);
+      return;
+    }
+
+    try {
+      const { updatedTask, workingDraft } = applyCoordinationDecision(
+        task,
+        currentDraft.id,
+        currentCoordinationDiff,
+        activeRole,
+        ['CMT-01', 'CMT-02']
+      );
+      onUpdateTask({
+        drafts: updatedTask.drafts,
+        currentDraftId: workingDraft.id,
+        reviewComments: updatedTask.reviewComments,
+        isFinalized: updatedTask.isFinalized,
+        status: updatedTask.status,
+      });
+      setShowContradictionModal(false);
+    } catch (err: any) {
+      alert(err.message || '落实审阅协调失败');
     }
   };
 
@@ -1419,6 +1829,38 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 </button>
                               );
                             })}
+
+                            {/* Review comments targeting this block */}
+                            {task.reviewComments
+                              .filter((c) => c.type === 'paragraph' && c.targetBlockId === block.id)
+                              .map((c) => (
+                                <button
+                                  key={c.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedBlockId(block.id);
+                                    setInspectorTab('review_comments');
+                                    setSelectedCommentId(c.id);
+                                  }}
+                                  className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium cursor-pointer transition-colors ${
+                                    c.status === 'implemented'
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                      : c.status === 'accepted_pending_implementation'
+                                      ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                      : c.status === 'rejected'
+                                      ? 'bg-slate-200 text-slate-700'
+                                      : c.status === 'need_discussion'
+                                      ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  }`}
+                                  title={`点击定位查看【${c.reviewer}】审阅意见`}
+                                >
+                                  <MessageSquare className="w-2.5 h-2.5" />
+                                  <span>
+                                    {c.reviewer}：{c.status === 'implemented' ? '已落实' : c.status === 'accepted_pending_implementation' ? '待落实' : c.status === 'rejected' ? '已拒绝' : c.status === 'need_discussion' ? '待沟通' : '待处理'}
+                                  </span>
+                                </button>
+                              ))}
                           </div>
 
                           <div className="flex items-center gap-2">
@@ -1471,6 +1913,21 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   AI修改建议
                 </button>
                 <button
+                  onClick={() => setInspectorTab('review_comments')}
+                  className={`px-2.5 py-1 rounded transition-colors cursor-pointer flex items-center gap-1 ${
+                    inspectorTab === 'review_comments'
+                      ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>审阅意见</span>
+                  {task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length > 0 && (
+                    <span className="bg-amber-100 text-amber-800 px-1 py-0.2 rounded-full text-[10px] font-bold">
+                      {task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length}
+                    </span>
+                  )}
+                </button>
+                <button
                   onClick={() => setInspectorTab('material_evidence')}
                   className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${
                     inspectorTab === 'material_evidence'
@@ -1492,8 +1949,242 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               </button>
             </div>
 
-            {/* Currently Focused Block Context */}
-            {activeBlock ? (
+            {/* Inspector Body: Review Comments Tab OR Paragraph Inspection (AI Suggestions / Evidence) */}
+            {inspectorTab === 'review_comments' ? (
+              <div className="space-y-3">
+                {/* Review Comments Header & Conflict Banner */}
+                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-xs text-slate-800">全部审阅意见</span>
+                    <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono font-medium">
+                      {task.reviewComments.length}
+                    </span>
+                  </div>
+                  {onSelectStage && (
+                    <button
+                      onClick={() => onSelectStage('review')}
+                      className="text-[10px] text-blue-700 hover:underline flex items-center gap-0.5 cursor-pointer font-medium"
+                    >
+                      <span>审阅全景视图</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Contradictory comments warning banner */}
+                {task.reviewComments.some((c) => (c.id === 'CMT-01' || c.id === 'CMT-02') && (c.status === 'pending' || c.status === 'accepted_pending_implementation')) && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-1.5">
+                    <div className="flex items-center gap-1 font-bold text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>检测到相互矛盾的审阅篇幅要求！</span>
+                    </div>
+                    <p className="text-[10px] text-amber-800 leading-normal">
+                      审阅乙提出“压缩到2000字以内”；审阅丁提出“增加两个详细案例”。
+                    </p>
+                    <button
+                      onClick={() => setShowContradictionModal(true)}
+                      className="w-full py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold cursor-pointer"
+                    >
+                      主笔协调裁决此冲突
+                    </button>
+                  </div>
+                )}
+
+                {/* Filter Controls */}
+                <div className="grid grid-cols-2 gap-1.5 text-xs">
+                  <select
+                    value={commentStatusFilter}
+                    onChange={(e) => setCommentStatusFilter(e.target.value as any)}
+                    className="border border-slate-300 rounded px-1.5 py-1 bg-white text-slate-700 text-[11px]"
+                  >
+                    <option value="all">全部状态 ({task.reviewComments.length})</option>
+                    <option value="pending">待处理 ({task.reviewComments.filter((c) => c.status === 'pending').length})</option>
+                    <option value="accepted_pending_implementation">决定采纳·待落实 ({task.reviewComments.filter((c) => c.status === 'accepted_pending_implementation').length})</option>
+                    <option value="implemented">已落实 ({task.reviewComments.filter((c) => c.status === 'implemented').length})</option>
+                    <option value="need_discussion">待沟通 ({task.reviewComments.filter((c) => c.status === 'need_discussion').length})</option>
+                    <option value="rejected">已拒绝 ({task.reviewComments.filter((c) => c.status === 'rejected').length})</option>
+                  </select>
+
+                  <select
+                    value={commentReviewerFilter}
+                    onChange={(e) => setCommentReviewerFilter(e.target.value as any)}
+                    className="border border-slate-300 rounded px-1.5 py-1 bg-white text-slate-700 text-[11px]"
+                  >
+                    <option value="all">全部审阅人</option>
+                    <option value="审阅乙">审阅乙</option>
+                    <option value="审阅丁">审阅丁</option>
+                  </select>
+                </div>
+
+                {/* Comment Cards List */}
+                <div className="space-y-2.5">
+                  {task.reviewComments
+                    .filter((c) => {
+                      if (commentStatusFilter !== 'all' && c.status !== commentStatusFilter) return false;
+                      if (commentReviewerFilter !== 'all' && c.reviewer !== commentReviewerFilter) return false;
+                      return true;
+                    })
+                    .map((cmt) => {
+                      const loc = getReviewCommentLocation(cmt, currentDraft);
+                      const isLocationOutdated = !loc.isLocated || !loc.targetBlock || Boolean(loc.warning);
+                      const isSelectedComment = selectedCommentId === cmt.id;
+
+                      return (
+                        <div
+                          key={cmt.id}
+                          className={`p-3 rounded-lg border text-xs space-y-2 transition-all ${
+                            isSelectedComment
+                              ? 'bg-blue-50/50 border-blue-400 ring-2 ring-blue-100'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900">{cmt.reviewer}</span>
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 font-medium">
+                                {cmt.type === 'overall' ? '全局意见' : `第${cmt.targetBlockOrder || '?'}段批注`}
+                              </span>
+                            </div>
+
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                cmt.status === 'implemented'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : cmt.status === 'accepted_pending_implementation'
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                  : cmt.status === 'rejected'
+                                  ? 'bg-slate-200 text-slate-700'
+                                  : cmt.status === 'need_discussion'
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                              }`}
+                            >
+                              {cmt.status === 'implemented'
+                                ? '已落实'
+                                : cmt.status === 'accepted_pending_implementation'
+                                ? '决定采纳·待落实'
+                                : cmt.status === 'rejected'
+                                ? '已拒绝'
+                                : cmt.status === 'need_discussion'
+                                ? '待沟通'
+                                : '待处理'}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-800 leading-relaxed font-medium">{cmt.content}</p>
+
+                          {cmt.suggestedChange && (
+                            <div className="p-1.5 bg-white rounded border border-blue-200 text-[10px] text-blue-900">
+                              <span className="font-semibold block text-blue-600">建议修改方向：</span>
+                              <span>{cmt.suggestedChange}</span>
+                            </div>
+                          )}
+
+                          {/* Location & Warning Section */}
+                          {cmt.type === 'paragraph' && (
+                            <>
+                              {isLocationOutdated ? (
+                                <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[10px] text-amber-900 space-y-1">
+                                  <div className="flex items-center gap-1 font-bold text-amber-800">
+                                    <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>定位需复核：原目标段落已变动或已删除</span>
+                                  </div>
+                                  {cmt.baseParagraphText && (
+                                    <p className="text-slate-600 italic">
+                                      提出时原句：“{cmt.baseParagraphText.slice(0, 45)}...”
+                                    </p>
+                                  )}
+                                  {canUserEdit && (
+                                    <button
+                                      onClick={() => handleOpenRebindModal(cmt)}
+                                      className="px-2 py-0.5 bg-white border border-amber-300 hover:bg-amber-100 rounded text-[10px] font-bold text-amber-900 cursor-pointer"
+                                    >
+                                      重新指定目标段落
+                                    </button>
+                                  )}
+                                </div>
+                              ) : loc.targetBlock ? (
+                                <div className="p-1.5 bg-white rounded border border-slate-200 text-[10px] text-slate-600 flex items-center justify-between">
+                                  <span className="truncate pr-1">
+                                    对应第{loc.targetBlock.order}段：“{loc.targetBlock.content.slice(0, 24)}...”
+                                  </span>
+                                  <button
+                                    onClick={() => handleJumpToTargetBlock(loc.targetBlock!.id)}
+                                    className="text-blue-700 hover:underline font-bold shrink-0 cursor-pointer"
+                                  >
+                                    定位段落
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+
+                          {/* Author reply record */}
+                          {cmt.authorReply && (
+                            <div className="p-1.5 bg-emerald-50 rounded border border-emerald-200 text-[10px] text-emerald-900 space-y-0.5">
+                              <div className="font-semibold flex items-center justify-between">
+                                <span>主笔处理说明：</span>
+                                {cmt.implementationDraftId && (
+                                  <span className="font-mono text-[9px] text-emerald-700">
+                                    {cmt.implementationDraftId}
+                                  </span>
+                                )}
+                              </div>
+                              <p>{cmt.authorReply}</p>
+                            </div>
+                          )}
+
+                          {/* Action Buttons for Author */}
+                          {canUserEdit && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
+                            <div className="pt-1.5 border-t border-slate-200/70 flex flex-wrap justify-end gap-1 text-[10px]">
+                              {loc.targetBlock && (
+                                <button
+                                  onClick={() => handleGenerateRevisionFromComment(cmt)}
+                                  className="px-2 py-0.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                                  title="在左侧正文中定位并生成AI修改建议"
+                                >
+                                  <Sparkles className="w-2.5 h-2.5" />
+                                  <span>生成修改建议</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => handleAcceptCommentDecisionOnly(cmt)}
+                                className="px-2 py-0.5 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded font-medium cursor-pointer"
+                                title="记录处理决定为【决定采纳，待落实】（不直接改写正文）"
+                              >
+                                决定采纳 (待落实)
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenDirectImplementModal(cmt)}
+                                className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-medium cursor-pointer"
+                                title="直接写入正文并生成新工作稿"
+                              >
+                                直接落实修改
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenRejectModal(cmt)}
+                                className="px-2 py-0.5 text-slate-600 hover:bg-slate-100 border border-slate-300 rounded cursor-pointer"
+                              >
+                                拒绝并说明
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenDiscussModal(cmt)}
+                                className="px-2 py-0.5 text-purple-700 hover:bg-purple-50 border border-purple-200 rounded cursor-pointer"
+                              >
+                                待沟通
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            ) : activeBlock ? (
               <div className="space-y-4">
                 {/* Paragraph Context Pill */}
                 <div className="p-2.5 bg-slate-50 rounded-md border border-slate-200/80 text-xs space-y-1">
@@ -2052,7 +2743,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
               </div>
             ) : (
-              <p className="text-xs text-slate-400 text-center py-8">点击文稿中的段落以查看依据与修改建议</p>
+              <div className="py-12 text-center space-y-2">
+                <FileText className="w-8 h-8 text-slate-300 mx-auto" />
+                <p className="text-xs text-slate-400">点击文稿中的段落以查看依据与修改建议</p>
+                <button
+                  onClick={() => setInspectorTab('review_comments')}
+                  className="px-3 py-1.5 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 rounded font-medium cursor-pointer"
+                >
+                  查看全部审阅意见 ({task.reviewComments.length})
+                </button>
+              </div>
             )}
           </div>
         ) : (
@@ -2203,6 +2903,392 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         currentInstructionInput={draftInstructionInput}
         onInspectFact={handleInspectFact}
       />
+
+      {/* 1. Direct Implement Comment Modal */}
+      {implementingComment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <Edit3 className="w-4 h-4 text-emerald-700" />
+                <span>落实审阅意见修改到正文</span>
+              </h3>
+              <button
+                onClick={() => setImplementingComment(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmDirectImplement} className="p-5 space-y-3.5 text-xs">
+              <div className="p-2.5 bg-blue-50/70 rounded border border-blue-200 space-y-1">
+                <div className="font-bold text-blue-900 flex items-center justify-between">
+                  <span>审阅意见（{implementingComment.reviewer}）</span>
+                  <span className="text-[10px] bg-blue-200 text-blue-800 px-1.5 py-0.2 rounded font-medium">
+                    {implementingComment.type === 'overall' ? '全局意见' : `第${implementingComment.targetBlockOrder || '?'}段`}
+                  </span>
+                </div>
+                <p className="text-slate-700">{implementingComment.content}</p>
+                {implementingComment.suggestedChange && (
+                  <div className="pt-1 text-[11px] text-blue-800 font-medium">
+                    建议方向：{implementingComment.suggestedChange}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">落实修改后的段落正文：</label>
+                <textarea
+                  rows={4}
+                  value={implBlockContent}
+                  onChange={(e) => setImplBlockContent(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded font-serif text-xs leading-relaxed focus:ring-1 focus:ring-emerald-600 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">主笔落实答复与说明：</label>
+                <input
+                  type="text"
+                  value={implAuthorReply}
+                  onChange={(e) => setImplAuthorReply(e.target.value)}
+                  placeholder="例如：主笔已核实修改第X段，并补充相关成效表述"
+                  className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-emerald-600 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setImplementingComment(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  确认写入正文并生成新工作稿
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Reject Comment Modal */}
+      {rejectingComment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <XCircle className="w-4 h-4 text-slate-600" />
+                <span>拒绝审阅意见并说明理由</span>
+              </h3>
+              <button
+                onClick={() => setRejectingComment(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmReject} className="p-5 space-y-3.5 text-xs">
+              <div className="p-2.5 bg-slate-100 rounded border border-slate-200 space-y-1">
+                <div className="font-bold text-slate-800">
+                  【{rejectingComment.reviewer}】提出的意见：
+                </div>
+                <p className="text-slate-600">{rejectingComment.content}</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">
+                  拒绝理由说明（必填，将随审阅记录归档存证）：
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="例如：经主笔核实，公文法定篇幅限制须优先保证上级发文规范，该部分表述暂不作扩展"
+                  className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRejectingComment(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  确认拒绝意见
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Discuss Comment Modal */}
+      {discussingComment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <MessageCircle className="w-4 h-4 text-purple-700" />
+                <span>标记审阅意见为待沟通讨论</span>
+              </h3>
+              <button
+                onClick={() => setDiscussingComment(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmDiscuss} className="p-5 space-y-3.5 text-xs">
+              <div className="p-2.5 bg-purple-50/70 rounded border border-purple-200 space-y-1">
+                <div className="font-bold text-purple-900">
+                  【{discussingComment.reviewer}】提出的意见：
+                </div>
+                <p className="text-slate-700">{discussingComment.content}</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">沟通要点与备忘说明：</label>
+                <textarea
+                  rows={3}
+                  value={discussNote}
+                  onChange={(e) => setDiscussNote(e.target.value)}
+                  placeholder="例如：口径表述涉及两部门交叉，拟于明日协调会与审阅领导当面确认后统一落实"
+                  className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-purple-500 focus:outline-hidden"
+                  required
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDiscussingComment(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  保存待沟通状态
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Rebind Comment Target Block Modal */}
+      {reboundingComment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <CornerDownRight className="w-4 h-4 text-blue-700" />
+                <span>重新指定审阅意见目标段落</span>
+              </h3>
+              <button
+                onClick={() => setReboundingComment(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmRebind} className="p-5 space-y-3.5 text-xs">
+              <div className="p-2.5 bg-amber-50 rounded border border-amber-200 space-y-1">
+                <div className="font-bold text-amber-900">
+                  【{reboundingComment.reviewer}】提出的意见：
+                </div>
+                <p className="text-slate-700">{reboundingComment.content}</p>
+                {reboundingComment.baseParagraphText && (
+                  <p className="text-[10px] text-slate-500 italic pt-1">
+                    提出时原句：“{reboundingComment.baseParagraphText.slice(0, 50)}...”
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">请选择当前文稿中的新目标段落：</label>
+                <select
+                  value={reboundBlockId}
+                  onChange={(e) => setReboundBlockId(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded text-xs bg-white focus:ring-1 focus:ring-blue-500"
+                >
+                  {currentDraft?.blocks.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      第{b.order}段 ({b.id}): {b.content.slice(0, 36)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReboundingComment(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  确认重新关联
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Contradiction Resolution Modal */}
+      {showContradictionModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-xl w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-amber-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-amber-900 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>主笔协调裁决审阅矛盾意见</span>
+              </h3>
+              <button
+                onClick={() => setShowContradictionModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2.5 bg-slate-50 rounded border border-slate-200 space-y-1">
+                  <div className="font-bold text-slate-800">审阅乙（分管领导）：</div>
+                  <p className="text-slate-600">“篇幅建议压缩到2000字以内，主要汇报面向领导，需精炼紧凑。”</p>
+                </div>
+                <div className="p-2.5 bg-slate-50 rounded border border-slate-200 space-y-1">
+                  <div className="font-bold text-slate-800">审阅丁（业务处长）：</div>
+                  <p className="text-slate-600">“第二部分成效偏薄弱，建议补充两个详细案例以丰富基层说服力。”</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="font-semibold text-slate-700 block">选择协调裁决策略：</label>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2 p-2.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strat"
+                      checked={selectedStrategy === 'balanced'}
+                      onChange={() => {
+                        setSelectedStrategy('balanced');
+                        setStrategyReason('综合两位领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研成效，控制全篇在2500字左右。');
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900">综合协调策略（推荐）</div>
+                      <div className="text-[11px] text-slate-500">压缩动员铺垫300字，同时以提炼式短句精炼补充代表性成效，兼顾紧凑与成效。</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2 p-2.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strat"
+                      checked={selectedStrategy === 'compress_priority'}
+                      onChange={() => {
+                        setSelectedStrategy('compress_priority');
+                        setStrategyReason('篇幅优先：严格执行篇幅压缩要求至2000字内，成效案例列入附件供参考。');
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900">篇幅优先策略</div>
+                      <div className="text-[11px] text-slate-500">优先响应审阅乙：删减铺垫段落，严格将正文压缩至2000字以内。</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2 p-2.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="strat"
+                      checked={selectedStrategy === 'case_priority'}
+                      onChange={() => {
+                        setSelectedStrategy('case_priority');
+                        setStrategyReason('案例丰富优先：优先响应审阅丁充实基层成效，篇幅可适当放宽。');
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900">案例丰富优先策略</div>
+                      <div className="text-[11px] text-slate-500">优先响应审阅丁：补充典型调研案例与举措细节，篇幅适度放宽。</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">主笔裁决说明与备忘理由：</label>
+                <textarea
+                  rows={2}
+                  value={strategyReason}
+                  onChange={(e) => setStrategyReason(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex flex-wrap justify-between items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowContradictionModal(false)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleResolveContradiction('strategy_only')}
+                    className="px-3 py-1.5 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded font-medium cursor-pointer"
+                    title="记录裁决决定为【决定采纳，待落实】，两项意见保持待落实状态，不立即改写正文"
+                  >
+                    仅记录裁决策略 (待落实)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleResolveContradiction('implement_now')}
+                    className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold shadow-xs cursor-pointer"
+                    title="立即根据裁决策略改写对应段落正文，生成新工作稿并将两项意见标记为已落实"
+                  >
+                    立即按策略落实正文
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

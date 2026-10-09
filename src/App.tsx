@@ -299,6 +299,7 @@ export function App() {
             onUpdateTask={handleUpdateCurrentTask}
             onProceedToNextStage={() => handleProceedStage('final_export')}
             activeRole={activeRole}
+            onSelectStage={handleSelectStage}
           />
         )}
 
@@ -307,6 +308,7 @@ export function App() {
             task={currentTask}
             onUpdateTask={handleUpdateCurrentTask}
             activeRole={activeRole}
+            onSelectStage={handleSelectStage}
           />
         )}
       </main>

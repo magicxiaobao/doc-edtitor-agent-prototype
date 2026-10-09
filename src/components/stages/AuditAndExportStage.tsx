@@ -4,7 +4,8 @@ import {
   AuditIssue, 
   UserRole, 
   DraftVersion,
-  ExportOptions
+  ExportOptions,
+  ReviewComment
 } from '../../types';
 import { runDocumentAudit } from '../../services/mockAuditService';
 import { exportDocumentAsTxt, exportDocumentAsDocx } from '../../services/exportService';
@@ -39,12 +40,14 @@ interface AuditAndExportStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
   activeRole: UserRole;
+  onSelectStage?: (stage: any) => void;
 }
 
 export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   task,
   onUpdateTask,
   activeRole,
+  onSelectStage,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
 
@@ -475,6 +478,63 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Detailed Blocking Reasons Banner with Direct Action Entries */}
+          {!canFinalize && validation.reasons.length > 0 && (
+            <div className="mt-3 p-3.5 bg-rose-50 border border-rose-300 rounded-lg text-xs space-y-2 text-rose-950">
+              <div className="flex items-center gap-1.5 font-bold text-rose-900">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>定稿前置准入检查未通过（共 {validation.reasons.length} 项阻断原因）：</span>
+              </div>
+              <ul className="space-y-1.5 pl-5 list-disc text-rose-900">
+                {validation.reasons.map((reason, rIdx) => (
+                  <li key={rIdx} className="leading-relaxed">
+                    <div className="flex flex-wrap items-center justify-between gap-1">
+                      <span>{reason}</span>
+                      {onSelectStage && (
+                        reason.includes('审阅意见') ? (
+                          <button
+                            onClick={() => onSelectStage('review')}
+                            className="px-2 py-0.5 bg-white border border-rose-300 hover:bg-rose-100 rounded text-[11px] font-semibold text-rose-900 cursor-pointer"
+                          >
+                            前往审阅阶段处理
+                          </button>
+                        ) : reason.includes('事实') || reason.includes('冲突') ? (
+                          <button
+                            onClick={() => onSelectStage('material_fact')}
+                            className="px-2 py-0.5 bg-white border border-rose-300 hover:bg-rose-100 rounded text-[11px] font-semibold text-rose-900 cursor-pointer"
+                          >
+                            前往事实阶段裁决
+                          </button>
+                        ) : reason.includes('大纲') || reason.includes('审批') ? (
+                          <button
+                            onClick={() => onSelectStage('style_outline')}
+                            className="px-2 py-0.5 bg-white border border-rose-300 hover:bg-rose-100 rounded text-[11px] font-semibold text-rose-900 cursor-pointer"
+                          >
+                            前往大纲阶段核准
+                          </button>
+                        ) : reason.includes('正文草稿') ? (
+                          <button
+                            onClick={() => onSelectStage('drafting')}
+                            className="px-2 py-0.5 bg-white border border-rose-300 hover:bg-rose-100 rounded text-[11px] font-semibold text-rose-900 cursor-pointer"
+                          >
+                            前往起草阶段生成
+                          </button>
+                        ) : reason.includes('核校') ? (
+                          <button
+                            onClick={() => setActiveTab('audit')}
+                            className="px-2 py-0.5 bg-white border border-rose-300 hover:bg-rose-100 rounded text-[11px] font-semibold text-rose-900 cursor-pointer"
+                          >
+                            在下方核校列表中更正
+                          </button>
+                        ) : null
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
@@ -847,20 +907,45 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                 </div>
               ))}
 
-              {exportOptions.includeReviewLog && task.reviewComments.length > 0 && (
+              {exportOptions.includeReviewLog && (
                 <div className="pt-4 border-t border-slate-200 mt-4 space-y-2">
                   <h4 className="font-bold text-xs text-slate-700">【附：审阅意见与落实处理记录预览】</h4>
-                  <div className="space-y-1.5 text-xs text-slate-600 bg-white p-3 rounded border border-slate-200">
-                    {task.reviewComments.map((cmt, idx) => (
-                      <div key={cmt.id} className="pb-1 border-b border-slate-100 last:border-0">
-                        <span className="font-bold">{idx + 1}. [{cmt.reviewer}]</span>
-                        {cmt.targetVersionId && <span className="text-slate-400 font-mono text-[10px] ml-1">[针对:{cmt.targetVersionId}]</span>}
-                        <span className="ml-1">状态：</span>
-                        <span className="font-semibold text-slate-800">{cmt.status}</span> | 意见：{cmt.content}
-                        {cmt.authorReply && <span className="text-blue-700 ml-2">答复：{cmt.authorReply}</span>}
+                  {(() => {
+                    const isSnapshot = Boolean(selectedExportDraft?.isHistoricalSnapshot || selectedExportDraft?.isFinal);
+                    const commentsToShow: ReviewComment[] = isSnapshot
+                      ? (selectedExportDraft?.frozenReviewComments || (selectedExportDraft as any)?.snapshotMetadata?.reviewCommentsSnapshot?.items || [])
+                      : task.reviewComments;
+
+                    if (isSnapshot && (!commentsToShow || commentsToShow.length === 0)) {
+                      return (
+                        <div className="p-3 bg-amber-50 rounded border border-amber-200 text-xs text-amber-900 italic">
+                          【提示】：该历史版本保存时未冻结审阅意见记录，无法还原当时审阅状态。
+                        </div>
+                      );
+                    }
+
+                    if (!commentsToShow || commentsToShow.length === 0) {
+                      return (
+                        <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-400 italic">
+                          当前无审阅意见记录
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-1.5 text-xs text-slate-600 bg-white p-3 rounded border border-slate-200">
+                        {commentsToShow.map((cmt: ReviewComment, idx: number) => (
+                          <div key={cmt.id} className="pb-1 border-b border-slate-100 last:border-0">
+                            <span className="font-bold">{idx + 1}. [{cmt.reviewer}]</span>
+                            {cmt.targetVersionId && <span className="text-slate-400 font-mono text-[10px] ml-1">[针对:{cmt.targetVersionId}]</span>}
+                            <span className="ml-1">状态：</span>
+                            <span className="font-semibold text-slate-800">{cmt.status}</span> | 意见：{cmt.content}
+                            {cmt.authorReply && <span className="text-blue-700 ml-2">答复：{cmt.authorReply}</span>}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

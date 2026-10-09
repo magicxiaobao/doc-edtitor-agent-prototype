@@ -186,6 +186,9 @@ export interface RevisionSuggestion {
   diffSegments?: DiffSegment[];
   isUnsupportedPrompt?: boolean;
   unsupportedPromptNotice?: string;
+  sourceCommentId?: string;
+  sourceCommentReviewer?: string;
+  sourceCommentSummary?: string;
 }
 
 export interface AuditRecord {

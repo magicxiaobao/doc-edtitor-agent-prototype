@@ -1,4 +1,4 @@
-import { Task, ParagraphBlock, Fact, OutlineSection, DraftVersion, type RevisionAction, type RevisionSuggestion } from '../types';
+import { Task, ParagraphBlock, Fact, OutlineSection, DraftVersion, type RevisionAction, type RevisionSuggestion, type ReviewComment } from '../types';
 import { computeTextDiff } from './diffService';
 import { isValidAuthenticCase } from './reviewCoordinationService';
 
@@ -8,6 +8,7 @@ export interface ParagraphRevisionOptions {
   customPrompt?: string;
   task?: Task;
   currentDraft?: DraftVersion;
+  sourceComment?: ReviewComment;
 }
 
 /**
@@ -366,7 +367,8 @@ export function generateParagraphRevision(
   // Extract all numbers with their following Chinese units (e.g. 25场, 800人次, 128项, 12次)
   const numbersWithUnits = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
 
-  const rawPrompt = options?.customPrompt?.trim();
+  const sourceComment = options?.sourceComment;
+  const rawPrompt = options?.customPrompt?.trim() || (sourceComment ? (sourceComment.suggestedChange || sourceComment.content) : undefined);
   const hasCustomPrompt = Boolean(rawPrompt);
 
   if (hasCustomPrompt || action === 'custom') {
@@ -376,7 +378,10 @@ export function generateParagraphRevision(
       prompt === '精简表达并保留数据' || 
       (prompt.includes('精简') && prompt.includes('保留')) || 
       (prompt.includes('精简') && prompt.includes('数据')) ||
-      (prompt.includes('压缩') && prompt.includes('数据'));
+      (prompt.includes('压缩') && prompt.includes('数据')) ||
+      (prompt.includes('压缩') && prompt.includes('口径')) ||
+      prompt.includes('压缩精炼') ||
+      (prompt.includes('压缩') && (prompt.includes('修饰') || prompt.includes('冗长') || prompt.includes('铺垫')));
 
     const isReportingTonePrompt = 
       prompt === '改成面向单位负责人的汇报口吻' || 
@@ -398,7 +403,11 @@ export function generateParagraphRevision(
       prompt.includes('补充举措') ||
       prompt.includes('补充案例');
 
-    if (isCompressPrompt) {
+    if (options?.sourceComment?.suggestedChange && options.sourceComment.suggestedChange.trim() !== originalText.trim()) {
+      suggestedText = options.sourceComment.suggestedChange.trim();
+      diffExplanation = `落实【${options.sourceComment.reviewer}】审阅建议：${options.sourceComment.content}；严格保留量化台账数据与单位。`;
+      needsVerificationNotes.push('核对审阅建议文本是否契合段落前后行文脉络', '核对关键台账指标无遗漏与口径一致');
+    } else if (isCompressPrompt || prompt.includes('精简') || prompt.includes('压缩')) {
       let compressed = originalText
         .replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '')
         .replace(/立足业务发展需要，严谨抓好各项工作落实。/g, '')
@@ -587,5 +596,8 @@ export function generateParagraphRevision(
     diffSegments,
     isUnsupportedPrompt,
     unsupportedPromptNotice,
+    sourceCommentId: sourceComment?.id,
+    sourceCommentReviewer: sourceComment?.reviewer,
+    sourceCommentSummary: sourceComment?.content,
   };
 }

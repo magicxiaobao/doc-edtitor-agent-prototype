@@ -673,6 +673,7 @@ export async function exportDocumentAsDocx(
     URL.revokeObjectURL(url);
   } else {
     result = await Packer.toBuffer(doc);
+    (result as any).size = result.length;
   }
 
   return result;

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts && tsx test-task10.ts && tsx test-task11.ts && tsx test-task12.ts"
+    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts && tsx test-task10.ts && tsx test-task11.ts && tsx test-task12.ts && tsx test-task13.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

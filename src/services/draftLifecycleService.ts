@@ -538,3 +538,167 @@ export function finalizeDraft(
 
   return { success: true, updatedTask, finalDraft };
 }
+
+/**
+ * Unified Snapshot Creation Service:
+ * Explicitly saves a read-only immutable snapshot of the current working draft,
+ * freezing current snapshotMetadata and deeply freezing current reviewComments (frozenReviewComments).
+ */
+export function createDraftSnapshot(
+  task: Task,
+  draftId: string | undefined,
+  summary: string,
+  activeRole: UserRole
+): { updatedTask: Task; snapshotDraft: DraftVersion } {
+  const perm = checkPermission(activeRole, 'edit_draft');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '当前身份无权保存版本快照');
+  }
+
+  let targetDraft: DraftVersion | undefined;
+  if (draftId) {
+    targetDraft = task.drafts.find((d) => d.id === draftId);
+    if (!targetDraft) {
+      throw new Error(`未找到指定版本【${draftId}】，无法保存快照！`);
+    }
+  } else {
+    targetDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+    if (!targetDraft) {
+      throw new Error('当前任务尚无正文草稿，无法保存快照！');
+    }
+  }
+
+  const snapshotVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (只读快照·手动保存)`;
+  const snapshotDraft: DraftVersion = {
+    id: `DRAFT-SNAP-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    versionNumber: snapshotVersionNumber,
+    createdAt: new Date().toISOString(),
+    author: activeRole,
+    summary: summary.trim() || `主笔手动保存的历史版本快照（基于【${targetDraft.versionNumber}】）`,
+    blocks: JSON.parse(JSON.stringify(targetDraft.blocks)),
+    isFinal: false,
+    isHistoricalSnapshot: true,
+    isWorkingDraft: false,
+    sourceDraftId: targetDraft.id,
+    snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
+    auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
+    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+  };
+
+  const updatedTask: Task = {
+    ...task,
+    drafts: [snapshotDraft, ...task.drafts],
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask, snapshotDraft };
+}
+
+/**
+ * Unified Draft Version Restore Service:
+ * Restores an older version by forking a brand-new working draft,
+ * recording sourceDraftId, copying blocks and snapshotMetadata,
+ * and preserving existing history drafts and snapshots unmodified!
+ */
+export function restoreDraftVersion(
+  task: Task,
+  restoreDraftId: string,
+  activeRole: UserRole
+): { updatedTask: Task; workingDraft: DraftVersion } {
+  const perm = checkPermission(activeRole, 'restore_version');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '当前身份无权恢复历史版本');
+  }
+
+  const sourceDraft = task.drafts.find((d) => d.id === restoreDraftId);
+  if (!sourceDraft) {
+    throw new Error(`未找到待恢复的历史版本【${restoreDraftId}】！`);
+  }
+
+  const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作草稿·恢复自${sourceDraft.versionNumber})`;
+  const newWorkingDraft: DraftVersion = {
+    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    versionNumber: nextVersionNumber,
+    createdAt: new Date().toISOString(),
+    author: activeRole,
+    summary: `基于历史版本【${sourceDraft.versionNumber}】恢复生成的新工作草稿`,
+    blocks: JSON.parse(JSON.stringify(sourceDraft.blocks)),
+    isFinal: false,
+    isHistoricalSnapshot: false,
+    isWorkingDraft: true,
+    sourceDraftId: sourceDraft.id,
+    snapshotMetadata: sourceDraft.snapshotMetadata ? JSON.parse(JSON.stringify(sourceDraft.snapshotMetadata)) : undefined,
+    auditRecords: sourceDraft.auditRecords ? JSON.parse(JSON.stringify(sourceDraft.auditRecords)) : [],
+  };
+
+  const updatedTask: Task = {
+    ...task,
+    drafts: [newWorkingDraft, ...task.drafts],
+    currentDraftId: newWorkingDraft.id,
+    isFinalized: false,
+    status: '起草中',
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask, workingDraft: newWorkingDraft };
+}
+
+/**
+ * Unified Submit for Review Service:
+ * Associates the specific version and updates task status to '审阅中'.
+ * Optionally creates an immutable baseline snapshot for the review round.
+ */
+export function submitDraftForReview(
+  task: Task,
+  draftId: string | undefined,
+  activeRole: UserRole,
+  createBaselineSnapshot: boolean = true
+): { updatedTask: Task; workingDraft: DraftVersion; baselineSnapshot?: DraftVersion } {
+  const perm = checkPermission(activeRole, 'edit_draft');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '仅主笔甲可提交文稿进入审阅阶段');
+  }
+
+  let targetDraft: DraftVersion | undefined;
+  if (draftId) {
+    targetDraft = task.drafts.find((d) => d.id === draftId);
+  } else {
+    targetDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  }
+  if (!targetDraft) {
+    throw new Error('当前任务尚无正文草稿，无法提交审阅！');
+  }
+
+  let updatedDrafts = [...task.drafts];
+  let baselineSnapshot: DraftVersion | undefined;
+
+  if (createBaselineSnapshot && !targetDraft.isHistoricalSnapshot && !targetDraft.isFinal) {
+    baselineSnapshot = {
+      id: `DRAFT-SNAP-REV-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      versionNumber: `v${(task.drafts.length + 1).toFixed(1)} (提交审阅基准快照)`,
+      createdAt: new Date().toISOString(),
+      author: activeRole,
+      summary: `提交审阅时自动保存的只读基准快照（基于【${targetDraft.versionNumber}】）`,
+      blocks: JSON.parse(JSON.stringify(targetDraft.blocks)),
+      isFinal: false,
+      isHistoricalSnapshot: true,
+      isWorkingDraft: false,
+      sourceDraftId: targetDraft.id,
+      snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
+      auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
+      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+    };
+    updatedDrafts = [baselineSnapshot, ...updatedDrafts];
+  }
+
+  const updatedTask: Task = {
+    ...task,
+    drafts: updatedDrafts,
+    currentStage: 'review',
+    status: '审阅中',
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask, workingDraft: targetDraft, baselineSnapshot };
+}
+

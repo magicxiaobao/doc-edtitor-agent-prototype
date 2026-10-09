@@ -5,9 +5,12 @@ import {
   UserRole, 
   CoordinationStrategy, 
   CoordinationDiffResult,
-  EvidenceSnippet 
+  EvidenceSnippet,
+  ReviewComment,
+  ReviewCommentStatus
 } from '../types';
 import { applyDraftContentChange } from './draftLifecycleService';
+import { checkPermission } from './permissionService';
 
 /**
  * Validates whether a snippet is an authentic, approved case material for the current task.
@@ -288,3 +291,267 @@ export function applyCoordinationDecision(
 
   return { updatedTask: finalTask, workingDraft };
 }
+
+export interface ReviewCommentLocationResult {
+  isLocated: boolean;
+  targetBlock?: ParagraphBlock;
+  warning?: string;
+  isOutdatedVersion?: boolean;
+}
+
+/**
+ * Requirement 1 & 2: Resolves paragraph comment location against current draft blocks.
+ * - MUST look up strictly by stable targetBlockId.
+ * - If targetBlockId was deleted/removed, strictly returns isLocated: false with warning "定位需复核",
+ *   NEVER incorrectly maps to another block with the same order index!
+ */
+export function getReviewCommentLocation(
+  comment: ReviewComment,
+  draft: DraftVersion
+): ReviewCommentLocationResult {
+  if (comment.type === 'overall') {
+    return { isLocated: true };
+  }
+
+  if (!comment.targetBlockId) {
+    return {
+      isLocated: false,
+      warning: '定位需复核：意见未关联具体目标段落。',
+    };
+  }
+
+  // MUST look up strictly by stable ID, NEVER fallback to same array index!
+  const block = draft.blocks.find((b) => b.id === comment.targetBlockId);
+  if (!block) {
+    return {
+      isLocated: false,
+      warning: '定位需复核：原目标段落已在正文中删除或合并，不可匹配至其他段落，需人工复核指定新段落。',
+    };
+  }
+
+  // If found, check if version or base text changed
+  const isOutdatedVersion = Boolean(comment.targetVersionId && comment.targetVersionId !== draft.id);
+  if (comment.baseParagraphText && comment.baseParagraphText !== block.content) {
+    return {
+      isLocated: true,
+      targetBlock: block,
+      isOutdatedVersion,
+      warning: '当前段落正文自意见提出后已有修改（提出时原文与当前内容不同）。',
+    };
+  }
+
+  return {
+    isLocated: true,
+    targetBlock: block,
+    isOutdatedVersion,
+  };
+}
+
+/**
+ * Adopts and implements a review comment by directly applying the author's modification
+ * to the target block in the current draft.
+ * - Enforces role permission (only 主笔甲 can implement review comments).
+ * - Modifies ONLY the target block in the draft.
+ * - Updates ONLY the target comment (status: 'implemented', resolutionType: 'text_modified').
+ * - Preserves all other comments in their existing statuses without closing them!
+ */
+export function implementReviewCommentWithText(
+  task: Task,
+  commentId: string,
+  draftId: string,
+  updatedContent: string,
+  authorReply: string,
+  activeRole: UserRole
+): { updatedTask: Task; workingDraft: DraftVersion; implementedComment: ReviewComment } {
+  const perm = checkPermission(activeRole, 'resolve_comment');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '权限受限：仅主笔甲可采纳落实审阅意见');
+  }
+
+  const comment = task.reviewComments.find((c) => c.id === commentId);
+  if (!comment) {
+    throw new Error(`未找到指定审阅意见【${commentId}】！`);
+  }
+
+  let currentDraft: DraftVersion | undefined;
+  if (draftId) {
+    currentDraft = task.drafts.find((d) => d.id === draftId);
+    if (!currentDraft) {
+      throw new Error(`未找到指定版本【${draftId}】！`);
+    }
+  } else {
+    currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+    if (!currentDraft) {
+      throw new Error('当前任务尚无正文草稿');
+    }
+  }
+
+  // Determine target block
+  const targetBlockId = comment.targetBlockId;
+  if (!targetBlockId) {
+    throw new Error('该意见属于整稿综合意见，请在正文具体段落中针对性落实，或通过审阅协调处理。');
+  }
+
+  const targetBlock = currentDraft.blocks.find((b) => b.id === targetBlockId);
+  if (!targetBlock) {
+    throw new Error(`意见目标段落【${targetBlockId}】在当前稿件中已被删除或重构，定位需复核！`);
+  }
+
+  // Check that text actually changes (zero diff cannot be marked implemented)
+  const isZeroDiff = targetBlock.content.trim() === updatedContent.trim();
+  if (isZeroDiff) {
+    throw new Error('未检测到正文文本差异（正文未发生改变），不能标记审阅意见为已落实！');
+  }
+
+  const { updatedTask: taskWithNewDraft, workingDraft } = applyDraftContentChange(
+    task,
+    draftId,
+    (blocks) =>
+      blocks.map((b) =>
+        b.id === targetBlockId
+          ? { ...b, content: updatedContent.trim(), updatedAt: new Date().toISOString() }
+          : b
+      ),
+    `落实【${comment.reviewer}】意见（${comment.content.slice(0, 20)}...）`,
+    activeRole
+  );
+
+  let updatedCommentObj: ReviewComment | undefined;
+
+  // CRITICAL RULE: Updates ONLY the specified comment! Other comments remain completely unchanged!
+  const updatedComments = taskWithNewDraft.reviewComments.map((cmt) => {
+    if (cmt.id === commentId) {
+      updatedCommentObj = {
+        ...cmt,
+        status: 'implemented' as const,
+        authorReply: authorReply.trim() || `主笔已采纳落实意见并更新第${targetBlock.order}段正文。`,
+        decisionReason: authorReply.trim() || cmt.decisionReason,
+        resolutionType: 'text_modified' as const,
+        implementationDraftId: workingDraft.id,
+        implementationBlockId: targetBlockId,
+      };
+      return updatedCommentObj;
+    }
+    return cmt;
+  });
+
+  const finalTask: Task = {
+    ...taskWithNewDraft,
+    reviewComments: updatedComments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    updatedTask: finalTask,
+    workingDraft,
+    implementedComment: updatedCommentObj!,
+  };
+}
+
+/**
+ * Updates review comment decision without directly changing text:
+ * - 'accepted_pending_implementation': Records author agreement, but keeps status as 'accepted_pending_implementation' (still blocks finalization!).
+ * - 'rejected': Rejection requires reason, marks 'rejected'.
+ * - 'need_discussion': Marks 'need_discussion' (still blocks finalization!).
+ */
+export function updateReviewCommentDecision(
+  task: Task,
+  commentId: string,
+  status: 'accepted_pending_implementation' | 'rejected' | 'need_discussion',
+  reasonOrReply: string,
+  activeRole: UserRole
+): { updatedTask: Task; updatedComment: ReviewComment } {
+  const perm = checkPermission(activeRole, 'resolve_comment');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '权限受限：仅主笔甲可处理审阅意见决定');
+  }
+
+  const comment = task.reviewComments.find((c) => c.id === commentId);
+  if (!comment) {
+    throw new Error(`未找到指定审阅意见【${commentId}】！`);
+  }
+
+  if (status === 'rejected' && !reasonOrReply.trim()) {
+    throw new Error('拒绝审阅意见必须填写具体业务理由（随公文版本存证归档）！');
+  }
+
+  let updatedCommentObj: ReviewComment | undefined;
+
+  const updatedComments = task.reviewComments.map((cmt) => {
+    if (cmt.id === commentId) {
+      updatedCommentObj = {
+        ...cmt,
+        status,
+        authorReply: reasonOrReply.trim() || (status === 'accepted_pending_implementation' ? '主笔决定采纳，待后续统筹落实' : '主笔已登记沟通'),
+        decisionReason: reasonOrReply.trim(),
+        resolutionType:
+          status === 'accepted_pending_implementation'
+            ? ('strategy_decided' as const)
+            : status === 'rejected'
+            ? ('rejected' as const)
+            : ('communicated' as const),
+      };
+      return updatedCommentObj;
+    }
+    return cmt;
+  });
+
+  const updatedTask: Task = {
+    ...task,
+    reviewComments: updatedComments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask, updatedComment: updatedCommentObj! };
+}
+
+/**
+ * Relocates a review comment whose original paragraph was deleted or shifted to a new target block.
+ */
+export function rebindReviewCommentTargetBlock(
+  task: Task,
+  commentId: string,
+  newBlockId: string,
+  activeRole: UserRole
+): { updatedTask: Task; updatedComment: ReviewComment } {
+  const perm = checkPermission(activeRole, 'resolve_comment');
+  if (!perm.allowed) {
+    throw new Error(perm.reason || '权限受限：仅主笔甲可重新指定意见目标段落');
+  }
+
+  const comment = task.reviewComments.find((c) => c.id === commentId);
+  if (!comment) {
+    throw new Error(`未找到指定审阅意见【${commentId}】！`);
+  }
+
+  const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  const newBlock = currentDraft?.blocks.find((b) => b.id === newBlockId);
+  if (!newBlock) {
+    throw new Error(`指定的新段落【${newBlockId}】不存在！`);
+  }
+
+  let updatedCommentObj: ReviewComment | undefined;
+  const updatedComments = task.reviewComments.map((cmt) => {
+    if (cmt.id === commentId) {
+      updatedCommentObj = {
+        ...cmt,
+        type: 'paragraph' as const,
+        targetBlockId: newBlock.id,
+        targetBlockOrder: newBlock.order,
+        baseParagraphText: newBlock.content,
+        locationOutdated: false,
+      };
+      return updatedCommentObj;
+    }
+    return cmt;
+  });
+
+  const updatedTask: Task = {
+    ...task,
+    reviewComments: updatedComments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask, updatedComment: updatedCommentObj! };
+}
+

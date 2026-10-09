@@ -41,6 +41,7 @@ interface ReviewStageProps {
   onUpdateTask: (updated: Partial<Task>) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
+  onSelectStage?: (stage: any) => void;
 }
 
 export const ReviewStage: React.FC<ReviewStageProps> = ({
@@ -48,6 +49,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   onUpdateTask,
   onProceedToNextStage,
   activeRole,
+  onSelectStage,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
 
@@ -310,6 +312,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {onSelectStage && (
+            <button
+              onClick={() => onSelectStage('drafting')}
+              className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-semibold shadow-2xs flex items-center gap-1.5 cursor-pointer"
+              title="切换至正文工作区，通过段落AI建议或对比组件进行深度修改与落实"
+            >
+              <FileText className="w-4 h-4 text-blue-600" />
+              <span>前往正文起草工作区</span>
+            </button>
+          )}
+
           <button
             onClick={() => setShowAddCommentModal(true)}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
@@ -514,6 +527,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     {/* Actions for Author */}
                     {isAuthor && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
                       <div className="pt-2 border-t border-slate-200/70 flex flex-wrap justify-end gap-2">
+                        {onSelectStage && (
+                          <button
+                            onClick={() => onSelectStage('drafting')}
+                            className="px-2.5 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs flex items-center gap-1 cursor-pointer font-medium"
+                            title="在正文工作区定位原段落、查阅事实依据并生成AI建议或对比采纳"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-blue-600" />
+                            <span>在正文工作区定位与落实</span>
+                          </button>
+                        )}
+
                         {cmt.suggestedChange && (
                           <button
                             onClick={() => handleOpenImplementModal(cmt)}
