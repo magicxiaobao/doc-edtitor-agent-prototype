@@ -70,6 +70,20 @@ export function setStorageItem(key: string, value: string): void {
   }
 }
 
+export function removeStorageItem(key: string): void {
+  delete memoryStorage[key];
+  if (key === BACKUP_CORRUPTED_KEY) {
+    hasUnpersistedMemoryBackup = false;
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(key);
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
 /**
  * Record a corrupted backup into memory storage when disk persistence fails,
  * marking it so that stale localStorage backups do not obscure the newer memory backup.
@@ -326,21 +340,40 @@ export function loadPersistedState(): LoadStateResult {
   if (rawV1) {
     try {
       const parsedV1 = JSON.parse(rawV1);
-      if (Array.isArray(parsedV1) && parsedV1.length > 0) {
-        const migration = migrateToSchemaV2(parsedV1);
+      if (!Array.isArray(parsedV1)) {
+        throw new Error('旧版存储结构异常：必须为任务数组');
+      }
+      if (parsedV1.length === 0) {
         return {
-          tasks: migration.tasks,
-          currentTaskId: migration.tasks[0].id,
+          tasks: defaultPresets,
+          currentTaskId: defaultTaskId,
           activeRole: defaultRole,
           isCorrupted: false,
-          migrationMessage: migration.message,
         };
       }
+      const migration = migrateToSchemaV2(parsedV1);
+
+      // Check task integrity after schema migration
+      const hasCorruptedTask = migration.tasks.some((t) => !validateTaskStructure(t));
+      if (hasCorruptedTask) {
+        throw new Error('存储结构异常：检测到旧版任务对象元数据缺失或结构损坏');
+      }
+
+      const matchedTaskId = migration.tasks[0]?.id || defaultTaskId;
+
+      return {
+        tasks: migration.tasks,
+        currentTaskId: matchedTaskId,
+        activeRole: defaultRole,
+        isCorrupted: false,
+        migrationMessage: migration.message,
+      };
     } catch (e: any) {
       console.error('Legacy localStorage corrupted:', e);
       try {
         setStorageItem(BACKUP_CORRUPTED_KEY, rawV1);
       } catch (backupErr) {
+        console.warn('Backup write failed (likely quota exceeded), fallback to memory storage:', backupErr);
         recordMemoryCorruptedBackup(rawV1);
       }
       return {

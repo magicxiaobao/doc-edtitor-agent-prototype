@@ -29,11 +29,13 @@ import {
   loadPersistedState, 
   setStorageItem, 
   getStorageItem,
+  removeStorageItem,
   getCorruptedBackupData,
   getStorageError,
   recoverTasksFromCorruptedBackup,
   validateTaskStructure,
   STORAGE_KEY_V2, 
+  LEGACY_STORAGE_KEY_V1,
   BACKUP_CORRUPTED_KEY 
 } from './src/services/storageService';
 import { Task, DraftVersion, EvidenceSnippet, SourceDocument, DraftCandidate, ReviewComment } from './src/types';
@@ -775,6 +777,69 @@ assert(migratedLoadRes.isCorrupted === false, '旧版 schema 数据按规范先�
 const loadedMigTask = migratedLoadRes.tasks.find(t => t.id === 'LEGACY-TASK-MIG')!;
 assert(loadedMigTask.currentDraftId === 'D-LEGACY-HIST', '旧幽灵草稿指针在迁移阶段被安全修正为实际存在的草稿ID');
 assert(loadedMigTask.drafts[0].snapshotMetadata === undefined, '历史依据缺失严禁回填成当前任务快照，保持 undefined 要求重新核准');
+
+// 验证【P2修复】：旧 V1 数组入口迁移后结构校验
+// 1) 合法 V1 正常迁移
+removeStorageItem(STORAGE_KEY_V2);
+removeStorageItem(BACKUP_CORRUPTED_KEY);
+const validV1Task = {
+  id: 'LEGACY-V1-VALID-TASK',
+  title: '合法旧版V1任务公文',
+  currentDraftId: 'D-V1-1',
+  drafts: [
+    {
+      id: 'D-V1-1',
+      versionNumber: 'v1.0',
+      blocks: [
+        {
+          id: 'BLK-V1-1',
+          sectionId: 'SEC-01',
+          order: 1,
+          content: '旧版V1草稿正文内容',
+          referencedFactIds: []
+        }
+      ]
+    }
+  ]
+};
+mockStorage[LEGACY_STORAGE_KEY_V1] = JSON.stringify([validV1Task]);
+const v1ValidRes = loadPersistedState();
+assert(v1ValidRes.isCorrupted === false, '合法 V1 任务数据经迁移与结构校验后正常加载通过');
+assert(v1ValidRes.tasks.length === 1 && v1ValidRes.tasks[0].id === 'LEGACY-V1-VALID-TASK', '合法 V1 任务被正确迁移保留');
+assert(validateTaskStructure(v1ValidRes.tasks[0]) === true, '合法 V1 任务迁移后完整满足新版结构校验要求');
+assert(v1ValidRes.migrationMessage !== undefined && v1ValidRes.migrationMessage.includes('迁移'), '合法 V1 正常生成迁移提示消息');
+
+// 2) 损坏 V1 被隔离（以缺少 title 的任务复现）
+removeStorageItem(STORAGE_KEY_V2);
+removeStorageItem(BACKUP_CORRUPTED_KEY);
+const corruptedV1TaskMissingTitle = {
+  id: 'LEGACY-V1-CORRUPT-TASK',
+  // 故意缺少 title 字段！
+  currentDraftId: 'D-V1-CORRUPT',
+  drafts: [
+    {
+      id: 'D-V1-CORRUPT',
+      versionNumber: 'v1.0',
+      blocks: [
+        {
+          id: 'BLK-C-1',
+          sectionId: 'SEC-01',
+          order: 1,
+          content: '正文',
+          referencedFactIds: []
+        }
+      ]
+    }
+  ]
+};
+mockStorage[LEGACY_STORAGE_KEY_V1] = JSON.stringify([corruptedV1TaskMissingTitle]);
+const v1CorruptRes = loadPersistedState();
+assert(v1CorruptRes.isCorrupted === true, '损坏的 V1 数据（缺少 title）迁移后结构校验失败，被正确标记为 isCorrupted=true');
+assert(v1CorruptRes.corruptedMessage?.includes('旧版缓存数据损坏'), '旧版损坏数据包含清晰的隔离提示');
+const isolatedV1Backup = getCorruptedBackupData();
+assert(isolatedV1Backup !== null && isolatedV1Backup.includes('LEGACY-V1-CORRUPT-TASK'), '损坏的原始 V1 数据被安全隔离至备份区，未被静默吞没');
+assert(v1CorruptRes.tasks.length > 0 && v1CorruptRes.tasks[0].id !== 'LEGACY-V1-CORRUPT-TASK', '损坏时安全回退至默认预设任务，避免界面崩溃');
+removeStorageItem(LEGACY_STORAGE_KEY_V1);
 
 // 还原全局 mock
 (globalThis as any).localStorage = originalLocalStorage;
