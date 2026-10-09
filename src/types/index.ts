@@ -158,21 +158,34 @@ export interface ParagraphBlock {
   updatedAt: string;
 }
 
-export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight';
+export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight' | 'custom';
+
+export interface DiffSegment {
+  type: 'equal' | 'added' | 'removed';
+  text: string;
+}
 
 export interface RevisionSuggestion {
   runId: string;
   taskId: string;
   sourceDraftId: string;
   targetBlockId: string;
+  targetBlockOrder?: number;
+  targetSectionTitle?: string;
   baseContent: string;
   baseContentHash: string;
   action: RevisionAction;
+  customPrompt?: string;
   originalText: string;
   suggestedText: string;
   diffExplanation: string;
   factsAffected: string[];
   createdAt: string;
+  wordCountDelta?: number;
+  needsVerificationNotes?: string[];
+  diffSegments?: DiffSegment[];
+  isUnsupportedPrompt?: boolean;
+  unsupportedPromptNotice?: string;
 }
 
 export interface AuditRecord {

@@ -1,6 +1,14 @@
-import { Task, ParagraphBlock, Fact, OutlineSection, type RevisionAction, type RevisionSuggestion } from '../types';
+import { Task, ParagraphBlock, Fact, OutlineSection, DraftVersion, type RevisionAction, type RevisionSuggestion } from '../types';
+import { computeTextDiff } from './diffService';
+import { isValidAuthenticCase } from './reviewCoordinationService';
 
 export type { RevisionAction, RevisionSuggestion };
+
+export interface ParagraphRevisionOptions {
+  customPrompt?: string;
+  task?: Task;
+  currentDraft?: DraftVersion;
+}
 
 /**
  * Deterministic hash/fingerprint of paragraph content to detect manual modifications
@@ -232,92 +240,249 @@ function buildSingleFactParagraph(
 }
 
 /**
- * Paragraph revision assistant (compress, expand, formal, highlight).
+ * Paragraph revision assistant (compress, expand, formal, highlight, custom).
  * CRITICAL: Strictly preserves all factual numbers, units, and periods!
  * Cannot invent business measures or revert 25场 to 16场.
+ * Supports custom prompt instructions and verifies against authentic cases and frozen snapshot facts.
  */
 export function generateParagraphRevision(
   block: ParagraphBlock,
   action: RevisionAction,
   taskId?: string,
   sourceDraftId?: string,
-  runId?: string
+  runId?: string,
+  options?: ParagraphRevisionOptions
 ): RevisionSuggestion {
   const originalText = block.content;
   let suggestedText = originalText;
   let diffExplanation = '';
+  const needsVerificationNotes: string[] = [];
+  let isUnsupportedPrompt = false;
+  let unsupportedPromptNotice: string | undefined;
 
   // Extract all numbers with their following Chinese units (e.g. 25场, 800人次, 128项, 12次)
   const numbersWithUnits = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
 
-  switch (action) {
-    case 'compress': {
-      // Strip redundant procedural verbiage while preserving core facts
+  const rawPrompt = options?.customPrompt?.trim();
+  const hasCustomPrompt = Boolean(rawPrompt);
+
+  if (hasCustomPrompt || action === 'custom') {
+    const prompt = rawPrompt || '';
+    // Check if matches or contains supported instructions
+    const isCompressPrompt = 
+      prompt === '精简表达并保留数据' || 
+      (prompt.includes('精简') && prompt.includes('保留')) || 
+      (prompt.includes('精简') && prompt.includes('数据')) ||
+      (prompt.includes('压缩') && prompt.includes('数据'));
+
+    const isReportingTonePrompt = 
+      prompt === '改成面向单位负责人的汇报口吻' || 
+      prompt.includes('汇报口吻') || 
+      prompt.includes('单位负责人') || 
+      prompt.includes('领导汇报') ||
+      prompt.includes('向领导汇报');
+
+    const isHighlightPrompt = 
+      prompt === '突出成效并删减泛泛修饰' || 
+      (prompt.includes('突出成效') && prompt.includes('修饰')) || 
+      (prompt.includes('突出成效') && prompt.includes('删减')) ||
+      (prompt.includes('成效') && prompt.includes('修饰'));
+
+    const isExpandPrompt =
+      prompt.includes('补充表达') ||
+      prompt.includes('举措扩写') ||
+      prompt.includes('扩写') ||
+      prompt.includes('补充举措') ||
+      prompt.includes('补充案例');
+
+    if (isCompressPrompt) {
       let compressed = originalText
         .replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '')
         .replace(/立足业务发展需要，严谨抓好各项工作落实。/g, '')
         .replace(/坚持需求导向，深化分级分类专业实操培养。/g, '')
         .replace(/深入推进各项管理服务机制创新，/g, '')
         .replace(/，保障全系统平稳高效运转/g, '')
-        .replace(/，各项既定序时指标平稳达成/g, '');
+        .replace(/，各项既定序时指标平稳达成/g, '')
+        .replace(/，推动形成一系列制度优化与流程改进举措/g, '');
 
-      // Ensure clean punctuation
       compressed = compressed.replace(/^[，、\s]+/, '').replace(/，+/g, '，');
       if (!compressed.endsWith('。')) compressed += '。';
 
       suggestedText = compressed;
-      diffExplanation = `精炼压缩常规动员修饰语约30%，严密保留事实数据（${numbersWithUnits.join('、') || '无量化数据'}）及统计期间，未改动任何计量单位。`;
-      break;
-    }
-
-    case 'expand': {
-      // Add procedural closed-loop governance clauses without hallucinating new metrics
-      suggestedText = `${originalText.replace(/。$/, '')}。同时健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
-      diffExplanation = `在段落尾部扩充制度跟踪与日常调度闭环举措，增强逻辑严密性，严格保留既有数据（${numbersWithUnits.join('、') || '无量化数据'}），未捏造额外业务指标。`;
-      break;
-    }
-
-    case 'formal': {
-      // Enhance administrative formality while preserving facts
+      diffExplanation = `执行自定义指令【${prompt}】：精简压缩常规修饰语约30%，严密保留事实数据（${numbersWithUnits.join('、') || '无量化数据'}）及统计期间，未改动任何计量单位与统计口径。`;
+      needsVerificationNotes.push('核对精简后语句是否通畅连贯', '核对关键台账指标无遗漏与口径一致');
+    } else if (isReportingTonePrompt) {
       let formalized = originalText
-        .replace(/在看到成绩的同时/g, '在肯定成效的同时，对标高标准履职要求')
-        .replace(/下一步/g, '下一阶段工作规划')
-        .replace(/平稳有序开展/g, '保持平稳健康推进态势')
-        .replace(/抓细抓实/g, '深入贯彻落实');
+        .replace(/在看到成绩的同时/g, '对标高标准履职要求')
+        .replace(/下一步/g, '下一阶段重点举措')
+        .replace(/平稳有序开展/g, '平稳高效推进')
+        .replace(/抓细抓实/g, '深入贯彻落实')
+        .replace(/坚持需求导向，深化分级分类专业实操培养。/g, '聚焦高素质专业化干部队伍建设，高位推动业务赋能。')
+        .replace(/立足业务发展需要，严谨抓好各项工作落实。/g, '紧扣中心大局与核心指标，统筹推进全流程规范治理。');
+
+      if (!formalized.startsWith('聚焦') && !formalized.startsWith('紧扣') && !formalized.startsWith('立足')) {
+        formalized = `紧扣全局中心工作部署，${formalized}`;
+      }
 
       suggestedText = formalized;
-      diffExplanation = `优化为标准公文庄重句式，提升整体严肃性与规范度，全量保留段落内既有数据与统计口径。`;
-      break;
-    }
+      diffExplanation = `执行自定义指令【${prompt}】：转换为面向单位负责人的高站位汇报口吻，强化宏观统筹与成果成效，全量保留既有事实数据与统计期间。`;
+      needsVerificationNotes.push('确认汇报口吻契合本次呈报层级', '确认引用数据口径准确');
+    } else if (isHighlightPrompt) {
+      let highlighted = originalText
+        .replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '')
+        .replace(/立足业务发展需要，严谨抓好各项工作落实。/g, '')
+        .replace(/坚持需求导向，深化分级分类专业实操培养。/g, '')
+        .replace(/深入推进各项管理服务机制创新，/g, '')
+        .replace(/^[，、\s]+/, '').replace(/，+/g, '，');
 
-    case 'highlight': {
-      suggestedText = `【重点成效】${originalText}`;
-      diffExplanation = `增设重点工作突破提示标识，便于审阅者快速定位关键成效。`;
-      break;
+      if (!highlighted.startsWith('【重点成效】')) {
+        highlighted = `【重点成效】${highlighted}`;
+      }
+      if (!highlighted.includes('突破') && !highlighted.includes('显著')) {
+        highlighted = highlighted.replace(/。$/, '，工作质效取得突破性进展。');
+      }
+
+      suggestedText = highlighted;
+      diffExplanation = `执行自定义指令【${prompt}】：删减背景性泛化修饰语，强化突出阶段性工作实效与核心突破，全部数据指标严格保留。`;
+      needsVerificationNotes.push('核对成效定性表述是否严谨客观', '核对量化指标与出处依据一致');
+    } else if (isExpandPrompt) {
+      const taskObj = options?.task;
+      const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
+
+      if (!hasAuthenticCase) {
+        suggestedText = `${originalText.replace(/。$/, '')}。同时健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
+        diffExplanation = `执行扩写指令：在段落尾部扩充制度跟踪与日常调度闭环举措，增强逻辑严密性；【材料依据提示】材料库中暂无本期核准的真实典型案例材料，已避免虚构具体案例或捏造数据指标。`;
+        needsVerificationNotes.push('当前未录入真实案例材料，如需典型个案请先在材料库补充核准', '核对制度调度举措与科室工作实际一致');
+      } else {
+        suggestedText = `${originalText.replace(/。$/, '')}。同时深入总结典型实践做法，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
+        diffExplanation = `执行扩写指令：结合材料库中核准案例做法，扩充闭环举措并严格保留所有量化指标。`;
+        needsVerificationNotes.push('核对扩写举措与材料出处一致');
+      }
+    } else {
+      // Unsupported prompt handling
+      isUnsupportedPrompt = true;
+      unsupportedPromptNotice = `当前原型模拟服务暂未支持自定义指令“${prompt}”。原型仅支持明确的演示指令（如“精简表达并保留数据”、“改成面向单位负责人的汇报口吻”、“突出成效并删减泛泛修饰”，或使用上方四类快捷精修操作）。`;
+      suggestedText = originalText;
+      diffExplanation = '未识别支持的演示指令，已返回确定性演示限制说明，未生成无关文本。';
+      needsVerificationNotes.push('请使用系统推荐的示例指令或快捷改写操作进行演示体验');
+    }
+  } else {
+    // 4 standard shortcut actions
+    switch (action) {
+      case 'compress': {
+        // Strip redundant procedural verbiage while preserving core facts
+        let compressed = originalText
+          .replace(/紧紧围绕年度核心工作目标，强化统筹联动与机制创新。/g, '')
+          .replace(/立足业务发展需要，严谨抓好各项工作落实。/g, '')
+          .replace(/坚持需求导向，深化分级分类专业实操培养。/g, '')
+          .replace(/深入推进各项管理服务机制创新，/g, '')
+          .replace(/，保障全系统平稳高效运转/g, '')
+          .replace(/，各项既定序时指标平稳达成/g, '');
+
+        compressed = compressed.replace(/^[，、\s]+/, '').replace(/，+/g, '，');
+        if (!compressed.endsWith('。')) compressed += '。';
+
+        suggestedText = compressed;
+        diffExplanation = `精炼压缩常规动员修饰语约30%，严密保留事实数据（${numbersWithUnits.join('、') || '无量化数据'}）及统计期间，未改动任何计量单位。`;
+        needsVerificationNotes.push('核对精简后语句是否通畅连贯', '核对关键台账指标无遗漏与口径一致');
+        break;
+      }
+
+      case 'expand': {
+        const taskObj = options?.task;
+        const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
+
+        if (!hasAuthenticCase) {
+          suggestedText = `${originalText.replace(/。$/, '')}。同时健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
+          diffExplanation = `在段落尾部扩充制度跟踪与日常调度闭环举措，增强逻辑严密性；【材料依据提示】材料库中暂无本期核准的真实典型案例材料，已避免虚构具体案例或捏造数据指标。`;
+          needsVerificationNotes.push('当前材料库未录入本期核准真实案例材料，已提示补充材料并避免编造虚构案例', '核对制度调度举措与科室工作实际一致');
+        } else {
+          suggestedText = `${originalText.replace(/。$/, '')}。同时总结提炼典型推进经验，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
+          diffExplanation = `在段落尾部扩充举措闭环机制，关联材料库中真实案例材料，未捏造额外业务指标。`;
+          needsVerificationNotes.push('核对案例细节与原始材料登记表吻合');
+        }
+        break;
+      }
+
+      case 'formal': {
+        let formalized = originalText
+          .replace(/在看到成绩的同时/g, '在肯定成效的同时，对标高标准履职要求')
+          .replace(/下一步/g, '下一阶段工作规划')
+          .replace(/平稳有序开展/g, '保持平稳健康推进态势')
+          .replace(/抓细抓实/g, '深入贯彻落实');
+
+        suggestedText = formalized;
+        diffExplanation = `优化为标准公文庄重句式，提升整体严肃性与规范度，全量保留段落内既有数据与统计口径。`;
+        needsVerificationNotes.push('确认句式正式度契合机关公文规范', '核对引述数据口径准确');
+        break;
+      }
+
+      case 'highlight': {
+        suggestedText = `【重点成效】${originalText}`;
+        diffExplanation = `增设重点工作突破提示标识，便于审阅者快速定位关键成效。`;
+        needsVerificationNotes.push('核对重点标识标注位置是否恰当', '核对重点成效是否有充分台账依据');
+        break;
+      }
     }
   }
 
   // Safety invariant check: every single number + unit from original must remain in suggestedText!
-  numbersWithUnits.forEach((nu) => {
-    if (!suggestedText.includes(nu)) {
-      // If regex or replacement accidentally dropped it, restore original
-      suggestedText = originalText;
-      diffExplanation = `核验发现改写可能会丢失关键指标“${nu}”，已自动保护原始数据口径。`;
+  if (!isUnsupportedPrompt) {
+    numbersWithUnits.forEach((nu) => {
+      if (!suggestedText.includes(nu)) {
+        // If regex or replacement accidentally dropped it, restore original
+        suggestedText = originalText;
+        diffExplanation = `核验发现改写可能会丢失关键指标“${nu}”，已自动保护原始数据口径。`;
+      }
+    });
+  }
+
+  // Frozen snapshot fact verification check
+  const taskObj = options?.task;
+  const draftObj = options?.currentDraft;
+  if (draftObj) {
+    if (!draftObj.snapshotMetadata?.factSnapshot) {
+      needsVerificationNotes.push('事实依据提示：本草稿缺少冻结事实快照依据，建议重新核实事实或重新起草。');
+    } else if (taskObj?.factSnapshot) {
+      if (draftObj.snapshotMetadata.factSnapshot.hash !== taskObj.factSnapshot.hash) {
+        needsVerificationNotes.push('事实核对提示：当前稿件冻结依据与任务最新事实快照存在版本差异，请核实口径。');
+      }
     }
-  });
+
+    if (taskObj) {
+      for (const fId of block.referencedFactIds) {
+        const fact = taskObj.facts.find((f) => f.id === fId);
+        if (!fact || fact.status !== 'confirmed') {
+          needsVerificationNotes.push(`事实核对提示：本段引用的事实依据【${fact?.metric || fId}】状态为【${fact?.status || '已删除'}】，非有效核准事实，请核实！`);
+        }
+      }
+    }
+  }
+
+  const section = taskObj?.outline.find((s) => s.id === block.sectionId);
+  const diffSegments = computeTextDiff(originalText, suggestedText);
+  const wordCountDelta = suggestedText.length - originalText.length;
 
   return {
-    runId: runId || `RUN-${Date.now().toString(36)}`,
+    runId: runId || `REV-RUN-${Date.now().toString(36)}`,
     taskId: taskId || '',
     sourceDraftId: sourceDraftId || '',
     targetBlockId: block.id,
+    targetBlockOrder: block.order,
+    targetSectionTitle: section?.title,
     baseContent: originalText,
     baseContentHash: computeContentHash(originalText),
     action,
+    customPrompt: rawPrompt,
     originalText,
     suggestedText,
     diffExplanation,
     factsAffected: block.referencedFactIds,
     createdAt: new Date().toISOString(),
+    wordCountDelta,
+    needsVerificationNotes,
+    diffSegments,
+    isUnsupportedPrompt,
+    unsupportedPromptNotice,
   };
 }
