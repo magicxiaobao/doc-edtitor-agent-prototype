@@ -25,6 +25,8 @@ export interface LoadStateResult {
 
 // In-memory fallback for Node.js / non-browser test environments or storage quota emergencies
 let memoryStorage: Record<string, string> = {};
+// Tracks whether there is a pending backup in memory that failed to persist to disk
+let hasUnpersistedMemoryBackup = false;
 
 export let globalStorageError: string | null = null;
 
@@ -54,14 +56,37 @@ export function setStorageItem(key: string, value: string): void {
   // Always update in-memory fallback
   memoryStorage[key] = value;
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(key, value);
+    try {
+      localStorage.setItem(key, value);
+      if (key === BACKUP_CORRUPTED_KEY) {
+        hasUnpersistedMemoryBackup = false;
+      }
+    } catch (e) {
+      if (key === BACKUP_CORRUPTED_KEY) {
+        hasUnpersistedMemoryBackup = true;
+      }
+      throw e;
+    }
   }
 }
 
 /**
- * Unified backup retrieval: reads from localStorage or memoryStorage fallback
+ * Record a corrupted backup into memory storage when disk persistence fails,
+ * marking it so that stale localStorage backups do not obscure the newer memory backup.
+ */
+export function recordMemoryCorruptedBackup(rawData: string): void {
+  memoryStorage[BACKUP_CORRUPTED_KEY] = rawData;
+  hasUnpersistedMemoryBackup = true;
+}
+
+/**
+ * Unified backup retrieval: reads from memory backup if unpersisted to disk,
+ * otherwise reads from localStorage or memoryStorage fallback
  */
 export function getCorruptedBackupData(): string | null {
+  if (hasUnpersistedMemoryBackup && memoryStorage[BACKUP_CORRUPTED_KEY]) {
+    return memoryStorage[BACKUP_CORRUPTED_KEY];
+  }
   return getStorageItem(BACKUP_CORRUPTED_KEY) || memoryStorage[BACKUP_CORRUPTED_KEY] || null;
 }
 
@@ -161,20 +186,12 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
         updatedAt: b?.updatedAt || new Date().toISOString(),
       })) : [];
 
+      // 历史依据缺失应保留“未知/缺失”，禁止将任务当前快照凭空回填成历史草稿的审批依据
       if (!d.snapshotMetadata) {
         return {
           ...d,
           blocks: draftBlocks,
-          snapshotMetadata: {
-            taskTitle: rawT.title || '工作总结',
-            startDate: rawT.startDate || '2026-01-01',
-            endDate: rawT.endDate || '2026-09-30',
-            targetWordCount: rawT.targetWordCount || 3000,
-            outlineSections: Array.isArray(rawT.outline) ? rawT.outline : [],
-            factSnapshot: rawT.factSnapshot,
-            styleSnapshot: styleSnapshot || rawT.styleSnapshot,
-            outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
-          },
+          snapshotMetadata: undefined,
         };
       }
       return {
@@ -182,8 +199,9 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
         blocks: draftBlocks,
         snapshotMetadata: {
           ...d.snapshotMetadata,
-          styleSnapshot: d.snapshotMetadata.styleSnapshot || styleSnapshot || rawT.styleSnapshot,
-          outlineSnapshot: d.snapshotMetadata.outlineSnapshot || outlineSnapshot || rawT.outlineSnapshot,
+          // 仅保留草稿自带的快照依据，绝不自动回填任务快照
+          styleSnapshot: d.snapshotMetadata.styleSnapshot,
+          outlineSnapshot: d.snapshotMetadata.outlineSnapshot,
         },
       };
     });
@@ -198,6 +216,9 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
       drafts: migratedDrafts,
       facts: Array.isArray(rawT.facts) ? rawT.facts : [],
       outline: Array.isArray(rawT.outline) ? rawT.outline : [],
+      documents: Array.isArray(rawT.documents) ? rawT.documents : [],
+      snippets: Array.isArray(rawT.snippets) ? rawT.snippets : [],
+      styleRules: Array.isArray(rawT.styleRules) ? rawT.styleRules : [],
       styleSnapshot: styleSnapshot || rawT.styleSnapshot,
       outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
       reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
@@ -235,15 +256,9 @@ export function loadPersistedState(): LoadStateResult {
     try {
       const payload: AppStoragePayload = JSON.parse(rawV2);
 
-      // Runtime structure verification: must be object, have tasks array
+      // Check payload root structure
       if (!payload || typeof payload !== 'object' || !Array.isArray(payload.tasks)) {
         throw new Error('存储结构异常：缺少有效的 tasks 根数组');
-      }
-
-      // Check task integrity
-      const hasCorruptedTask = payload.tasks.some((t) => !validateTaskStructure(t));
-      if (hasCorruptedTask) {
-        throw new Error('存储结构异常：检测到任务对象元数据缺失或结构损坏');
       }
 
       if (payload.tasks.length === 0) {
@@ -255,32 +270,38 @@ export function loadPersistedState(): LoadStateResult {
         };
       }
 
-      if (payload.schemaVersion === CURRENT_SCHEMA_VERSION) {
-        const matchedTaskId = payload.tasks.some((t) => t.id === payload.currentTaskId)
-          ? payload.currentTaskId
-          : payload.tasks[0].id;
+      // 遵循“先按 schema 迁移，再执行新版严格校验”原则：
+      // 如果是非当前 schema 版本（如旧版或未标记版本的 schema），先执行 schema 迁移升级
+      let tasksToValidate = payload.tasks;
+      let migrationMsg: string | undefined;
 
-        const matchedRole: UserRole = ['主笔甲', '审阅乙', '供稿丙', '审阅丁'].includes(payload.activeRole)
-          ? payload.activeRole
-          : '主笔甲';
-
-        return {
-          tasks: payload.tasks,
-          currentTaskId: matchedTaskId,
-          activeRole: matchedRole,
-          isCorrupted: false,
-        };
-      } else {
-        // Upgrade older schema
+      if (payload.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migration = migrateToSchemaV2(payload.tasks);
-        return {
-          tasks: migration.tasks,
-          currentTaskId: payload.currentTaskId || migration.tasks[0].id,
-          activeRole: payload.activeRole || '主笔甲',
-          isCorrupted: false,
-          migrationMessage: migration.message,
-        };
+        tasksToValidate = migration.tasks;
+        migrationMsg = migration.message;
       }
+
+      // Check task integrity after schema migration
+      const hasCorruptedTask = tasksToValidate.some((t) => !validateTaskStructure(t));
+      if (hasCorruptedTask) {
+        throw new Error('存储结构异常：检测到任务对象元数据缺失或结构损坏');
+      }
+
+      const matchedTaskId = tasksToValidate.some((t) => t.id === payload.currentTaskId)
+        ? payload.currentTaskId
+        : tasksToValidate[0].id;
+
+      const matchedRole: UserRole = ['主笔甲', '审阅乙', '供稿丙', '审阅丁'].includes(payload.activeRole)
+        ? payload.activeRole
+        : '主笔甲';
+
+      return {
+        tasks: tasksToValidate,
+        currentTaskId: matchedTaskId,
+        activeRole: matchedRole,
+        isCorrupted: false,
+        migrationMessage: migrationMsg,
+      };
     } catch (e: any) {
       console.error('LocalStorage v2 corrupted:', e);
       // Save corrupted raw for recovery with independent error protection (quota safe)
@@ -288,7 +309,7 @@ export function loadPersistedState(): LoadStateResult {
         setStorageItem(BACKUP_CORRUPTED_KEY, rawV2);
       } catch (backupErr) {
         console.warn('Backup write failed (likely quota exceeded), fallback to memory storage:', backupErr);
-        memoryStorage[BACKUP_CORRUPTED_KEY] = rawV2;
+        recordMemoryCorruptedBackup(rawV2);
       }
       return {
         tasks: defaultPresets,
@@ -320,7 +341,7 @@ export function loadPersistedState(): LoadStateResult {
       try {
         setStorageItem(BACKUP_CORRUPTED_KEY, rawV1);
       } catch (backupErr) {
-        memoryStorage[BACKUP_CORRUPTED_KEY] = rawV1;
+        recordMemoryCorruptedBackup(rawV1);
       }
       return {
         tasks: defaultPresets,
@@ -444,6 +465,14 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             updatedAt: b?.updatedAt || new Date().toISOString(),
           }));
 
+          // 保留原有草稿版本属性，禁止按数组位置推断可编辑性。
+          // 属性无法确定时保守恢复为只读历史快照，继续编辑时通过 applyDraftContentChange 自动分叉新工作稿。
+          const isExplicitWorkingDraft = d?.isWorkingDraft === true;
+          const isExplicitHistorical = d?.isHistoricalSnapshot === true;
+          const isExplicitFinal = d?.isFinal === true;
+          const isWorkingDraft = isExplicitWorkingDraft && !isExplicitHistorical && !isExplicitFinal;
+          const isHistoricalSnapshot = !isWorkingDraft;
+
           return {
             id: typeof d?.id === 'string' && d.id ? d.id : `DRAFT-REC-${Date.now()}-${dIdx}`,
             versionNumber: typeof d?.versionNumber === 'string' && d.versionNumber ? d.versionNumber : `v1.${dIdx} (恢复快照)`,
@@ -451,9 +480,9 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             author: d?.author || '系统恢复',
             summary: d?.summary || '从异常存储恢复的草稿版本（保留原始正文，未混入示例数据）',
             blocks: cleanedBlocks,
-            isWorkingDraft: dIdx === 0,
-            isHistoricalSnapshot: dIdx > 0,
-            isFinal: !!d?.isFinal,
+            isWorkingDraft,
+            isHistoricalSnapshot,
+            isFinal: isExplicitFinal,
             sourceDraftId: typeof d?.sourceDraftId === 'string' ? d.sourceDraftId : undefined,
             snapshotMetadata: d?.snapshotMetadata,
             auditRecords: Array.isArray(d?.auditRecords) ? d.auditRecords : [],

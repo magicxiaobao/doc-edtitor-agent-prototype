@@ -134,17 +134,25 @@ export function acceptDraftCandidate(
   const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳新候选)`;
   let archivedDraft: DraftVersion | undefined;
 
-  // 采纳前保存旧稿快照，再创建新工作稿：旧稿自动归档为只读历史快照，冻结审阅记录
+  // 采纳候选版本处理：
+  // 仅归档可编辑工作稿。若当前版本已经是历史快照或定稿快照，完整保留原版本属性与原冻结审阅记录，
+  // 禁止用当前意见覆盖已冻结的审阅快照，只创建新工作稿并记录来源版本。
   if (currentDraft) {
-    archivedDraft = {
-      ...currentDraft,
-      isWorkingDraft: false,
-      isHistoricalSnapshot: true,
-      summary: currentDraft.summary
-        ? `${currentDraft.summary}（采纳新候选前自动归档历史快照）`
-        : '采纳新候选前系统自动归档的历史快照',
-      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
-    };
+    const isAlreadyImmutable = currentDraft.isHistoricalSnapshot === true || currentDraft.isFinal === true;
+    if (isAlreadyImmutable) {
+      // 保持原有历史/定稿快照完全不变，不重复归档或覆盖 frozenReviewComments
+      archivedDraft = currentDraft;
+    } else {
+      archivedDraft = {
+        ...currentDraft,
+        isWorkingDraft: false,
+        isHistoricalSnapshot: true,
+        summary: currentDraft.summary
+          ? `${currentDraft.summary}（采纳新候选前自动归档历史快照）`
+          : '采纳新候选前系统自动归档的历史快照',
+        frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+      };
+    }
   }
 
   const newWorkingDraft: DraftVersion = {
@@ -153,7 +161,7 @@ export function acceptDraftCandidate(
     createdAt: new Date().toISOString(),
     author: activeRole,
     summary: currentDraft
-      ? `基于【${currentDraft.versionNumber}】归档后采纳新候选生成的工作稿`
+      ? `基于【${currentDraft.versionNumber}】${currentDraft.isFinal ? '定稿' : currentDraft.isHistoricalSnapshot ? '历史快照' : '归档'}后采纳新候选生成的工作稿`
       : '采纳新起草候选生成的工作稿',
     blocks: JSON.parse(JSON.stringify(candidate.blocks)),
     isFinal: false,

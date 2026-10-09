@@ -666,12 +666,28 @@ const mockStorage: Record<string, string> = {};
   clear: () => { for (const k in mockStorage) delete mockStorage[k]; }
 };
 
+// 预先在 localStorage 写入旧备份数据
+mockStorage[BACKUP_CORRUPTED_KEY] = JSON.stringify([
+  {
+    id: 'STALE-DISK-TASK',
+    title: '旧磁盘备份公文',
+    currentDraftId: 'D-STALE',
+    drafts: [
+      {
+        id: 'D-STALE',
+        versionNumber: 'v1.0',
+        blocks: [{ id: 'BLK-STALE', content: '这是旧的磁盘备份正文' }]
+      }
+    ]
+  }
+]);
+
 // 模拟写入抛错：savePersistedState 回退到内存备份并记录错误提示
 const saveOk = savePersistedState([createPresetTask('under_review')], 'TASK-REVIEW', '主笔甲');
 assert(saveOk === false, '配额超限抛错时 savePersistedState 安全返回 false');
 assert(getStorageError() !== null, '存储错误消息被正确捕获');
 
-// 模拟损坏数据隔离到备份时 localStorage.setItem 抛错，安全降级写入 memoryStorage
+// 模拟新损坏数据发生时尝试落盘抛错（配额不足），写入内存回退
 try {
   setStorageItem(BACKUP_CORRUPTED_KEY, JSON.stringify([
     {
@@ -683,18 +699,29 @@ try {
           id: 'D-REAL-1',
           versionNumber: 'v1.0',
           blocks: [{ id: 'BLK-Q', content: '用户辛苦撰写的核心总结正文' }],
+          isWorkingDraft: false,
+          isHistoricalSnapshot: true, // 明确历史快照
+          isFinal: false,
           frozenReviewComments: [{ id: 'CMT-FROZEN', reviewer: '审阅乙', content: '冻结审阅', status: 'pending' }]
+        },
+        {
+          id: 'D-REAL-2',
+          versionNumber: 'v1.1',
+          blocks: [{ id: 'BLK-Q2', content: '第二版工作稿' }],
+          isWorkingDraft: true,
+          isHistoricalSnapshot: false,
         }
       ]
     }
   ]));
 } catch {
-  // 预期行为：localStorage 抛出配额异常，但 memoryStorage 已先行写入保障内存安全
+  // 预期行为：localStorage 抛出配额异常，但 recordMemoryCorruptedBackup 已将最新备份置为优先
 }
 
-// 验证统一备份读取接口 getCorruptedBackupData 成功读取内存回退备份
+// 验证【P1修复】：已有旧磁盘备份＋新写入失败时，优先返回最新内存备份，绝不被旧磁盘备份遮蔽！
 const memoryBackup = getCorruptedBackupData();
-assert(memoryBackup !== null && memoryBackup.includes('QUOTA-CORRUPTED-TASK'), '统一备份读取接口 getCorruptedBackupData 成功读取内存回退备份');
+assert(memoryBackup !== null && memoryBackup.includes('QUOTA-CORRUPTED-TASK'), '统一备份读取优先返回最新内存备份，未被旧磁盘备份遮蔽');
+assert(!memoryBackup?.includes('STALE-DISK-TASK'), '旧磁盘备份未遮蔽最新内存备份');
 
 // 验证自动恢复：严禁混入示例材料/事实，使用空结构与“待恢复”状态，并保留冻结审阅快照和修正当前草稿ID
 const recoverRes = recoverTasksFromCorruptedBackup();
@@ -704,11 +731,50 @@ assert(recovered.title === '用户真实工作报告', '用户真实标题无损
 assert(recovered.status === '待恢复', '恢复状态标记为“待恢复”');
 assert(recovered.drafts[0].blocks[0].content === '用户辛苦撰写的核心总结正文', '草稿正文完好保留');
 assert(recovered.drafts[0].frozenReviewComments?.[0]?.content === '冻结审阅', '恢复时完整保留草稿的冻结审阅记录快照');
+
+// 验证【P1修复】：恢复过程保留原有版本只读属性，禁止根据数组索引(dIdx===0)盲目推断可编辑性
+assert(recovered.drafts[0].isHistoricalSnapshot === true, '历史快照恢复后严密保留历史快照只读属性，未成为工作稿');
+assert(recovered.drafts[0].isWorkingDraft === false, '历史快照恢复后未成为工作稿');
+assert(recovered.drafts[1].isWorkingDraft === true, '真正的工作稿属性被正确保留');
+
 assert(recovered.currentDraftId === 'D-REAL-1', '恢复后 currentDraftId 自动修复为实际存在的草稿ID');
 assert(Array.isArray(recovered.drafts[0].blocks[0].referencedFactIds), '段落referencedFactIds被安全补齐为空数组');
 assert(recovered.facts.length === 0, '未混入示例事实数据，保持空结构');
 assert(recovered.documents.length === 0, '未混入示例材料文档，保持空结构');
 assert(validateTaskStructure(recovered) === true, '恢复出的任务结构逐层校验完全合规');
+
+// 验证【P1/P2修复】：迁移时历史依据缺失保留“未知/缺失”，不回填当前快照
+const legacyTaskToMigrate = {
+  id: 'LEGACY-TASK-MIG',
+  title: '旧版公文任务',
+  currentDraftId: 'D-GHOST-PHANTOM', // 旧版幽灵指针
+  outlineConfirmed: true,
+  outline: [{ id: 'SEC-1', title: '旧大纲标题' }],
+  styleConfirmed: true,
+  styleRules: [{ id: 'RULE-1', confirmed: true }],
+  drafts: [
+    {
+      id: 'D-LEGACY-HIST',
+      versionNumber: 'v1.0 (历史快照)',
+      blocks: [{ id: 'BLK-1', content: '旧历史正文', sectionId: 'SEC-1', order: 1, referencedFactIds: [] }],
+      // 未定义 snapshotMetadata
+    }
+  ]
+};
+
+// 构造非当前 schema 存储 payload（含旧幽灵指针与缺失审批快照的历史稿）
+mockStorage[STORAGE_KEY_V2] = JSON.stringify({
+  schemaVersion: 1, // 旧版 schema
+  currentTaskId: 'LEGACY-TASK-MIG',
+  activeRole: '主笔甲',
+  tasks: [legacyTaskToMigrate]
+});
+throwQuotaError = false; // 允许正常读取
+const migratedLoadRes = loadPersistedState();
+assert(migratedLoadRes.isCorrupted === false, '旧版 schema 数据按规范先迁移后校验成功，未被误判为损坏');
+const loadedMigTask = migratedLoadRes.tasks.find(t => t.id === 'LEGACY-TASK-MIG')!;
+assert(loadedMigTask.currentDraftId === 'D-LEGACY-HIST', '旧幽灵草稿指针在迁移阶段被安全修正为实际存在的草稿ID');
+assert(loadedMigTask.drafts[0].snapshotMetadata === undefined, '历史依据缺失严禁回填成当前任务快照，保持 undefined 要求重新核准');
 
 // 还原全局 mock
 (globalThis as any).localStorage = originalLocalStorage;
@@ -795,6 +861,64 @@ assert(candidateWorkDraft.sourceDraftId === draft18.id, '新工作稿正确记�
 assert(candidateWorkDraft.isWorkingDraft === true, '新工作稿标记为工作稿');
 assert(taskAfterAccept.currentDraftId === candidateWorkDraft.id, '任务当前草稿指向新工作稿');
 assert(taskAfterAccept.drafts.length === task18.drafts.length + 1, '旧草稿归档快照与新工作稿同时保留在草稿列表中');
+
+// 6) 验证【P1修复】：若当前版本已经是历史/定稿快照，采纳候选绝不能改写其原有版本属性或用当前意见覆盖 frozenReviewComments！
+const historicalDraftWithFrozenComments: DraftVersion = {
+  ...draft18,
+  id: 'DRAFT-HIST-LOCKED',
+  versionNumber: 'v1.0 (已锁定的历史快照)',
+  isHistoricalSnapshot: true,
+  isWorkingDraft: false,
+  isFinal: false,
+  frozenReviewComments: [
+    {
+      id: 'CMT-OLD-PENDING',
+      type: 'overall',
+      reviewer: '审阅乙',
+      content: '历史草稿当时的pending意见',
+      status: 'pending',
+      createdAt: '2026-10-06T08:00:00.000Z'
+    }
+  ]
+};
+
+// 假设任务当前审阅意见已被主笔修改落实为 implemented
+const taskWithModifiedComments: Task = {
+  ...task18,
+  drafts: [historicalDraftWithFrozenComments],
+  currentDraftId: historicalDraftWithFrozenComments.id,
+  reviewComments: [
+    {
+      id: 'CMT-OLD-PENDING',
+      type: 'overall',
+      reviewer: '审阅乙',
+      content: '历史草稿当时的pending意见',
+      status: 'implemented', // 最新状态已变为已修改落实
+      authorReply: '已按要求修改完成',
+      createdAt: '2026-10-06T08:00:00.000Z'
+    }
+  ]
+};
+
+const candForHistorical: DraftCandidate = {
+  ...candidate18,
+  baseDraftId: historicalDraftWithFrozenComments.id,
+  baseDraftContentHash: computeDraftBlocksHash(historicalDraftWithFrozenComments.blocks),
+};
+
+const { updatedTask: taskAfterAcceptFromHist, workingDraft: workDraftFromHist, archivedDraft: preservedHistDraft } = acceptDraftCandidate(
+  taskWithModifiedComments,
+  historicalDraftWithFrozenComments,
+  candForHistorical,
+  '主笔甲'
+);
+
+assert(preservedHistDraft !== undefined, '返回原有草稿对象引用');
+assert(preservedHistDraft.id === 'DRAFT-HIST-LOCKED', '原历史版本ID保持不变');
+assert(preservedHistDraft.frozenReviewComments?.[0]?.status === 'pending', '原历史版本的冻结意见绝不被当前意见覆盖，依然保持 pending');
+assert(preservedHistDraft.frozenReviewComments?.[0]?.authorReply === undefined, '原历史版本未被写入后续修改答复');
+assert(workDraftFromHist.sourceDraftId === 'DRAFT-HIST-LOCKED', '新工作稿正确记录来源于历史快照');
+assert(workDraftFromHist.isWorkingDraft === true, '从历史快照采纳候选生成新的可编辑工作稿');
 
 // -----------------------------------------------------------------------
 // 19. 文风、大纲审批快照缺失与不一致的定稿严格拦截
