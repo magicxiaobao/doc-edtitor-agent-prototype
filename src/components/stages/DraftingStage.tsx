@@ -296,10 +296,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   });
 
   // Active review comments associated with current draft:
-  // If viewing historical snapshot or finalized draft, read frozen review comments; otherwise read task.reviewComments
+  // If viewing historical snapshot or finalized draft, STRICTLY read frozen review comments;
+  // If missing frozenReviewComments on a historical version, NEVER fallback to task.reviewComments (which would leak current comments into history)!
   const activeReviewComments: ReviewComment[] =
-    isCurrentDraftImmutable && currentDraft?.frozenReviewComments
-      ? currentDraft.frozenReviewComments
+    isCurrentDraftImmutable
+      ? (currentDraft?.frozenReviewComments || [])
       : task.reviewComments;
 
   const totalCommentsCount = activeReviewComments.length;
@@ -1107,6 +1108,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         drafts: updatedTask.drafts,
         currentStage: 'review',
         status: '审阅中',
+        reviewBaseDraftId: updatedTask.reviewBaseDraftId,
+        currentReviewRound: updatedTask.currentReviewRound,
       });
       if (onSelectStage) {
         onSelectStage('review');
@@ -1344,10 +1347,21 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </button>
 
           <button
-            onClick={onProceedToNextStage}
-            className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
+            onClick={handleSubmitDraftForReviewClick}
+            disabled={!canUserEdit || isCurrentDraftImmutable}
+            className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
+            title="将当前工作稿提交进入新一轮审阅，自动冻结只读基准快照并递增审阅轮次"
           >
-            <span>下一步：审阅修改</span>
+            <Send className="w-3.5 h-3.5" />
+            <span>提交本轮审阅</span>
+          </button>
+
+          <button
+            onClick={onProceedToNextStage}
+            className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            title="仅切换至审阅修改阶段界面查看已有审阅意见"
+          >
+            <span>进入审阅页面</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -1568,24 +1582,42 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
       {/* Immutable Draft Alert Notice */}
       {isCurrentDraftImmutable && currentDraft && (
-        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <Lock className="w-4 h-4 text-amber-600 shrink-0" />
-            <div>
-              <span className="font-bold">只读快照保护：</span>
-              <span>
-                当前查看的是【{currentDraft.versionNumber}】（{currentDraft.isFinal ? '正式定稿归档' : '历史快照'}），内容只读不可直接修改。
-              </span>
+        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-950 space-y-2 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+              <div>
+                <span className="font-bold">只读快照保护：</span>
+                <span>
+                  当前查看的是【{currentDraft.versionNumber}】（{currentDraft.isFinal ? '正式定稿归档' : '历史快照'}），内容只读不可直接修改。
+                </span>
+              </div>
             </div>
+            {canUserEdit && (
+              <button
+                onClick={handleForkWorkingDraftFromImmutable}
+                className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0 self-start sm:self-auto"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>基于此稿继续编辑（创建新工作稿）</span>
+              </button>
+            )}
           </div>
-          {canUserEdit && (
-            <button
-              onClick={handleForkWorkingDraftFromImmutable}
-              className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0 self-start sm:self-auto"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-              <span>基于此稿继续编辑（创建新工作稿）</span>
-            </button>
+          {!currentDraft.frozenReviewComments && (
+            <div className="text-[11px] text-amber-800 bg-amber-100/60 p-2 rounded border border-amber-200/80 flex items-center justify-between gap-2">
+              <span>
+                <strong>审阅意见记录状态：</strong>该历史快照未记录审阅意见（无法回溯当时意见），已严格隔离最新意见，避免历史失真。
+              </span>
+              <button
+                onClick={() => {
+                  setInspectorTab('review_comments');
+                  setShowRightInspector(true);
+                }}
+                className="text-[10px] text-blue-800 underline font-medium shrink-0 cursor-pointer"
+              >
+                查看审阅栏
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -1998,7 +2030,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                   <div className="flex items-center gap-1.5">
                     <span className="font-bold text-xs text-slate-800">
-                      {isCurrentDraftImmutable ? '冻结审阅意见记录' : '全部审阅意见'}
+                      {isCurrentDraftImmutable
+                        ? currentDraft?.frozenReviewComments
+                          ? '冻结审阅意见记录'
+                          : '审阅意见记录（未记录冻结）'
+                        : '全部审阅意见'}
                     </span>
                     <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono font-medium">
                       {activeReviewComments.length}
@@ -2019,6 +2055,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     </button>
                   )}
                 </div>
+
+                {/* Notice when historical draft lacks frozenReviewComments */}
+                {isCurrentDraftImmutable && !currentDraft?.frozenReviewComments && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
+                    <div className="flex items-center gap-1 font-bold text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>历史审阅意见未记录</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-normal">
+                      该历史快照未记录审阅意见（无法回溯当时意见），已严格隔离最新意见，避免历史失真。
+                    </p>
+                  </div>
+                )}
 
                 {/* Contradictory comments warning banner */}
                 {!isCurrentDraftImmutable && activeReviewComments.some((c) => (c.id === 'CMT-01' || c.id === 'CMT-02') && (c.status === 'pending' || c.status === 'accepted_pending_implementation')) && (
@@ -2691,8 +2740,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           snapItem &&
                           (snapItem.value !== fact.value || snapItem.unit !== fact.unit);
 
+                        const hasFrozenItem = Boolean(snapItem);
                         const adoptedVal = snapItem
                           ? `${snapItem.value} ${snapItem.unit}`
+                          : isCurrentDraftImmutable
+                          ? '快照未收录此事实'
                           : `${fact.value} ${fact.unit}`;
                         const currentVal = `${fact.value} ${fact.unit}`;
 
@@ -2724,9 +2776,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 <span className="text-[10px] text-slate-400 block">
                                   {isCurrentDraftImmutable ? '稿件冻结采用值' : '当前稿采用值'}
                                 </span>
-                                <span className="font-bold text-slate-900 font-mono">
+                                <span className={`font-bold font-mono ${hasFrozenItem ? 'text-slate-900' : isCurrentDraftImmutable ? 'text-slate-400 text-[10px] italic font-sans' : 'text-slate-900'}`}>
                                   {adoptedVal}
                                 </span>
+                                {isCurrentDraftImmutable && !hasFrozenItem && (
+                                  <span className="text-[9px] text-amber-700 block">快照中无此项，不可回溯当时值</span>
+                                )}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 block">任务最新核准值</span>

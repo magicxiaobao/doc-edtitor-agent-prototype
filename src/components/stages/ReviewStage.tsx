@@ -36,7 +36,8 @@ import {
   Edit3,
   FileText,
   Check,
-  ChevronRight
+  ChevronRight,
+  CornerDownRight
 } from 'lucide-react';
 
 interface ReviewStageProps {
@@ -65,7 +66,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   // New comment input modal/form
   const [showAddCommentModal, setShowAddCommentModal] = useState(false);
   const [commentType, setCommentType] = useState<'overall' | 'paragraph'>('overall');
-  const [selectedBlockId, setSelectedBlockId] = useState<string>(currentDraft?.blocks[0]?.id || '');
+  const [selectedBlockId, setSelectedBlockId] = useState<string>(reviewBaseDraft?.blocks[0]?.id || currentDraft?.blocks[0]?.id || '');
   const [newCommentContent, setNewCommentContent] = useState('');
   const [newCommentSuggestion, setNewCommentSuggestion] = useState('');
 
@@ -112,15 +113,16 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     }
     if (!newCommentContent.trim()) return;
 
-    const targetBlock = currentDraft?.blocks.find((b) => b.id === selectedBlockId);
+    const baseDraft = reviewBaseDraft || currentDraft;
+    const targetBlock = baseDraft?.blocks.find((b) => b.id === selectedBlockId);
 
     const newComment: ReviewComment = {
       id: `CMT-${Date.now().toString(36)}`,
       type: commentType,
       targetBlockId: commentType === 'paragraph' ? selectedBlockId : undefined,
       targetBlockOrder: commentType === 'paragraph' ? targetBlock?.order : undefined,
-      targetVersionId: reviewBaseDraft?.id || currentDraft?.id || 'DRAFT-DEFAULT',
-      targetVersionNumber: reviewBaseDraft?.versionNumber || currentDraft?.versionNumber,
+      targetVersionId: baseDraft?.id || 'DRAFT-DEFAULT',
+      targetVersionNumber: baseDraft?.versionNumber,
       baseParagraphText: commentType === 'paragraph' ? targetBlock?.content : undefined,
       reviewer: activeRole === '主笔甲' ? '审阅乙' : activeRole,
       content: newCommentContent.trim(),
@@ -537,10 +539,24 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
                     {/* Requirement 6: Show accurate location outdated notice; never silently attach */}
                     {isLocationOutdated && (
-                      <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
-                        <div className="flex items-center gap-1 font-bold text-amber-800">
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                          <span>定位提示：目标段落定位已过期（正文内容已变动或已重构）</span>
+                      <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1 font-bold text-amber-800">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>定位提示：目标段落定位已过期（正文已变动或重构）</span>
+                          </div>
+                          {isAuthor && (
+                            <button
+                              onClick={() => {
+                                setRebindingComment(cmt);
+                                setRebindTargetBlockId(currentDraft?.blocks[0]?.id || '');
+                              }}
+                              className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                            >
+                              <CornerDownRight className="w-3 h-3" />
+                              <span>重新指定目标段落</span>
+                            </button>
+                          )}
                         </div>
                         <p className="text-[10px] text-amber-700">
                           该意见针对草稿【{cmt.targetVersionId}】第{cmt.targetBlockOrder}段提出。为防止错挂，系统已隔离定位。
@@ -646,12 +662,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         {/* Right: Document Reference Snapshot */}
         <div className="col-span-12 lg:col-span-5 bg-white rounded-lg border border-slate-200 shadow-2xs p-5 space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-            <span className="font-bold text-xs text-slate-800">当前审阅基准稿件预览</span>
-            <span className="text-[11px] text-slate-500 font-mono">{currentDraft?.versionNumber}</span>
+            <div>
+              <span className="font-bold text-xs text-slate-800">当前审阅基准稿件预览</span>
+              <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 ml-2 font-normal">
+                基准对照
+              </span>
+            </div>
+            <span className="text-[11px] text-slate-500 font-mono">{reviewBaseDraft?.versionNumber}</span>
           </div>
 
           <div className="space-y-4 max-h-[600px] overflow-y-auto pr-1">
-            {currentDraft?.blocks.map((block) => (
+            {reviewBaseDraft?.blocks.map((block) => (
               <div key={block.id} className="p-3 rounded bg-slate-50 border border-slate-200/80 text-xs space-y-1">
                 <div className="flex justify-between text-[10px] text-slate-400 font-mono">
                   <span>第{block.order}段 (ID: {block.id})</span>
@@ -705,13 +726,15 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
               {commentType === 'paragraph' && (
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">目标段落</label>
+                  <label className="font-semibold text-slate-700">
+                    目标段落（针对审阅基准版本【{reviewBaseDraft?.versionNumber}】）
+                  </label>
                   <select
                     value={selectedBlockId}
                     onChange={(e) => setSelectedBlockId(e.target.value)}
-                    className="w-full p-2 border border-slate-300 rounded bg-white"
+                    className="w-full p-2 border border-slate-300 rounded bg-white text-xs"
                   >
-                    {currentDraft?.blocks.map((b) => (
+                    {(reviewBaseDraft || currentDraft)?.blocks.map((b) => (
                       <option key={b.id} value={b.id}>
                         第{b.order}段：{b.content.slice(0, 24)}...
                       </option>
@@ -1106,6 +1129,79 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rebind Comment Target Block Modal */}
+      {rebindingComment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-slate-200 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <CornerDownRight className="w-4 h-4 text-blue-700" />
+                <span>重新指定审阅意见目标段落</span>
+              </h3>
+              <button
+                onClick={() => setRebindingComment(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleConfirmRebind();
+              }}
+              className="p-5 space-y-3.5 text-xs"
+            >
+              <div className="p-2.5 bg-amber-50 rounded border border-amber-200 space-y-1">
+                <div className="font-bold text-amber-900">
+                  【{rebindingComment.reviewer}】提出的意见：
+                </div>
+                <p className="text-slate-700">{rebindingComment.content}</p>
+                {rebindingComment.baseParagraphText && (
+                  <p className="text-[10px] text-slate-500 italic pt-1">
+                    提出时原句：“{rebindingComment.baseParagraphText.slice(0, 50)}...”
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">
+                  请选择当前文稿【{currentDraft?.versionNumber}】中的新目标段落：
+                </label>
+                <select
+                  value={rebindTargetBlockId}
+                  onChange={(e) => setRebindTargetBlockId(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded text-xs bg-white focus:ring-1 focus:ring-blue-500"
+                >
+                  {currentDraft?.blocks.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      第{b.order}段 ({b.id}): {b.content.slice(0, 36)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRebindingComment(null)}
+                  className="px-3 py-1.5 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer"
+                >
+                  确认重新关联
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

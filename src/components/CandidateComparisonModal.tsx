@@ -77,6 +77,82 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  // Reconcile all section IDs across currentDraft blocks, candidate blocks, and task.outline
+  // MUST be declared before any conditional return null to satisfy React Rules of Hooks!
+  interface ComparisonSectionItem {
+    id: string;
+    title: string;
+    suggestedWordCount?: number;
+    assignedFactIds?: string[];
+    isDeletedFromOutline?: boolean;
+    isAddedInOutline?: boolean;
+  }
+
+  const sections: ComparisonSectionItem[] = React.useMemo(() => {
+    if (!candidate) return [];
+    const sectionMap = new Map<string, ComparisonSectionItem>();
+    
+    // 1. First add outline sections from task
+    (task.outline || []).forEach((sec) => {
+      sectionMap.set(sec.id, {
+        id: sec.id,
+        title: sec.title,
+        suggestedWordCount: sec.suggestedWordCount,
+        assignedFactIds: sec.assignedFactIds,
+        isDeletedFromOutline: false,
+      });
+    });
+
+    // 2. Check snapshot outline sections if current draft has frozen outline metadata
+    const frozenOutlineSections = currentDraft?.snapshotMetadata?.outlineSections || [];
+    frozenOutlineSections.forEach((fSec) => {
+      if (!sectionMap.has(fSec.id)) {
+        sectionMap.set(fSec.id, {
+          id: fSec.id,
+          title: fSec.title,
+          suggestedWordCount: fSec.suggestedWordCount,
+          assignedFactIds: fSec.assignedFactIds,
+          isDeletedFromOutline: true,
+        });
+      }
+    });
+
+    // 3. Scan currentDraft blocks for any section IDs
+    (currentDraft?.blocks || []).forEach((b) => {
+      if (b.sectionId && !sectionMap.has(b.sectionId)) {
+        sectionMap.set(b.sectionId, {
+          id: b.sectionId,
+          title: `已删除章节【${b.sectionId}】`,
+          suggestedWordCount: 0,
+          assignedFactIds: [],
+          isDeletedFromOutline: true,
+        });
+      }
+    });
+
+    // 4. Scan candidate blocks for any section IDs
+    (candidate?.blocks || []).forEach((b) => {
+      if (b.sectionId && !sectionMap.has(b.sectionId)) {
+        sectionMap.set(b.sectionId, {
+          id: b.sectionId,
+          title: `新候选章节【${b.sectionId}】`,
+          suggestedWordCount: 0,
+          assignedFactIds: [],
+          isAddedInOutline: true,
+        });
+      }
+    });
+
+    // Mark sections that exist in currentDraft but have NO blocks in candidate and are not in task.outline
+    return Array.from(sectionMap.values()).map((sec) => {
+      const existsInTaskOutline = (task.outline || []).some((o) => o.id === sec.id);
+      return {
+        ...sec,
+        isDeletedFromOutline: !existsInTaskOutline,
+      };
+    });
+  }, [task.outline, currentDraft, candidate]);
+
   if (!isOpen || !candidate) {
     return null;
   }
@@ -126,81 +202,6 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
         second: '2-digit',
       })
     : '刚刚';
-
-  // Reconcile all section IDs across currentDraft blocks, candidate blocks, and task.outline
-  // so deleted sections from previous draft are completely preserved and displayed with deletion badges!
-  interface ComparisonSectionItem {
-    id: string;
-    title: string;
-    suggestedWordCount?: number;
-    assignedFactIds?: string[];
-    isDeletedFromOutline?: boolean;
-    isAddedInOutline?: boolean;
-  }
-
-  const sections: ComparisonSectionItem[] = React.useMemo(() => {
-    const sectionMap = new Map<string, ComparisonSectionItem>();
-    
-    // 1. First add outline sections from task
-    (task.outline || []).forEach((sec) => {
-      sectionMap.set(sec.id, {
-        id: sec.id,
-        title: sec.title,
-        suggestedWordCount: sec.suggestedWordCount,
-        assignedFactIds: sec.assignedFactIds,
-        isDeletedFromOutline: false,
-      });
-    });
-
-    // 2. Check snapshot outline sections if current draft has frozen outline metadata
-    const frozenOutlineSections = currentDraft?.snapshotMetadata?.outlineSections || [];
-    frozenOutlineSections.forEach((fSec) => {
-      if (!sectionMap.has(fSec.id)) {
-        sectionMap.set(fSec.id, {
-          id: fSec.id,
-          title: fSec.title,
-          suggestedWordCount: fSec.suggestedWordCount,
-          assignedFactIds: fSec.assignedFactIds,
-          isDeletedFromOutline: true,
-        });
-      }
-    });
-
-    // 3. Scan currentDraft blocks for any section IDs
-    (currentDraft?.blocks || []).forEach((b) => {
-      if (b.sectionId && !sectionMap.has(b.sectionId)) {
-        sectionMap.set(b.sectionId, {
-          id: b.sectionId,
-          title: `已删除章节【${b.sectionId}】`,
-          suggestedWordCount: 0,
-          assignedFactIds: [],
-          isDeletedFromOutline: true,
-        });
-      }
-    });
-
-    // 4. Scan candidate blocks for any section IDs
-    (candidate.blocks || []).forEach((b) => {
-      if (b.sectionId && !sectionMap.has(b.sectionId)) {
-        sectionMap.set(b.sectionId, {
-          id: b.sectionId,
-          title: `新候选章节【${b.sectionId}】`,
-          suggestedWordCount: 0,
-          assignedFactIds: [],
-          isAddedInOutline: true,
-        });
-      }
-    });
-
-    // Mark sections that exist in currentDraft but have NO blocks in candidate and are not in task.outline
-    return Array.from(sectionMap.values()).map((sec) => {
-      const existsInTaskOutline = (task.outline || []).some((o) => o.id === sec.id);
-      return {
-        ...sec,
-        isDeletedFromOutline: !existsInTaskOutline,
-      };
-    });
-  }, [task.outline, currentDraft, candidate]);
 
   const filteredSections =
     selectedSectionId === 'all'

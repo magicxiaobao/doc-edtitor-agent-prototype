@@ -71,6 +71,21 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   const frozenMetricScope = snapItem?.metricScope;
   const frozenEvidenceId = snapItem?.primaryEvidenceId;
 
+  // Evidence snippet resolution:
+  // If viewing historical or final snapshot, STRICTLY select snippet matching frozenEvidenceId!
+  // If frozenEvidenceId is not found or not recorded, DO NOT show latest snippet as frozen evidence!
+  const resolvedSnippet: EvidenceSnippet | null = (() => {
+    if (isHistoricalOrFinal) {
+      if (!frozenEvidenceId) {
+        return null;
+      }
+      return task?.snippets.find((s) => s.id === frozenEvidenceId) || null;
+    }
+    return snippet || (resolvedFact ? task?.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
+  })();
+
+  const resolvedDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
+
   return (
     <div
       role="dialog"
@@ -186,26 +201,33 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
         )}
 
         {/* Snippet Details */}
-        {snippet ? (
+        {resolvedSnippet ? (
           <div className="p-4 bg-blue-50/70 border-b border-blue-100">
-            <div className="text-xs font-semibold uppercase tracking-wider text-blue-800 mb-1 flex items-center gap-1">
-              <Tag className="w-3.5 h-3.5" /> 关联证据片段
+            <div className="text-xs font-semibold uppercase tracking-wider text-blue-800 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <Tag className="w-3.5 h-3.5" /> 关联证据片段
+              </span>
+              {isHistoricalOrFinal && (
+                <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-normal font-sans">
+                  基于快照冻结证据ID追溯
+                </span>
+              )}
             </div>
             <div className="p-3 bg-white border border-blue-200 rounded text-slate-800 text-sm font-medium leading-relaxed shadow-xs">
-              {snippet.text}
+              {resolvedSnippet.text}
             </div>
             <div className="mt-2.5 flex flex-wrap gap-3 text-xs text-slate-600">
               <span className="flex items-center gap-1">
                 <FileText className="w-3.5 h-3.5 text-slate-400" />
-                材料名称：<strong className="text-slate-800">{snippet.docName}</strong>
+                材料名称：<strong className="text-slate-800">{resolvedSnippet.docName}</strong>
               </span>
               <span className="flex items-center gap-1">
                 <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                原文位置：<strong className="text-slate-800">{snippet.location || '登记文本段落（无纸质页码）'}</strong>
+                原文位置：<strong className="text-slate-800">{resolvedSnippet.location || '登记文本段落（无纸质页码）'}</strong>
               </span>
               <span className="flex items-center gap-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                统计期间：<strong className="text-slate-800">{snippet.period}</strong>
+                统计期间：<strong className="text-slate-800">{resolvedSnippet.period}</strong>
               </span>
             </div>
           </div>
@@ -216,7 +238,9 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
               <span>来源追溯真实限制说明</span>
             </div>
             <p className="text-[11px] text-amber-800">
-              当前事实未关联材料库中的特定文本摘录片段（可能由主笔直接根据科室台账线下登记核准，或出处文档在当前材料库中未登记）。系统保持真实限制说明，不伪造虚假页码或出处文档。
+              {isHistoricalOrFinal
+                ? '该历史版本快照中未记录此事实当时的原始证据片段ID（或材料库中该历史证据片段已不再有效）。系统保持真实限制说明，不伪造虚假出处或直接冒充使用最新证据材料。'
+                : '当前事实未关联材料库中的特定文本摘录片段（可能由主笔直接根据科室台账线下登记核准，或出处文档在当前材料库中未登记）。系统保持真实限制说明，不伪造虚假页码或出处文档。'}
             </p>
           </div>
         )}
@@ -226,17 +250,17 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold text-slate-700">材料上下文全文核验</h4>
             <span className="text-xs text-slate-400">
-              {doc ? `来源：${doc.source} (${doc.period})` : '登记文本出处'}
+              {resolvedDoc ? `来源：${resolvedDoc.source} (${resolvedDoc.period})` : '登记文本出处'}
             </span>
           </div>
 
-          {doc ? (
+          {resolvedDoc ? (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-700 leading-relaxed space-y-3 font-normal">
-              {doc.content.split('\n\n').map((paragraph, idx) => {
+              {resolvedDoc.content.split('\n\n').map((paragraph, idx) => {
                 const isTarget =
-                  snippet &&
-                  (paragraph.includes(snippet.text) ||
-                    (snippet.location && paragraph.startsWith(snippet.location.slice(0, 3))));
+                  resolvedSnippet &&
+                  (paragraph.includes(resolvedSnippet.text) ||
+                    (resolvedSnippet.location && paragraph.startsWith(resolvedSnippet.location.slice(0, 3))));
                 return (
                   <p
                     key={idx}
@@ -251,13 +275,13 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                 );
               })}
             </div>
-          ) : snippet ? (
+          ) : resolvedSnippet ? (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-600">
-              {snippet.text}
+              {resolvedSnippet.text}
             </div>
           ) : (
             <div className="p-6 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-500 text-center italic">
-              材料库中无全文记录。可在线下业务台账核对具体数据出处。
+              {isHistoricalOrFinal ? '历史快照无对应全文文档关联记录。' : '材料库中无全文记录。可在线下业务台账核对具体数据出处。'}
             </div>
           )}
 
