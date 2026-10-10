@@ -269,6 +269,7 @@ export interface ReviewComment {
   targetBlockId?: string;
   targetBlockOrder?: number;
   targetVersionId: string;
+  targetVersionNumber?: string;        // 意见针对的版本号（例如 v1.0 提交审阅基准快照）
   baseParagraphText?: string;          // 提出意见时的基准原文
   reviewer: string;
   content: string;
@@ -278,7 +279,9 @@ export interface ReviewComment {
   createdAt: string;
   locationOutdated?: boolean;
   implementationDraftId?: string;     // 落实版本ID
+  implementationVersionNumber?: string; // 落实版本号
   implementationBlockId?: string;     // 落实段落ID
+  implementedAt?: string;              // 落实时间
   decisionReason?: string;             // 采纳决定/拒绝/协调理由
   resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
 }
@@ -350,6 +353,8 @@ export interface Task {
   outlineSnapshot?: OutlineSnapshot;
   drafts: DraftVersion[];
   currentDraftId: string;
+  reviewBaseDraftId?: string;          // 本轮审阅基准草稿/快照ID
+  currentReviewRound?: number;         // 当前审阅轮次（例如第1轮、第2轮）
   reviewComments: ReviewComment[];
   auditIssues: AuditIssue[];
 }

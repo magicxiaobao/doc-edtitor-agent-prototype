@@ -53,8 +53,11 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   );
 
   // Determine display values
+  const hasFrozenItem = Boolean(snapItem);
   const adoptedValue = snapItem
     ? `${snapItem.value} ${snapItem.unit}`
+    : isHistoricalOrFinal
+    ? '历史快照未收录此事实'
     : resolvedFact
     ? `${resolvedFact.value} ${resolvedFact.unit}`
     : '无量化值';
@@ -62,6 +65,11 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   const currentConfirmedValue = resolvedFact
     ? `${resolvedFact.value} ${resolvedFact.unit}`
     : '未登记';
+
+  // Snapshot specific fields
+  const frozenPeriod = snapItem?.period;
+  const frozenMetricScope = snapItem?.metricScope;
+  const frozenEvidenceId = snapItem?.primaryEvidenceId;
 
   return (
     <div
@@ -116,12 +124,20 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                 <span className="text-[10px] text-slate-400 block">
                   {isHistoricalOrFinal ? '稿件冻结采用值（快照）' : '当前稿采用值'}
                 </span>
-                <span className="font-bold text-slate-900 font-mono text-sm">
+                <span className={`font-bold font-mono text-sm ${hasFrozenItem ? 'text-slate-900' : isHistoricalOrFinal ? 'text-slate-400 text-xs italic font-sans' : 'text-slate-900'}`}>
                   {adoptedValue}
                 </span>
-                {snapItem && (
+                {snapItem ? (
                   <span className="text-[10px] text-slate-400 block font-normal">
-                    期间：{snapItem.period || resolvedFact.period}
+                    期间：{frozenPeriod || '未记录'} · 口径：{frozenMetricScope || '无单独口径'}
+                  </span>
+                ) : isHistoricalOrFinal ? (
+                  <span className="text-[10px] text-amber-600 block font-normal">
+                    快照中无此事实冻结项，不可回溯当时值
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 block font-normal">
+                    期间：{resolvedFact.period}
                   </span>
                 )}
               </div>
@@ -132,7 +148,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   {currentConfirmedValue}
                 </span>
                 <span className="text-[10px] text-slate-400 block font-normal">
-                  期间：{resolvedFact.period}
+                  期间：{resolvedFact.period} · 口径：{resolvedFact.metricScope || '标准口径'}
                 </span>
               </div>
             </div>
@@ -152,11 +168,20 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
               </div>
             )}
 
-            {resolvedFact.metricScope && (
-              <div className="text-[11px] text-slate-500">
-                统计口径：<strong className="text-slate-700 font-medium">{resolvedFact.metricScope}</strong>
-              </div>
-            )}
+            {/* Metric Scope Comparison: Frozen vs Current */}
+            <div className="text-[11px] text-slate-600 space-y-0.5">
+              {isHistoricalOrFinal && frozenMetricScope && (
+                <div>
+                  冻结统计口径：<strong className="text-slate-700 font-medium">{frozenMetricScope}</strong>
+                </div>
+              )}
+              {resolvedFact.metricScope && (
+                <div>
+                  {isHistoricalOrFinal && frozenMetricScope ? '当前最新统计口径：' : '统计口径：'}
+                  <strong className="text-slate-700 font-medium">{resolvedFact.metricScope}</strong>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -361,7 +361,10 @@ export function implementReviewCommentWithText(
   draftId: string,
   updatedContent: string,
   authorReply: string,
-  activeRole: UserRole
+  activeRole: UserRole,
+  options?: {
+    expectedBaseContent?: string;
+  }
 ): { updatedTask: Task; workingDraft: DraftVersion; implementedComment: ReviewComment } {
   const perm = checkPermission(activeRole, 'resolve_comment');
   if (!perm.allowed) {
@@ -397,10 +400,15 @@ export function implementReviewCommentWithText(
     throw new Error(`意见目标段落【${targetBlockId}】在当前稿件中已被删除或重构，定位需复核！`);
   }
 
+  // Base content conflict check if expectedBaseContent is passed
+  if (options?.expectedBaseContent && targetBlock.content !== options.expectedBaseContent) {
+    throw new Error('采纳冲突：检测到目标段落自建议生成后已被人工编辑修改，基准内容已变动。为防止直接覆盖人工文本，建议已失效，请重新生成建议。');
+  }
+
   // Check that text actually changes (zero diff cannot be marked implemented)
   const isZeroDiff = targetBlock.content.trim() === updatedContent.trim();
   if (isZeroDiff) {
-    throw new Error('未检测到正文文本差异（正文未发生改变），不能标记审阅意见为已落实！');
+    throw new Error('未检测到正文文本差异（建议文本与段落当前正文完全相同），不能标记审阅意见为已落实！');
   }
 
   const { updatedTask: taskWithNewDraft, workingDraft } = applyDraftContentChange(
@@ -428,7 +436,9 @@ export function implementReviewCommentWithText(
         decisionReason: authorReply.trim() || cmt.decisionReason,
         resolutionType: 'text_modified' as const,
         implementationDraftId: workingDraft.id,
+        implementationVersionNumber: workingDraft.versionNumber,
         implementationBlockId: targetBlockId,
+        implementedAt: new Date().toISOString(),
       };
       return updatedCommentObj;
     }

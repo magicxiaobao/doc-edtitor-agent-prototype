@@ -171,6 +171,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [revisionTargetOrder, setRevisionTargetOrder] = useState<number | null>(null);
   const [customPromptInput, setCustomPromptInput] = useState<string>('');
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [activeRevisionRunId, setActiveRevisionRunId] = useState<string | null>(null);
+  const activeRevisionRunIdRef = useRef<string | null>(null);
+  const completedRevisionRunIdRef = useRef<string | null>(null);
 
   // Refs for revision abort & retry
   const revisionAbortControllerRef = useRef<AbortController | null>(null);
@@ -564,9 +567,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     };
 
     const runId = `REV-RUN-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    activeRevisionRunIdRef.current = runId;
+    setActiveRevisionRunId(runId);
     setIsRevisionGenerating(true);
     setRevisionError(null);
     setRevisionTargetOrder(targetBlock.order);
+    // Explicitly invalidate/clear any prior suggestions to prevent adopting stale suggestion during new generation
+    setRevisionSuggestion(null);
 
     // Make sure inspector is visible and switched to suggestions tab
     setShowRightInspector(true);
@@ -585,22 +592,32 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         delayMs: 350,
       });
 
-      // Strict validation against current task boundary
-      if (currentTaskIdRef.current !== task.id) {
+      // Strict validation against current task boundary and active runId
+      if (currentTaskIdRef.current !== task.id || activeRevisionRunIdRef.current !== runId) {
         return;
       }
 
+      completedRevisionRunIdRef.current = runId;
       setRevisionSuggestion(suggestion);
       setIsRevisionGenerating(false);
+      setActiveRevisionRunId(null);
+      activeRevisionRunIdRef.current = null;
       revisionAbortControllerRef.current = null;
     } catch (err: any) {
+      if (activeRevisionRunIdRef.current !== runId) {
+        return; // Ignore errors from superseded / cancelled requests
+      }
       if (err.name === 'AbortError' || err.message?.includes('取消')) {
         // Cleanly aborted by user, no error banner
         setIsRevisionGenerating(false);
+        setActiveRevisionRunId(null);
+        activeRevisionRunIdRef.current = null;
         return;
       }
       setRevisionError(err.message || '生成修改建议失败，请重试');
       setIsRevisionGenerating(false);
+      setActiveRevisionRunId(null);
+      activeRevisionRunIdRef.current = null;
     }
   };
 
@@ -628,6 +645,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       revisionAbortControllerRef.current.abort();
       revisionAbortControllerRef.current = null;
     }
+    // Explicitly invalidate runId and suggestion upon user cancel
+    activeRevisionRunIdRef.current = null;
+    completedRevisionRunIdRef.current = null;
+    setActiveRevisionRunId(null);
+    setRevisionSuggestion(null);
     setIsRevisionGenerating(false);
     setRevisionError(null);
   };
@@ -697,6 +719,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
+    // In-flight / superseded revision verification
+    if (isRevisionGenerating || activeRevisionRunIdRef.current !== null) {
+      alert('建议生成中或已被新请求覆盖，无法采纳旧建议。请等待当前生成完毕。');
+      return;
+    }
+    if (completedRevisionRunIdRef.current && revisionSuggestion.runId && completedRevisionRunIdRef.current !== revisionSuggestion.runId) {
+      alert('建议已失效：该建议已被后续生成的修改建议替换。');
+      setRevisionSuggestion(null);
+      return;
+    }
+
+    // Zero-diff check: If suggestedText is identical to current content, do not accept as modified
+    if (revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) {
+      alert('未检测到正文文本差异（建议文本与段落当前正文完全相同），无需替换且不能标记审阅意见为已落实！');
+      return;
+    }
+
     try {
       const actionName =
         revisionSuggestion.action === 'custom'
@@ -729,7 +768,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               decisionReason: revisionSuggestion.diffExplanation,
               resolutionType: 'text_modified' as const,
               implementationDraftId: workingDraft.id,
+              implementationVersionNumber: workingDraft.versionNumber,
               implementationBlockId: targetBlock.id,
+              implementedAt: new Date().toISOString(),
             };
           }
           return cmt;
@@ -744,6 +785,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         status: updatedTask.status,
       });
       setRevisionSuggestion(null);
+      completedRevisionRunIdRef.current = null;
     } catch (err: any) {
       alert(err.message || '采纳建议失败');
     }
@@ -1831,7 +1873,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             })}
 
                             {/* Review comments targeting this block */}
-                            {task.reviewComments
+                            {activeReviewComments
                               .filter((c) => c.type === 'paragraph' && c.targetBlockId === block.id)
                               .map((c) => (
                                 <button
@@ -1921,9 +1963,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   }`}
                 >
                   <span>审阅意见</span>
-                  {task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length > 0 && (
+                  {activeReviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length > 0 && (
                     <span className="bg-amber-100 text-amber-800 px-1 py-0.2 rounded-full text-[10px] font-bold">
-                      {task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length}
+                      {activeReviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length}
                     </span>
                   )}
                 </button>
@@ -1955,12 +1997,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 {/* Review Comments Header & Conflict Banner */}
                 <div className="flex items-center justify-between pb-1 border-b border-slate-100">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-xs text-slate-800">全部审阅意见</span>
+                    <span className="font-bold text-xs text-slate-800">
+                      {isCurrentDraftImmutable ? '冻结审阅意见记录' : '全部审阅意见'}
+                    </span>
                     <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono font-medium">
-                      {task.reviewComments.length}
+                      {activeReviewComments.length}
                     </span>
                   </div>
-                  {onSelectStage && (
+                  {isCurrentDraftImmutable && (
+                    <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                      历史只读版本
+                    </span>
+                  )}
+                  {!isCurrentDraftImmutable && onSelectStage && (
                     <button
                       onClick={() => onSelectStage('review')}
                       className="text-[10px] text-blue-700 hover:underline flex items-center gap-0.5 cursor-pointer font-medium"
@@ -1972,7 +2021,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 </div>
 
                 {/* Contradictory comments warning banner */}
-                {task.reviewComments.some((c) => (c.id === 'CMT-01' || c.id === 'CMT-02') && (c.status === 'pending' || c.status === 'accepted_pending_implementation')) && (
+                {!isCurrentDraftImmutable && activeReviewComments.some((c) => (c.id === 'CMT-01' || c.id === 'CMT-02') && (c.status === 'pending' || c.status === 'accepted_pending_implementation')) && (
                   <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-1.5">
                     <div className="flex items-center gap-1 font-bold text-amber-800">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -1997,12 +2046,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     onChange={(e) => setCommentStatusFilter(e.target.value as any)}
                     className="border border-slate-300 rounded px-1.5 py-1 bg-white text-slate-700 text-[11px]"
                   >
-                    <option value="all">全部状态 ({task.reviewComments.length})</option>
-                    <option value="pending">待处理 ({task.reviewComments.filter((c) => c.status === 'pending').length})</option>
-                    <option value="accepted_pending_implementation">决定采纳·待落实 ({task.reviewComments.filter((c) => c.status === 'accepted_pending_implementation').length})</option>
-                    <option value="implemented">已落实 ({task.reviewComments.filter((c) => c.status === 'implemented').length})</option>
-                    <option value="need_discussion">待沟通 ({task.reviewComments.filter((c) => c.status === 'need_discussion').length})</option>
-                    <option value="rejected">已拒绝 ({task.reviewComments.filter((c) => c.status === 'rejected').length})</option>
+                    <option value="all">全部状态 ({activeReviewComments.length})</option>
+                    <option value="pending">待处理 ({activeReviewComments.filter((c) => c.status === 'pending').length})</option>
+                    <option value="accepted_pending_implementation">决定采纳·待落实 ({activeReviewComments.filter((c) => c.status === 'accepted_pending_implementation').length})</option>
+                    <option value="implemented">已落实 ({activeReviewComments.filter((c) => c.status === 'implemented').length})</option>
+                    <option value="need_discussion">待沟通 ({activeReviewComments.filter((c) => c.status === 'need_discussion').length})</option>
+                    <option value="rejected">已拒绝 ({activeReviewComments.filter((c) => c.status === 'rejected').length})</option>
                   </select>
 
                   <select
@@ -2018,13 +2067,18 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
                 {/* Comment Cards List */}
                 <div className="space-y-2.5">
-                  {task.reviewComments
-                    .filter((c) => {
-                      if (commentStatusFilter !== 'all' && c.status !== commentStatusFilter) return false;
-                      if (commentReviewerFilter !== 'all' && c.reviewer !== commentReviewerFilter) return false;
-                      return true;
-                    })
-                    .map((cmt) => {
+                  {activeReviewComments.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-400 italic bg-slate-50 rounded border border-dashed border-slate-200">
+                      {isCurrentDraftImmutable ? '该历史快照未记录审阅意见或创建时无审阅记录' : '当前暂无审阅意见'}
+                    </div>
+                  ) : (
+                    activeReviewComments
+                      .filter((c) => {
+                        if (commentStatusFilter !== 'all' && c.status !== commentStatusFilter) return false;
+                        if (commentReviewerFilter !== 'all' && c.reviewer !== commentReviewerFilter) return false;
+                        return true;
+                      })
+                      .map((cmt) => {
                       const loc = getReviewCommentLocation(cmt, currentDraft);
                       const isLocationOutdated = !loc.isLocated || !loc.targetBlock || Boolean(loc.warning);
                       const isSelectedComment = selectedCommentId === cmt.id;
@@ -2135,7 +2189,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           )}
 
                           {/* Action Buttons for Author */}
-                          {canUserEdit && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
+                          {!isCurrentDraftImmutable && canUserEdit && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
                             <div className="pt-1.5 border-t border-slate-200/70 flex flex-wrap justify-end gap-1 text-[10px]">
                               {loc.targetBlock && (
                                 <button
@@ -2181,7 +2235,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           )}
                         </div>
                       );
-                    })}
+                    })
+                  )}
                 </div>
               </div>
             ) : activeBlock ? (
@@ -2360,41 +2415,50 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                         <div className="p-3.5 bg-blue-50/70 border-2 border-blue-200 rounded-lg space-y-3 text-xs shadow-2xs">
                           {/* Suggestion Header */}
                           <div className="flex items-center justify-between pb-2 border-b border-blue-200/80">
-                            <div className="font-bold text-blue-900 flex items-center gap-1">
+                            <div className="font-bold text-sm text-blue-900 flex items-center gap-1.5">
                               <Sparkles className="w-4 h-4 text-blue-600" />
                               <span>修改建议对比</span>
                             </div>
-                            <span className="text-[10px] bg-blue-200 text-blue-800 px-2 py-0.5 rounded font-mono font-medium">
+                            <span className="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded font-medium">
                               {revisionSuggestion.action === 'custom'
-                                ? `指令：${revisionSuggestion.customPrompt?.slice(0, 10)}...`
+                                ? `指令：${revisionSuggestion.customPrompt?.slice(0, 12)}...`
+                                : revisionSuggestion.action === 'compress'
+                                ? '压缩精炼'
+                                : revisionSuggestion.action === 'expand'
+                                ? '补充表达'
+                                : revisionSuggestion.action === 'formal'
+                                ? '正式文风'
+                                : revisionSuggestion.action === 'highlight'
+                                ? '突出重点'
                                 : revisionSuggestion.action}
                             </span>
                           </div>
 
                           {/* Target binding info */}
-                          <div className="text-[11px] text-slate-700 bg-white p-2 rounded border border-blue-100 flex items-center justify-between">
+                          <div className="text-xs text-slate-700 bg-white p-2.5 rounded border border-blue-100 flex items-center justify-between">
                             <span>
-                              建议绑定目标：<strong className="text-blue-900 font-bold">第{targetBlock?.order || revisionSuggestion.targetBlockOrder || '?'}段</strong>
+                              建议绑定目标：<strong className="text-blue-900 font-bold">第 {targetBlock?.order || revisionSuggestion.targetBlockOrder || '?'} 段</strong>
                             </span>
-                            <span className="font-mono text-[10px] text-slate-400">
-                              {targetBlock?.id}
-                            </span>
+                            <details className="text-[11px] text-slate-400">
+                              <summary className="cursor-pointer hover:text-slate-600">内部标识</summary>
+                              <span className="font-mono text-[10px] text-slate-500 block pt-0.5">{targetBlock?.id}</span>
+                            </details>
                           </div>
 
                           {/* When user selected another block while suggestion targets another */}
                           {isDifferentBlockSelected && (
-                            <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
+                            <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
                               <div className="font-semibold flex items-center gap-1">
                                 <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                                 <span>光标段落与建议目标不一致</span>
                               </div>
-                              <p className="text-[10px] text-amber-800 leading-normal">
+                              <p className="text-xs text-amber-800 leading-normal">
                                 当前光标位于第<strong>{activeBlock?.order}段</strong>，采纳建议将<strong>仅更新原目标第{targetBlock?.order || revisionSuggestion.targetBlockOrder}段</strong>，不会误改写当前光标段落。
                               </p>
                               {targetBlock && (
                                 <button
                                   onClick={() => handleJumpToTargetBlock(targetBlock.id)}
-                                  className="text-[10px] text-blue-700 hover:underline font-bold flex items-center gap-0.5 cursor-pointer pt-0.5"
+                                  className="text-xs text-blue-700 hover:underline font-bold flex items-center gap-0.5 cursor-pointer pt-0.5"
                                 >
                                   <CornerDownRight className="w-3 h-3" />
                                   <span>回到目标第{targetBlock.order}段</span>
@@ -2405,12 +2469,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
                           {/* Base modification conflict invalidation alert */}
                           {isModifiedAfter && (
-                            <div className="p-2 bg-rose-50 border border-rose-300 rounded text-[11px] text-rose-900 space-y-1">
+                            <div className="p-2.5 bg-rose-50 border border-rose-300 rounded text-xs text-rose-900 space-y-1">
                               <div className="font-bold flex items-center gap-1 text-rose-800">
                                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                                 <span>建议已失效（基准内容已被人工修改）</span>
                               </div>
-                              <p className="text-[10px] text-rose-800 leading-normal">
+                              <p className="text-xs text-rose-800 leading-normal">
                                 目标段落自建议生成后已被人工编辑修改。为防止直接覆盖人工编写的内容，旧建议已锁定无法采纳。请重新基于当前文本生成建议。
                               </p>
                             </div>
@@ -2418,25 +2482,25 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
                           {/* Unsupported Prompt Notice */}
                           {revisionSuggestion.isUnsupportedPrompt && (
-                            <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
+                            <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
                               <div className="font-bold text-amber-900 flex items-center gap-1">
                                 <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
                                 <span>未支持的演示指令</span>
                               </div>
-                              <p className="text-[10px] text-amber-800 leading-normal">
+                              <p className="text-xs text-amber-800 leading-normal">
                                 {revisionSuggestion.unsupportedPromptNotice}
                               </p>
                             </div>
                           )}
 
                           {/* Text Diff Comparison: Original vs Suggested */}
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {/* Original Text at Generation */}
                             <div className="space-y-1">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                                生成时原文（基准）：
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                                生成时原文（基准对照）：
                               </span>
-                              <div className="p-2 bg-white/90 rounded border border-slate-200 text-slate-600 text-[11px] leading-relaxed select-text font-serif">
+                              <div className="p-2.5 bg-white/90 rounded border border-slate-200 text-slate-600 text-sm leading-relaxed select-text font-serif">
                                 {revisionSuggestion.baseContent}
                               </div>
                             </div>
@@ -2444,26 +2508,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             {/* Suggested Text */}
                             <div className="space-y-1">
                               <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider">
+                                <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">
                                   AI建议修改：
                                 </span>
-                                <span className="text-[10px] text-slate-500">
+                                <span className="text-xs text-slate-500">
                                   字数变化：原 {revisionSuggestion.baseContent.length} 字 → 现 {revisionSuggestion.suggestedText.length} 字 (
                                   {revisionSuggestion.suggestedText.length - revisionSuggestion.baseContent.length >= 0 ? '+' : ''}
                                   {revisionSuggestion.suggestedText.length - revisionSuggestion.baseContent.length}字)
                                 </span>
                               </div>
-                              <div className="p-2.5 bg-white rounded border border-blue-200 text-slate-900 text-[11px] leading-relaxed select-text font-serif">
+                              <div className="p-3 bg-white rounded border border-blue-200 text-slate-900 text-sm leading-relaxed select-text font-serif">
                                 {revisionSuggestion.suggestedText}
                               </div>
                             </div>
 
                             {/* Visible Diff View with Explicit Badges */}
                             <div className="space-y-1 pt-1">
-                              <span className="text-[10px] font-bold text-slate-600 block">
+                              <span className="text-xs font-bold text-slate-600 block">
                                 可见改动差异（含文字标识）：
                               </span>
-                              <div className="p-2.5 bg-white rounded border border-slate-200 text-[11px] leading-relaxed text-slate-800 select-text font-serif">
+                              <div className="p-3 bg-white rounded border border-slate-200 text-sm leading-relaxed text-slate-800 select-text font-serif">
                                 {diffSegments.map((seg, sIdx) => {
                                   if (seg.type === 'equal') {
                                     return <span key={sIdx}>{seg.text}</span>;
@@ -2475,7 +2539,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                         className="bg-emerald-100 text-emerald-900 px-1 py-0.5 mx-0.5 rounded font-medium border-b-2 border-emerald-500 inline-flex items-center gap-0.5"
                                         title="新增内容"
                                       >
-                                        <span className="text-[9px] font-bold bg-emerald-300 text-emerald-900 px-0.5 rounded font-sans">
+                                        <span className="text-[10px] font-bold bg-emerald-300 text-emerald-900 px-1 rounded font-sans">
                                           +新增
                                         </span>
                                         <span>{seg.text}</span>
@@ -2489,7 +2553,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                         className="bg-rose-100 text-rose-900 line-through px-1 py-0.5 mx-0.5 rounded opacity-75 border-b-2 border-rose-400 inline-flex items-center gap-0.5"
                                         title="删减内容"
                                       >
-                                        <span className="text-[9px] font-bold bg-rose-300 text-rose-900 px-0.5 rounded no-underline font-sans">
+                                        <span className="text-[10px] font-bold bg-rose-300 text-rose-900 px-1 rounded no-underline font-sans">
                                           -删减
                                         </span>
                                         <span>{seg.text}</span>
@@ -2503,16 +2567,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           </div>
 
                           {/* Revision Explanation & Facts check */}
-                          <div className="space-y-1.5 pt-1 text-[11px] text-blue-900 bg-white/60 p-2 rounded border border-blue-100">
+                          <div className="space-y-1.5 pt-1 text-xs text-blue-900 bg-white/70 p-2.5 rounded border border-blue-100">
                             <div>
-                              <strong>改写目的与说明：</strong>
-                              <span className="text-slate-700">{revisionSuggestion.diffExplanation}</span>
+                              <strong className="text-slate-900">改写目的与说明：</strong>
+                              <span className="text-slate-700 ml-1 leading-relaxed">{revisionSuggestion.diffExplanation}</span>
                             </div>
 
                             {revisionSuggestion.needsVerificationNotes && revisionSuggestion.needsVerificationNotes.length > 0 && (
-                              <div className="pt-1 border-t border-blue-100/80">
+                              <div className="pt-1.5 border-t border-blue-100/80">
                                 <strong className="text-amber-800">需核对项：</strong>
-                                <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-[10px] text-amber-900">
+                                <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-xs text-amber-900">
                                   {revisionSuggestion.needsVerificationNotes.map((note, nIdx) => (
                                     <li key={nIdx}>{note}</li>
                                   ))}
@@ -2522,31 +2586,31 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           </div>
 
                           {/* Action Buttons: Adopt, Discard, Regenerate, Copy */}
-                          <div className="pt-2 flex flex-wrap items-center justify-between gap-1.5 border-t border-blue-200/80">
-                            <div className="flex gap-1.5">
+                          <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-blue-200/80">
+                            <div className="flex gap-2">
                               <button
                                 onClick={handleCopyRevision}
-                                className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
                                 title="复制建议文本至剪贴板（不改写正文）"
                               >
-                                <Copy className="w-3 h-3 text-slate-500" />
+                                <Copy className="w-3.5 h-3.5 text-slate-500" />
                                 <span>复制建议</span>
                               </button>
                               <button
                                 onClick={handleRegenerateRevision}
                                 disabled={isRevisionGenerating}
-                                className="px-2 py-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50"
                                 title="以当前段落重新生成建议"
                               >
-                                <RefreshCw className="w-3 h-3 text-slate-500" />
+                                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
                                 <span>重新生成</span>
                               </button>
                             </div>
 
-                            <div className="flex gap-1.5">
+                            <div className="flex gap-2">
                               <button
                                 onClick={handleDiscardRevision}
-                                className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-600 rounded text-[11px] cursor-pointer"
+                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-600 rounded text-xs cursor-pointer"
                                 title="放弃此建议（正文不改变）"
                               >
                                 放弃
@@ -2556,16 +2620,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 disabled={
                                   Boolean(isModifiedAfter) ||
                                   Boolean(revisionSuggestion.isUnsupportedPrompt) ||
+                                  Boolean(targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) ||
+                                  isRevisionGenerating ||
                                   !canUserEdit
                                 }
-                                className={`px-3 py-1 rounded text-[11px] font-semibold shadow-xs flex items-center gap-1 ${
-                                  isModifiedAfter || revisionSuggestion.isUnsupportedPrompt || !canUserEdit
+                                className={`px-4 py-1.5 rounded text-xs font-bold shadow-xs flex items-center gap-1.5 ${
+                                  isModifiedAfter ||
+                                  revisionSuggestion.isUnsupportedPrompt ||
+                                  (targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) ||
+                                  isRevisionGenerating ||
+                                  !canUserEdit
                                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                                     : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
                                 }`}
                                 title={
                                   !canUserEdit
                                     ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可采纳修改正文`
+                                    : isRevisionGenerating
+                                    ? '新建议生成中，不可采纳'
+                                    : targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()
+                                    ? '建议文本与当前段落完全一致（零差异），不能采纳标记已落实'
                                     : isModifiedAfter
                                     ? '目标段落基准自生成后已被人工编辑修改，无法采纳覆盖'
                                     : revisionSuggestion.isUnsupportedPrompt
@@ -2573,7 +2647,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                     : `采纳替换第${targetBlock?.order || revisionSuggestion.targetBlockOrder}段`
                                 }
                               >
-                                <Check className="w-3 h-3" />
+                                <Check className="w-4 h-4" />
                                 <span>采纳到目标段落</span>
                               </button>
                             </div>
@@ -2750,7 +2824,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   onClick={() => setInspectorTab('review_comments')}
                   className="px-3 py-1.5 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 rounded font-medium cursor-pointer"
                 >
-                  查看全部审阅意见 ({task.reviewComments.length})
+                  查看全部审阅意见 ({activeReviewComments.length})
                 </button>
               </div>
             )}

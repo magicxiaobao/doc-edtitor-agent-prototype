@@ -13,7 +13,10 @@ import {
 } from '../../services/permissionService';
 import { 
   generateCoordinationDiff, 
-  applyCoordinationDecision 
+  applyCoordinationDecision,
+  implementReviewCommentWithText,
+  getReviewCommentLocation,
+  rebindReviewCommentTargetBlock
 } from '../../services/reviewCoordinationService';
 import { applyDraftContentChange } from '../../services/draftLifecycleService';
 import { 
@@ -52,6 +55,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   onSelectStage,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  const reviewBaseDraft = (task.reviewBaseDraftId ? task.drafts.find((d) => d.id === task.reviewBaseDraftId) : undefined) || currentDraft;
+  const currentReviewRound = task.currentReviewRound || 1;
 
   // Comment filter
   const [commentFilter, setCommentFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -75,6 +80,10 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   const [implOriginalText, setImplOriginalText] = useState<string>('');
   const [implSuggestedText, setImplSuggestedText] = useState<string>('');
   const [implAuthorReply, setImplAuthorReply] = useState<string>('');
+
+  // Rebind comment modal (when target paragraph deleted/merged)
+  const [rebindingComment, setRebindingComment] = useState<ReviewComment | null>(null);
+  const [rebindTargetBlockId, setRebindTargetBlockId] = useState<string>('');
 
   // Contradiction resolution panel state (Compress to 2000 words vs Add 2 cases)
   const [showContradictionModal, setShowContradictionModal] = useState(false);
@@ -110,7 +119,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       type: commentType,
       targetBlockId: commentType === 'paragraph' ? selectedBlockId : undefined,
       targetBlockOrder: commentType === 'paragraph' ? targetBlock?.order : undefined,
-      targetVersionId: currentDraft?.id || 'DRAFT-DEFAULT',
+      targetVersionId: reviewBaseDraft?.id || currentDraft?.id || 'DRAFT-DEFAULT',
+      targetVersionNumber: reviewBaseDraft?.versionNumber || currentDraft?.versionNumber,
       baseParagraphText: commentType === 'paragraph' ? targetBlock?.content : undefined,
       reviewer: activeRole === '主笔甲' ? '审阅乙' : activeRole,
       content: newCommentContent.trim(),
@@ -165,14 +175,28 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       return;
     }
 
-    const targetBlock = currentDraft?.blocks.find((b) => b.id === cmt.targetBlockId) || currentDraft?.blocks[0];
-    const initialSuggested = cmt.suggestedChange || targetBlock?.content || '';
+    if (!currentDraft) {
+      alert('当前文稿草稿不存在，无法落实修改');
+      return;
+    }
+
+    // STRICT LOCATION CHECK: NEVER fallback to blocks[0]!
+    const loc = getReviewCommentLocation(cmt, currentDraft);
+    if (!loc.isLocated || !loc.targetBlock) {
+      alert('【定位需复核】该意见的目标段落已在正文中删除或合并，不可直接落实或错挂至第一段！请先重新指定目标段落。');
+      setRebindingComment(cmt);
+      setRebindTargetBlockId(currentDraft.blocks[0]?.id || '');
+      return;
+    }
+
+    const targetBlock = loc.targetBlock;
+    const initialSuggested = cmt.suggestedChange || targetBlock.content;
 
     setImplementingComment(cmt);
-    setImplTargetBlockId(targetBlock?.id || '');
-    setImplOriginalText(targetBlock?.content || cmt.baseParagraphText || '');
+    setImplTargetBlockId(targetBlock.id);
+    setImplOriginalText(targetBlock.content);
     setImplSuggestedText(initialSuggested);
-    setImplAuthorReply(`采纳【${cmt.reviewer}】修改建议，已核实修改第${targetBlock?.order || '指定'}段正文。`);
+    setImplAuthorReply(`采纳【${cmt.reviewer}】修改建议，已核实修改第${targetBlock.order}段正文。`);
   };
 
   // Confirm text modification, update draft working copy, generate new version snapshot
@@ -186,37 +210,23 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     if (!implementingComment || !currentDraft) return;
 
     try {
-      const { updatedTask, workingDraft } = applyDraftContentChange(
+      // Use shared implementation service: enforces target exists, base content unchanged, and zero diff rejected!
+      const { updatedTask, workingDraft } = implementReviewCommentWithText(
         task,
+        implementingComment.id,
         currentDraft.id,
-        (blocks) =>
-          blocks.map((b) =>
-            b.id === implTargetBlockId
-              ? { ...b, content: implSuggestedText.trim(), updatedAt: new Date().toISOString() }
-              : b
-          ),
-        `落实【${implementingComment.reviewer}】修改建议`,
-        activeRole
-      );
-
-      const updatedComments = updatedTask.reviewComments.map((c) => {
-        if (c.id === implementingComment.id) {
-          return {
-            ...c,
-            status: 'implemented' as const,
-            authorReply: implAuthorReply.trim() || '主笔已核准修改建议并写入正文生成新稿',
-            implementationDraftId: workingDraft.id,
-            implementationBlockId: implTargetBlockId,
-            resolutionType: 'text_modified' as const,
-          };
+        implSuggestedText,
+        implAuthorReply,
+        activeRole,
+        {
+          expectedBaseContent: implOriginalText,
         }
-        return c;
-      });
+      );
 
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
-        reviewComments: updatedComments,
+        reviewComments: updatedTask.reviewComments,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -224,6 +234,24 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       setImplementingComment(null);
     } catch (err: any) {
       alert(err.message || '落实修改失败');
+    }
+  };
+
+  // Rebind comment target block
+  const handleConfirmRebind = () => {
+    if (!rebindingComment || !currentDraft || !rebindTargetBlockId) return;
+    try {
+      const res = rebindReviewCommentTargetBlock(
+        task,
+        rebindingComment.id,
+        rebindTargetBlockId,
+        activeRole
+      );
+      onUpdateTask({ reviewComments: res.updatedTask.reviewComments });
+      setRebindingComment(null);
+      alert('目标段落已成功重新绑定');
+    } catch (err: any) {
+      alert(err.message || '重新指定目标段落失败');
     }
   };
 
@@ -351,6 +379,32 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           </span>
         </div>
         <span className="text-[11px] text-blue-700">可在顶部导航随时切换演示角色验证权限</span>
+      </div>
+
+      {/* Review Round & Base Draft Reference Banner */}
+      <div className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-xs shrink-0">
+            R{currentReviewRound}
+          </div>
+          <div>
+            <div className="font-bold text-slate-800 flex items-center gap-2">
+              <span>第 {currentReviewRound} 轮审阅周期</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium">
+                进行中
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+              <span>本轮审阅基准版本：<strong className="text-slate-700 font-medium">{reviewBaseDraft?.versionNumber || '初始版本'}</strong></span>
+              <span aria-hidden="true">·</span>
+              <span>当前最新工作稿：<strong className="text-slate-700 font-medium">{currentDraft?.versionNumber || '无'}</strong></span>
+            </div>
+          </div>
+        </div>
+        <div className="text-right text-[11px] text-slate-400">
+          <div>意见总数：{totalComments} 条（待处理 {pendingCommentsCount} 条）</div>
+          <div>意见针对基准版本提出，落实后记录落实版本与段落</div>
+        </div>
       </div>
 
       {/* Contradictory comments banner */}

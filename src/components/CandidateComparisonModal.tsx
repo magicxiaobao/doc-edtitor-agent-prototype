@@ -127,8 +127,81 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
       })
     : '刚刚';
 
-  // Outline sections to display
-  const sections = task.outline || [];
+  // Reconcile all section IDs across currentDraft blocks, candidate blocks, and task.outline
+  // so deleted sections from previous draft are completely preserved and displayed with deletion badges!
+  interface ComparisonSectionItem {
+    id: string;
+    title: string;
+    suggestedWordCount?: number;
+    assignedFactIds?: string[];
+    isDeletedFromOutline?: boolean;
+    isAddedInOutline?: boolean;
+  }
+
+  const sections: ComparisonSectionItem[] = React.useMemo(() => {
+    const sectionMap = new Map<string, ComparisonSectionItem>();
+    
+    // 1. First add outline sections from task
+    (task.outline || []).forEach((sec) => {
+      sectionMap.set(sec.id, {
+        id: sec.id,
+        title: sec.title,
+        suggestedWordCount: sec.suggestedWordCount,
+        assignedFactIds: sec.assignedFactIds,
+        isDeletedFromOutline: false,
+      });
+    });
+
+    // 2. Check snapshot outline sections if current draft has frozen outline metadata
+    const frozenOutlineSections = currentDraft?.snapshotMetadata?.outlineSections || [];
+    frozenOutlineSections.forEach((fSec) => {
+      if (!sectionMap.has(fSec.id)) {
+        sectionMap.set(fSec.id, {
+          id: fSec.id,
+          title: fSec.title,
+          suggestedWordCount: fSec.suggestedWordCount,
+          assignedFactIds: fSec.assignedFactIds,
+          isDeletedFromOutline: true,
+        });
+      }
+    });
+
+    // 3. Scan currentDraft blocks for any section IDs
+    (currentDraft?.blocks || []).forEach((b) => {
+      if (b.sectionId && !sectionMap.has(b.sectionId)) {
+        sectionMap.set(b.sectionId, {
+          id: b.sectionId,
+          title: `已删除章节【${b.sectionId}】`,
+          suggestedWordCount: 0,
+          assignedFactIds: [],
+          isDeletedFromOutline: true,
+        });
+      }
+    });
+
+    // 4. Scan candidate blocks for any section IDs
+    (candidate.blocks || []).forEach((b) => {
+      if (b.sectionId && !sectionMap.has(b.sectionId)) {
+        sectionMap.set(b.sectionId, {
+          id: b.sectionId,
+          title: `新候选章节【${b.sectionId}】`,
+          suggestedWordCount: 0,
+          assignedFactIds: [],
+          isAddedInOutline: true,
+        });
+      }
+    });
+
+    // Mark sections that exist in currentDraft but have NO blocks in candidate and are not in task.outline
+    return Array.from(sectionMap.values()).map((sec) => {
+      const existsInTaskOutline = (task.outline || []).some((o) => o.id === sec.id);
+      return {
+        ...sec,
+        isDeletedFromOutline: !existsInTaskOutline,
+      };
+    });
+  }, [task.outline, currentDraft, candidate]);
+
   const filteredSections =
     selectedSectionId === 'all'
       ? sections
@@ -398,13 +471,23 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
             <button
               key={sec.id}
               onClick={() => setSelectedSectionId(sec.id)}
-              className={`px-2.5 py-1 rounded text-xs transition-colors shrink-0 cursor-pointer ${
+              className={`px-2.5 py-1 rounded text-xs transition-colors shrink-0 cursor-pointer flex items-center gap-1 ${
                 selectedSectionId === sec.id
                   ? 'bg-blue-50 text-blue-800 font-bold border border-blue-300'
                   : 'text-slate-600 hover:bg-slate-100 border border-slate-200/60'
               }`}
             >
-              {idx + 1}. {sec.title}
+              <span>{idx + 1}. {sec.title}</span>
+              {sec.isDeletedFromOutline && (
+                <span className="text-[10px] bg-rose-100 text-rose-800 border border-rose-300 px-1 py-0.2 rounded font-bold">
+                  已删章节
+                </span>
+              )}
+              {sec.isAddedInOutline && (
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-1 py-0.2 rounded font-bold">
+                  候选新增
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -417,20 +500,40 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
             return (
               <div
                 key={sec.id}
-                className="bg-white rounded-lg border border-slate-200 shadow-2xs overflow-hidden"
+                className={`bg-white rounded-lg border shadow-2xs overflow-hidden ${
+                  sec.isDeletedFromOutline
+                    ? 'border-rose-300 ring-1 ring-rose-200'
+                    : 'border-slate-200'
+                }`}
               >
                 {/* Section Header */}
-                <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                <div className={`px-4 py-2.5 border-b flex items-center justify-between ${
+                  sec.isDeletedFromOutline
+                    ? 'bg-rose-50 border-rose-200'
+                    : 'bg-slate-100 border-slate-200'
+                }`}>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-xs text-slate-900">
-                      第 {sIdx + 1} 章节：{sec.title}
+                    <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                      <span>第 {sIdx + 1} 章节：{sec.title}</span>
+                      {sec.isDeletedFromOutline && (
+                        <span className="text-[10px] bg-rose-200 text-rose-900 border border-rose-400 px-1.5 py-0.2 rounded font-bold">
+                          [大纲已删除章节 · 旧稿正文保留对照]
+                        </span>
+                      )}
+                      {sec.isAddedInOutline && (
+                        <span className="text-[10px] bg-emerald-200 text-emerald-900 border border-emerald-400 px-1.5 py-0.2 rounded font-bold">
+                          [候选新增章节]
+                        </span>
+                      )}
                     </span>
-                    <span className="text-[11px] text-slate-500">
-                      (建议字数：{sec.suggestedWordCount}字)
-                    </span>
+                    {sec.suggestedWordCount ? (
+                      <span className="text-[11px] text-slate-500">
+                        (建议字数：{sec.suggestedWordCount}字)
+                      </span>
+                    ) : null}
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    分配事实：{sec.assignedFactIds.length} 项
+                    {sec.assignedFactIds ? `分配事实：${sec.assignedFactIds.length} 项` : ''}
                   </div>
                 </div>
 

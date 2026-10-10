@@ -691,11 +691,16 @@ export function submitDraftForReview(
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }
 
+  const reviewBaseId = baselineSnapshot?.id || targetDraft.id;
+  const nextRound = (task.currentReviewRound || 0) + 1;
+
   const updatedTask: Task = {
     ...task,
     drafts: updatedDrafts,
     currentStage: 'review',
     status: '审阅中',
+    reviewBaseDraftId: reviewBaseId,
+    currentReviewRound: nextRound,
     updatedAt: new Date().toISOString(),
   };
 
