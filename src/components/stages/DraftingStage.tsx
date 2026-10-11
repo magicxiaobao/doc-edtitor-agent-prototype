@@ -2230,9 +2230,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                         : '定位需复核：当前段落正文自意见提出后已有修改'}
                                     </span>
                                   </div>
-                                  {cmt.rebindRecord?.reboundParagraphText ? (
+                                  {cmt.rebindRecord && typeof cmt.rebindRecord.reboundParagraphText === 'string' ? (
                                     <p className="text-purple-700 italic">
-                                      重指定时基准句：“{cmt.rebindRecord.reboundParagraphText.slice(0, 45)}...”
+                                      {cmt.rebindRecord.reboundParagraphText === ''
+                                        ? '重绑时段落为空'
+                                        : `重指定时基准句：“${cmt.rebindRecord.reboundParagraphText.slice(0, 45)}...”`}
                                     </p>
                                   ) : cmt.baseParagraphText ? (
                                     <p className="text-slate-600 italic">

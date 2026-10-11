@@ -516,6 +516,102 @@ assert(
 );
 
 // --------------------------------------------------------------------------
+// 4.1. [P2 回归] 空正文重绑后未修改 vs 填入文字场景
+// --------------------------------------------------------------------------
+console.log('\n>>> [验收 4.1] 空正文重绑后未修改 vs 填入文字回归测试：');
+
+const emptyBlock: ContentBlock = {
+  id: 'b-empty-test',
+  order: 3,
+  content: '',
+  referencedFactIds: [],
+};
+
+const draftWithEmptyBlock: DraftVersion = {
+  ...currentDraft,
+  blocks: [...currentDraft.blocks, emptyBlock],
+};
+
+const taskWithEmptyBlock: Task = {
+  ...taskWithComment,
+  drafts: [draftWithEmptyBlock],
+  currentDraftId: draftWithEmptyBlock.id,
+};
+
+// Rebind comment to the empty block
+const rebindToEmptyResult = rebindReviewCommentTargetBlock(
+  taskWithEmptyBlock,
+  originalComment.id,
+  emptyBlock.id,
+  '主笔甲'
+);
+
+assert(
+  rebindToEmptyResult.updatedComment.reboundParagraphText === '',
+  '重绑到空段落时，reboundParagraphText 正确保留为空字符串 ""'
+);
+
+// 1) 空正文重绑后未修改：不应误判为正文变动
+const locEmptyUnchanged = getReviewCommentLocation(rebindToEmptyResult.updatedComment, draftWithEmptyBlock);
+assert(locEmptyUnchanged.isLocated === true, '空正文重绑后目标段落可定位');
+assert(locEmptyUnchanged.hasTextModified === false, '【空正文重绑后未修改】未发生后续修改绝不提示正文变化');
+assert(!locEmptyUnchanged.warning || !locEmptyUnchanged.warning.includes('已有修改'), '定位警告中不包含已有修改');
+
+// 2) 空正文重绑后填入文字（即使填入原段落文字，也必须判定为已变化）：
+const draftWithFilledBlock: DraftVersion = {
+  ...draftWithEmptyBlock,
+  blocks: draftWithEmptyBlock.blocks.map((b) =>
+    b.id === emptyBlock.id ? { ...b, content: block1.content } : b
+  ),
+};
+
+const locEmptyFilled = getReviewCommentLocation(rebindToEmptyResult.updatedComment, draftWithFilledBlock);
+assert(locEmptyFilled.isLocated === true, '填入文字后仍可正常定位');
+assert(locEmptyFilled.hasTextModified === true, '【空正文重绑后填入文字】随后填入文字正确判定为已变化');
+assert(
+  Boolean(locEmptyFilled.warning && locEmptyFilled.warning.includes('重定位段落正文自重新指定后已有修改')),
+  '返回重定位段落正文改动警告'
+);
+
+// 验证 ReviewStage 与 DraftingStage 中对空基准句的展示语义（显示“重绑时段落为空”）
+const reviewStageHtmlEmptyFilled = ReactDOMServer.renderToString(
+  React.createElement(ReviewStage, {
+    task: {
+      ...taskWithEmptyBlock,
+      drafts: [draftWithFilledBlock],
+      currentDraftId: draftWithFilledBlock.id,
+      reviewComments: [rebindToEmptyResult.updatedComment],
+    },
+    onUpdateTask: () => {},
+    onProceedToNextStage: () => {},
+    activeRole: '主笔甲',
+  })
+);
+assert(
+  reviewStageHtmlEmptyFilled.includes('重绑时段落为空'),
+  '审阅页展示“重绑时段落为空”语义'
+);
+
+const draftingStageHtmlEmptyFilled = ReactDOMServer.renderToString(
+  React.createElement(DraftingStage, {
+    task: {
+      ...taskWithEmptyBlock,
+      drafts: [draftWithFilledBlock],
+      currentDraftId: draftWithFilledBlock.id,
+      reviewComments: [rebindToEmptyResult.updatedComment],
+    },
+    onUpdateTask: () => {},
+    onProceedToNextStage: () => {},
+    activeRole: '主笔甲',
+    initialInspectorTab: 'review_comments',
+  })
+);
+assert(
+  draftingStageHtmlEmptyFilled.includes('重绑时段落为空'),
+  '起草页展示“重绑时段落为空”语义'
+);
+
+// --------------------------------------------------------------------------
 // 5. [P2 回归] 历史证据已清理时，区分三种出处状态，侧栏显示真实原因并保留查看说明入口，抽屉展示真实追溯说明
 // --------------------------------------------------------------------------
 console.log('\n>>> [验收 5] 历史证据已清理时的出处状态区分与抽屉追溯测试：');

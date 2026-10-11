@@ -348,12 +348,14 @@ export function getReviewCommentLocation(
   // If rebounded, compare against the rebound baseline (reboundParagraphText).
   // Otherwise, compare against original creation baseline (baseParagraphText).
   const isRebound = Boolean(comment.rebindRecord || comment.currentBlockId);
-  const baselineText = comment.reboundParagraphText || comment.rebindRecord?.reboundParagraphText || comment.baseParagraphText;
+  const baselineText =
+    comment.reboundParagraphText ??
+    comment.rebindRecord?.reboundParagraphText ??
+    comment.baseParagraphText;
 
-  const hasTextModified = Boolean(
-    baselineText &&
-    baselineText !== block.content
-  );
+  const hasTextModified =
+    typeof baselineText === 'string' &&
+    baselineText !== block.content;
 
   if (hasTextModified) {
     return {

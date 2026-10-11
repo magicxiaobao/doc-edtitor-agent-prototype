@@ -607,7 +607,9 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                           {isTargetBlockMissing
                             ? `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。原目标段落已在正文中删除或合并，为防止错挂，系统已隔离定位。`
                             : cmt.rebindRecord
-                            ? `重定位段落正文已有变动。重指定时原文：“${(cmt.rebindRecord.reboundParagraphText || '').slice(0, 45)}...”，请核实当前正文修改是否影响审阅意见答复。`
+                            ? (typeof cmt.rebindRecord.reboundParagraphText === 'string' && cmt.rebindRecord.reboundParagraphText === ''
+                                ? '重定位段落正文已有变动。重绑时段落为空，请核实当前正文修改是否影响审阅意见答复。'
+                                : `重定位段落正文已有变动。重指定时原文：“${(cmt.rebindRecord.reboundParagraphText || '').slice(0, 45)}...”，请核实当前正文修改是否影响审阅意见答复。`)
                             : `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。提出时基准原句：“${(cmt.baseParagraphText || '').slice(0, 45)}...”，当前段落正文已有修改，请复核。`}
                         </p>
                         {cmt.baseParagraphText && (
