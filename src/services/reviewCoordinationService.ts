@@ -7,7 +7,8 @@ import {
   CoordinationDiffResult,
   EvidenceSnippet,
   ReviewComment,
-  ReviewCommentStatus
+  ReviewCommentStatus,
+  ReviewNavigationIntent
 } from '../types';
 import { applyDraftContentChange } from './draftLifecycleService';
 import { checkPermission } from './permissionService';
@@ -374,6 +375,64 @@ export function getReviewCommentLocation(
     targetBlock: block,
     isOutdatedVersion,
     hasTextModified: false,
+  };
+}
+
+export interface ResolvedNavigationContext {
+  comment?: ReviewComment;
+  location?: ReviewCommentLocationResult;
+  targetBlock?: ParagraphBlock;
+  isDeletedOrMissing: boolean;
+  isOverall: boolean;
+  isRebound: boolean;
+  hasTextModified: boolean;
+  scopeDescription: string;
+}
+
+/**
+ * Resolves the operational navigation context when jumping from review comments to drafting workspace.
+ * Preserves evidentiary record, handles missing/deleted paragraphs, rebound blocks, and overall comments.
+ */
+export function resolveReviewNavigationContext(
+  comment: ReviewComment | undefined,
+  draft: DraftVersion | undefined
+): ResolvedNavigationContext {
+  if (!comment || !draft) {
+    return {
+      comment,
+      isDeletedOrMissing: false,
+      isOverall: false,
+      isRebound: false,
+      hasTextModified: false,
+      scopeDescription: '未关联有效审阅意见上下文',
+    };
+  }
+
+  const isOverall = comment.type === 'overall';
+  const isRebound = Boolean(comment.rebindRecord || comment.currentBlockId);
+  const location = getReviewCommentLocation(comment, draft);
+  const targetBlock = location.targetBlock;
+  const isDeletedOrMissing = !isOverall && (!location.isLocated || !targetBlock);
+  const hasTextModified = Boolean(location.hasTextModified);
+
+  let scopeDescription = '';
+  if (isOverall) {
+    scopeDescription = '修改范围：全局审阅意见（未绑定固定段落，请在正文中选择要应用修改的目标段落或章节）';
+  } else if (targetBlock) {
+    scopeDescription = `修改范围：仅限第${targetBlock.order}段（局部改写，不影响其他段落）`;
+  } else {
+    scopeDescription = '修改范围：目标段落已缺失/删除，需先重新指定目标段落';
+  }
+
+  return {
+    comment,
+    location,
+    targetBlock,
+    isDeletedOrMissing,
+    isOverall,
+    isRebound,
+    hasTextModified,
+    scopeDescription,
   };
 }
 

@@ -4,7 +4,8 @@ import {
   TaskStage, 
   UserRole, 
   EvidenceSnippet,
-  Fact 
+  Fact,
+  ReviewNavigationIntent 
 } from './types';
 import { createPresetTask } from './services/mockData';
 import { 
@@ -41,11 +42,17 @@ export function App() {
 
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
   const [viewingFact, setViewingFact] = useState<Fact | null>(null);
+  const [reviewNavIntent, setReviewNavIntent] = useState<ReviewNavigationIntent | null>(null);
 
   const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact) => {
     setViewingSnippet(snippet);
     setViewingFact(fact || null);
   };
+
+  // Requirement 8: Clear navigation intent when switching tasks to prevent cross-task leakage
+  useEffect(() => {
+    setReviewNavIntent(null);
+  }, [currentTaskId]);
 
   // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
   useEffect(() => {
@@ -152,11 +159,27 @@ export function App() {
   };
 
   const handleSelectStage = (stage: TaskStage) => {
+    if (stage !== 'drafting') {
+      setReviewNavIntent(null);
+    }
     handleUpdateCurrentTask({ currentStage: stage });
   };
 
   const handleProceedStage = (nextStage: TaskStage) => {
+    if (nextStage !== 'drafting') {
+      setReviewNavIntent(null);
+    }
     handleUpdateCurrentTask({ currentStage: nextStage });
+  };
+
+  const handleNavigateToReviewComment = (commentId: string, targetDraftId?: string) => {
+    setReviewNavIntent({
+      taskId: currentTask.id,
+      commentId,
+      targetDraftId: targetDraftId || currentTask.currentDraftId,
+      timestamp: Date.now(),
+    });
+    handleUpdateCurrentTask({ currentStage: 'drafting' });
   };
 
   return (
@@ -297,6 +320,8 @@ export function App() {
             onProceedToNextStage={() => handleProceedStage('review')}
             activeRole={activeRole}
             onSelectStage={handleSelectStage}
+            navIntent={reviewNavIntent}
+            onClearNavIntent={() => setReviewNavIntent(null)}
           />
         )}
 
@@ -307,6 +332,7 @@ export function App() {
             onProceedToNextStage={() => handleProceedStage('final_export')}
             activeRole={activeRole}
             onSelectStage={handleSelectStage}
+            onNavigateToDraftComment={handleNavigateToReviewComment}
           />
         )}
 

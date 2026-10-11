@@ -12,7 +12,8 @@ import {
   RevisionSuggestion,
   ReviewComment,
   ReviewCommentStatus,
-  Fact
+  Fact,
+  ReviewNavigationIntent
 } from '../../types';
 import { resolveDraftFactEvidence } from '../../services/factLifecycleService';
 import { 
@@ -48,6 +49,7 @@ import {
   isValidAuthenticCase, 
   getAuthenticCaseCandidates,
   getReviewCommentLocation,
+  resolveReviewNavigationContext,
   implementReviewCommentWithText,
   updateReviewCommentDecision,
   rebindReviewCommentTargetBlock,
@@ -98,6 +100,8 @@ interface DraftingStageProps {
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
   initialInspectorTab?: 'ai_suggestions' | 'review_comments' | 'material_evidence';
+  navIntent?: ReviewNavigationIntent | null;
+  onClearNavIntent?: () => void;
 }
 
 export const DraftingStage: React.FC<DraftingStageProps> = ({
@@ -108,7 +112,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   activeRole,
   onSelectStage,
   initialInspectorTab,
+  navIntent,
+  onClearNavIntent,
 }) => {
+  // Requirement 8: Immediate cross-task intent isolation guard
+  if (navIntent && navIntent.taskId !== task.id) {
+    if (onClearNavIntent) {
+      onClearNavIntent();
+    }
+  }
+
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
 
@@ -117,14 +130,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [showRightInspector, setShowRightInspector] = useState(true);
 
   // Inspector tab: 'ai_suggestions' | 'review_comments' | 'material_evidence'
-  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>(
-    initialInspectorTab || 'ai_suggestions'
-  );
+  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>(() => {
+    if (navIntent?.commentId) return 'review_comments';
+    return initialInspectorTab || 'ai_suggestions';
+  });
+
+  // In-app modal for submit for review (replaces window.confirm)
+  const [showSubmitReviewModal, setShowSubmitReviewModal] = useState(false);
 
   // Review comments filtering and modal state
   const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
   const [commentReviewerFilter, setCommentReviewerFilter] = useState<'all' | '审阅乙' | '审阅丁'>('all');
-  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(() => {
+    if (navIntent && navIntent.taskId === task.id) {
+      return navIntent.commentId;
+    }
+    return null;
+  });
 
   // Manual implement comment modal
   const [implementingComment, setImplementingComment] = useState<ReviewComment | null>(null);
@@ -151,7 +173,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   );
 
   // Selected block for editing / inspection
-  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(() => {
+    if (navIntent && navIntent.taskId === task.id && navIntent.commentId) {
+      const cmt = (task.reviewComments || []).find((c) => c.id === navIntent.commentId);
+      if (cmt && currentDraft) {
+        const resolved = resolveReviewNavigationContext(cmt, currentDraft);
+        if (resolved.targetBlock) {
+          return resolved.targetBlock.id;
+        }
+        return null;
+      }
+    }
+    return null;
+  });
 
   // Inspected fact ID for targeted evidence examination
   const [inspectingFactId, setInspectingFactId] = useState<string | null>(null);
@@ -217,6 +251,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setActiveDraftRunId(null);
     setPendingCandidate(null);
     setRevisionSuggestion(null);
+    setSelectedBlockId(null);
+    setSelectedCommentId(null);
+    setCustomPromptInput('');
+    if (onClearNavIntent) {
+      onClearNavIntent();
+    }
   }, [task.id]);
 
   // Component unmount cleanup
@@ -243,6 +283,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Check if current draft is an immutable snapshot (historical snapshot or finalized)
   const isCurrentDraftImmutable = Boolean(currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal);
+  const latestWorkingDraft = task.drafts.find((d) => !d.isHistoricalSnapshot && !d.isFinal);
 
   // Calculation of preparation statuses
   const confirmedFactsCount = task.facts.filter((f) => f.status === 'confirmed').length;
@@ -272,8 +313,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setInspectorTab('material_evidence');
   };
 
-  // Selected block object
-  const activeBlock = currentDraft?.blocks.find((b) => b.id === selectedBlockId) || currentDraft?.blocks[0];
+  // Active review comments associated with current draft:
+  // If viewing historical snapshot or finalized draft, STRICTLY read frozen review comments;
+  // If missing frozenReviewComments on a historical version, NEVER fallback to task.reviewComments (which would leak current comments into history)!
+  const activeReviewComments: ReviewComment[] =
+    isCurrentDraftImmutable
+      ? (currentDraft?.frozenReviewComments || [])
+      : task.reviewComments;
+
+  // Selected comment
+  const selectedComment = activeReviewComments.find((c) => c.id === selectedCommentId)
+    || task.reviewComments.find((c) => c.id === selectedCommentId);
+  const selectedCommentNavContext = selectedComment
+    ? resolveReviewNavigationContext(selectedComment, currentDraft)
+    : null;
+
+  // Selected block object: if selectedBlockId is specified, use it.
+  // If an overall comment or deleted paragraph comment is actively selected, do NOT fake selection of block 0!
+  const activeBlock = selectedBlockId
+    ? currentDraft?.blocks.find((b) => b.id === selectedBlockId)
+    : (selectedComment ? undefined : currentDraft?.blocks[0]);
 
   // Total word count of current draft
   const currentWordCount = currentDraft?.blocks.reduce((acc, b) => acc + b.content.length, 0) || 0;
@@ -283,6 +342,72 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const lastSavedTimeStr = task.updatedAt
     ? new Date(task.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : '刚刚';
+
+  // Requirement 1, 2, 3, 8: Handle navigation intent from ReviewStage
+  const lastProcessedNavRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!navIntent) return;
+    if (navIntent.taskId !== task.id) {
+      if (onClearNavIntent) onClearNavIntent();
+      return;
+    }
+
+    const intentKey = `${navIntent.taskId}-${navIntent.commentId}-${navIntent.timestamp || 0}`;
+    if (lastProcessedNavRef.current === intentKey) {
+      return;
+    }
+    lastProcessedNavRef.current = intentKey;
+
+    const targetComment = activeReviewComments.find((c) => c.id === navIntent.commentId)
+      || task.reviewComments.find((c) => c.id === navIntent.commentId);
+
+    if (!targetComment) return;
+
+    // 1. Expand inspector and switch to 'review_comments' tab
+    setShowRightInspector(true);
+    setInspectorTab('review_comments');
+    setSelectedCommentId(targetComment.id);
+
+    // 2. Clear filters so the comment is never hidden
+    setCommentStatusFilter('all');
+    setCommentReviewerFilter('all');
+
+    // 3. Clear previous suggestion, custom prompt, and run IDs (no residue!)
+    setRevisionSuggestion(null);
+    setCustomPromptInput('');
+    activeRevisionRunIdRef.current = null;
+    completedRevisionRunIdRef.current = null;
+    setActiveRevisionRunId(null);
+    setIsRevisionGenerating(false);
+    setRevisionError(null);
+
+    // 4. Resolve target paragraph location
+    const navCtx = resolveReviewNavigationContext(targetComment, currentDraft);
+    if (navCtx.isOverall) {
+      // Overall comment has no fixed paragraph. Do NOT fake first paragraph!
+      setSelectedBlockId(null);
+    } else if (navCtx.location?.isLocated && navCtx.targetBlock) {
+      setSelectedBlockId(navCtx.targetBlock.id);
+      setTimeout(() => {
+        const el = document.getElementById(`block-card-${navCtx.targetBlock!.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 50);
+    } else {
+      // Missing or deleted target paragraph: do NOT fallback to block 0!
+      setSelectedBlockId(null);
+    }
+
+    // 5. Scroll comment card into view in the inspector
+    setTimeout(() => {
+      const cEl = document.getElementById(`comment-card-${targetComment.id}`);
+      if (cEl) {
+        cEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 80);
+  }, [navIntent, task.id, currentDraft?.id, activeReviewComments]);
 
   // Identify blocks whose referenced facts have changed, been revoked, or are unconfirmed
   const blocksNeedingReview = (currentDraft?.blocks || []).filter((block) => {
@@ -300,14 +425,6 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return false;
     });
   });
-
-  // Active review comments associated with current draft:
-  // If viewing historical snapshot or finalized draft, STRICTLY read frozen review comments;
-  // If missing frozenReviewComments on a historical version, NEVER fallback to task.reviewComments (which would leak current comments into history)!
-  const activeReviewComments: ReviewComment[] =
-    isCurrentDraftImmutable
-      ? (currentDraft?.frozenReviewComments || [])
-      : task.reviewComments;
 
   const totalCommentsCount = activeReviewComments.length;
   const pendingCommentsCount = activeReviewComments.filter((c) => c.status === 'pending').length;
@@ -834,8 +951,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
   };
 
-  // Generate revision for review comment
-  const handleGenerateRevisionFromComment = (cmt: ReviewComment) => {
+  // Generate revision for review comment (supports paragraph and overall comments)
+  const handleGenerateRevisionFromComment = (cmt: ReviewComment, overrideTargetBlock?: ParagraphBlock) => {
     const perm = checkPermission(activeRole, 'edit_draft');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可根据意见生成修改建议');
@@ -843,6 +960,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
 
     if (!currentDraft) return;
+
+    if (cmt.type === 'overall') {
+      const targetBlockToUse = overrideTargetBlock || activeBlock;
+      if (!targetBlockToUse) {
+        alert('该意见为全局审阅意见，未绑定固定段落。请先在左侧正文中点击选择要应用修改的目标段落，明确修改范围后再生成建议。');
+        return;
+      }
+      setSelectedBlockId(targetBlockToUse.id);
+      executeRevisionRequest(
+        targetBlockToUse,
+        'custom',
+        cmt.suggestedChange || cmt.content,
+        cmt
+      );
+      return;
+    }
+
     const loc = getReviewCommentLocation(cmt, currentDraft);
     if (!loc.isLocated || !loc.targetBlock) {
       alert(loc.warning || '该意见原目标段落已在正文中删除或合并，定位失效，请先点击【重新指定目标段落】！');
@@ -1020,6 +1154,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         activeRole
       );
       onUpdateTask({ reviewComments: updatedTask.reviewComments });
+      setSelectedBlockId(reboundBlockId);
+      setTimeout(() => {
+        const el = document.getElementById(`block-card-${reboundBlockId}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
       setReboundingComment(null);
     } catch (err: any) {
       alert(err.message || '重新指定段落失败');
@@ -1090,7 +1229,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
   };
 
-  // Submit draft for review click
+  // Submit draft for review click - opens in-app confirmation modal (eliminates window.confirm iframe failure)
   const handleSubmitDraftForReviewClick = () => {
     const perm = checkPermission(activeRole, 'edit_draft');
     if (!perm.allowed) {
@@ -1098,11 +1237,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
     if (!currentDraft) return;
+    setShowSubmitReviewModal(true);
+  };
 
-    if (!window.confirm(`确认将当前版本【${currentDraft.versionNumber}】提交审阅吗？系统将自动冻结只读审阅基准快照，任务状态将变更为“审阅中”。`)) {
-      return;
-    }
-
+  const handleConfirmSubmitForReview = () => {
+    if (!currentDraft) return;
     try {
       const { updatedTask } = submitDraftForReview(
         task,
@@ -1110,6 +1249,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         activeRole,
         true
       );
+      setShowSubmitReviewModal(false);
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentStage: 'review',
@@ -1599,15 +1739,28 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 </span>
               </div>
             </div>
-            {canUserEdit && (
-              <button
-                onClick={handleForkWorkingDraftFromImmutable}
-                className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0 self-start sm:self-auto"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>基于此稿继续编辑（创建新工作稿）</span>
-              </button>
-            )}
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {latestWorkingDraft && (
+                <button
+                  onClick={() => onUpdateTask({ currentDraftId: latestWorkingDraft.id })}
+                  className="px-3 py-1 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                  title={`返回正在起草的工作稿【${latestWorkingDraft.versionNumber}】`}
+                >
+                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>返回当前工作稿（{latestWorkingDraft.versionNumber}）</span>
+                </button>
+              )}
+              {canUserEdit && (
+                <button
+                  onClick={handleForkWorkingDraftFromImmutable}
+                  className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                  title="基于此只读快照创建新的可编辑工作草稿"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>基于此稿继续编辑（创建新工作稿）</span>
+                </button>
+              )}
+            </div>
           </div>
           {!currentDraft.frozenReviewComments && (
             <div className="text-[11px] text-amber-800 bg-amber-100/60 p-2 rounded border border-amber-200/80 flex items-center justify-between gap-2">
@@ -1829,8 +1982,57 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
               {/* Document Paragraph Blocks */}
               <div className="space-y-6">
+                {/* Overall Comment Navigation Context Banner */}
+                {selectedComment && selectedComment.type === 'overall' && (
+                  <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-950 space-y-1.5 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <MessageSquare className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <span>{`正在定位全局审阅意见：【${selectedComment.reviewer}】`}</span>
+                      </div>
+                      <span className="text-[10px] bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-medium">
+                        全篇适用
+                      </span>
+                    </div>
+                    <p className="text-slate-800 font-medium">{`“${selectedComment.content}”`}</p>
+                    <div className="text-[11px] text-indigo-900 bg-white/70 p-2 rounded border border-indigo-100">
+                      <strong>修改范围说明：</strong>{`此意见针对整篇文稿，未绑定固定段落。请在下方正文中点击选择要应用修改的具体目标段落${selectedBlockId ? `（当前已选第${currentDraft.blocks.find(b => b.id === selectedBlockId)?.order}段）` : '（尚未选择段落）'}，明确修改范围后再据此改写。`}
+                    </div>
+                  </div>
+                )}
+
+                {/* Deleted / Missing Target Block Comment Banner */}
+                {selectedComment && selectedComment.type === 'paragraph' && selectedCommentNavContext?.isDeletedOrMissing && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <div className="font-bold text-amber-900">
+                          定位需复核：原目标段落已在正文中删除或合并
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          {`意见来自【${selectedComment.reviewer}】（原第${selectedComment.targetBlockOrder || '?'}段）。当前正文中该段落已不存在，不可自动匹配至其他段落，严禁直接自动改写。`}
+                        </p>
+                        {selectedComment.baseParagraphText && (
+                          <p className="text-[10px] text-slate-500 italic">
+                            {`提出时原文：“${selectedComment.baseParagraphText.slice(0, 45)}...”`}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {canUserEdit && !isCurrentDraftImmutable && (
+                      <button
+                        onClick={() => handleOpenRebindModal(selectedComment)}
+                        className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold shrink-0 cursor-pointer self-start sm:self-auto"
+                      >
+                        重新指定目标段落
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {currentDraft.blocks.map((block, idx) => {
-                  const isSelected = selectedBlockId === block.id || (!selectedBlockId && idx === 0);
+                  const isSelected = selectedBlockId === block.id || (!selectedBlockId && !selectedComment && idx === 0);
                   const isRevisionTarget = revisionSuggestion?.targetBlockId === block.id;
                   const section = task.outline.find((s) => s.id === block.sectionId);
                   const isSectionFirstBlock = idx === 0 || currentDraft.blocks[idx - 1]?.sectionId !== block.sectionId;
@@ -1858,6 +2060,22 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             : 'hover:bg-slate-50/80 border border-slate-200/80'
                         }`}
                       >
+                        {/* Review Comment Context Banner on Target Block */}
+                        {selectedComment && (selectedComment.currentBlockId || selectedComment.targetBlockId) === block.id && (
+                          <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <MessageSquare className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              <span className="font-semibold">{`来源：【${selectedComment.reviewer}】审阅意见`}</span>
+                              <span className="text-[11px] text-blue-700 font-mono">{`当前第${block.order}段`}</span>
+                              <span className="text-[10px] text-slate-500">{`（修改范围：仅限第${block.order}段）`}</span>
+                            </div>
+                            {selectedComment.rebindRecord && (
+                              <span className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-medium">
+                                {`已重定位（原第${selectedComment.targetBlockOrder}段）`}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {/* Status badge when targeted by pending suggestion */}
                         {isRevisionTarget && (
                           <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded font-medium">
@@ -2129,6 +2347,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   ) : (
                     activeReviewComments
                       .filter((c) => {
+                        // Ensure the actively selected comment is never hidden by filters (Requirement 3)
+                        if (c.id === selectedCommentId) return true;
                         if (commentStatusFilter !== 'all' && c.status !== commentStatusFilter) return false;
                         if (commentReviewerFilter !== 'all' && c.reviewer !== commentReviewerFilter) return false;
                         return true;
@@ -2141,10 +2361,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                       return (
                         <div
                           key={cmt.id}
-                          className={`p-3 rounded-lg border text-xs space-y-2 transition-all ${
+                          id={`comment-card-${cmt.id}`}
+                          onClick={() => {
+                            setSelectedCommentId(cmt.id);
+                            if (cmt.type === 'paragraph' && loc.targetBlock) {
+                              handleJumpToTargetBlock(loc.targetBlock.id);
+                            }
+                          }}
+                          className={`p-3 rounded-lg border text-xs space-y-2 transition-all cursor-pointer ${
                             isSelectedComment
-                              ? 'bg-blue-50/50 border-blue-400 ring-2 ring-blue-100'
-                              : 'bg-slate-50 border-slate-200'
+                              ? 'bg-blue-50/70 border-blue-500 ring-2 ring-blue-200 shadow-xs'
+                              : 'bg-slate-50 border-slate-200 hover:bg-slate-100/60'
                           }`}
                         >
                           <div className="flex items-center justify-between">
@@ -2189,6 +2416,21 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             </span>
                           </div>
 
+                          {/* Scope and Source Details */}
+                          <div className="p-1.5 bg-white/90 rounded border border-slate-200 text-[10px] text-slate-600 space-y-0.5">
+                            <div className="flex items-center justify-between">
+                              <span>意见来源：<strong className="text-slate-800">{cmt.reviewer}</strong></span>
+                              <span className="text-slate-400 font-mono">{cmt.id}</span>
+                            </div>
+                            <div className="text-blue-900 font-medium">
+                              {cmt.type === 'overall'
+                                ? '修改范围：全局审阅意见（请在正文选择要修改的段落或章节）'
+                                : loc.targetBlock
+                                ? `修改范围：仅限第${loc.targetBlock.order}段（局部改写，不影响其他段落）`
+                                : '修改范围：目标段落已缺失/删除，需先重新指定目标段落'}
+                            </div>
+                          </div>
+
                           <p className="text-[11px] text-slate-800 leading-relaxed font-medium">{cmt.content}</p>
 
                           {cmt.suggestedChange && (
@@ -2206,7 +2448,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               </span>
                               {canUserEdit && (
                                 <button
-                                  onClick={() => handleOpenRebindModal(cmt)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenRebindModal(cmt);
+                                  }}
                                   className="text-purple-800 hover:underline font-bold ml-1 cursor-pointer"
                                 >
                                   重改
@@ -2243,7 +2488,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                   ) : null}
                                   {canUserEdit && (
                                     <button
-                                      onClick={() => handleOpenRebindModal(cmt)}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenRebindModal(cmt);
+                                      }}
                                       className="px-2 py-0.5 bg-white border border-amber-300 hover:bg-amber-100 rounded text-[10px] font-bold text-amber-900 cursor-pointer"
                                     >
                                       重新指定目标段落
@@ -2256,7 +2504,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                     对应第{loc.targetBlock.order}段：“{loc.targetBlock.content.slice(0, 24)}...”
                                   </span>
                                   <button
-                                    onClick={() => handleJumpToTargetBlock(loc.targetBlock!.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleJumpToTargetBlock(loc.targetBlock!.id);
+                                    }}
                                     className="text-blue-700 hover:underline font-bold shrink-0 cursor-pointer"
                                   >
                                     定位段落
@@ -2284,46 +2535,94 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           {/* Action Buttons for Author */}
                           {!isCurrentDraftImmutable && canUserEdit && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
                             <div className="pt-1.5 border-t border-slate-200/70 flex flex-wrap justify-end gap-1 text-[10px]">
-                              {loc.targetBlock && (
+                              {cmt.type === 'overall' ? (
                                 <button
-                                  onClick={() => handleGenerateRevisionFromComment(cmt)}
-                                  className="px-2 py-0.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium flex items-center gap-0.5 cursor-pointer"
-                                  title="在左侧正文中定位并生成AI修改建议"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleGenerateRevisionFromComment(cmt);
+                                  }}
+                                  className="px-2 py-0.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                                  title={activeBlock ? `针对正文当前选中的第${activeBlock.order}段生成修改建议` : '请先在左侧正文中点击选中目标段落'}
                                 >
                                   <Sparkles className="w-2.5 h-2.5" />
-                                  <span>生成修改建议</span>
+                                  <span>{activeBlock ? `依据此意见改写第${activeBlock.order}段` : '选择段落后生成建议'}</span>
+                                </button>
+                              ) : loc.targetBlock ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleGenerateRevisionFromComment(cmt);
+                                  }}
+                                  className="px-2 py-0.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                                  title={`在第${loc.targetBlock.order}段定位并生成AI修改建议`}
+                                >
+                                  <Sparkles className="w-2.5 h-2.5" />
+                                  <span>依据此意见生成修改建议</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenRebindModal(cmt);
+                                  }}
+                                  className="px-2 py-0.5 bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                                  title="原目标段落已缺失，需先重新指定目标段落"
+                                >
+                                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                                  <span>重新指定目标后改写</span>
                                 </button>
                               )}
 
                               <button
-                                onClick={() => handleAcceptCommentDecisionOnly(cmt)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAcceptCommentDecisionOnly(cmt);
+                                }}
                                 className="px-2 py-0.5 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded font-medium cursor-pointer"
                                 title="记录处理决定为【决定采纳，待落实】（不直接改写正文）"
                               >
                                 决定采纳 (待落实)
                               </button>
 
-                              <button
-                                onClick={() => handleOpenDirectImplementModal(cmt)}
-                                className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-medium cursor-pointer"
-                                title="直接写入正文并生成新工作稿"
-                              >
-                                直接落实修改
-                              </button>
+                              {loc.targetBlock && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenDirectImplementModal(cmt);
+                                  }}
+                                  className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-medium cursor-pointer"
+                                  title="直接写入正文并生成新工作稿"
+                                >
+                                  直接落实修改
+                                </button>
+                              )}
 
                               <button
-                                onClick={() => handleOpenRejectModal(cmt)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenRejectModal(cmt);
+                                }}
                                 className="px-2 py-0.5 text-slate-600 hover:bg-slate-100 border border-slate-300 rounded cursor-pointer"
                               >
                                 拒绝并说明
                               </button>
 
                               <button
-                                onClick={() => handleOpenDiscussModal(cmt)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenDiscussModal(cmt);
+                                }}
                                 className="px-2 py-0.5 text-purple-700 hover:bg-purple-50 border border-purple-200 rounded cursor-pointer"
                               >
                                 待沟通
                               </button>
+                            </div>
+                          )}
+
+                          {isCurrentDraftImmutable && (
+                            <div className="pt-1.5 border-t border-slate-200/70 text-[10px] text-slate-400 italic flex items-center gap-1">
+                              <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>当前处于只读快照版本，不可直接修改。请返回工作稿后再行落实。</span>
                             </div>
                           )}
                         </div>
@@ -2537,6 +2836,24 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               <span className="font-mono text-[10px] text-slate-500 block pt-0.5">{targetBlock?.id}</span>
                             </details>
                           </div>
+
+                          {/* Source review comment context */}
+                          {revisionSuggestion.sourceCommentId && (
+                            <div className="p-2 bg-white rounded border border-blue-200 text-xs text-blue-950 space-y-0.5">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold flex items-center gap-1 text-blue-800">
+                                  <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                                  依据【{revisionSuggestion.sourceCommentReviewer || '审阅人'}】意见生成
+                                </span>
+                                <span className="text-[10px] text-blue-600 font-mono">{revisionSuggestion.sourceCommentId}</span>
+                              </div>
+                              {revisionSuggestion.sourceCommentSummary && (
+                                <p className="text-[11px] text-slate-600 line-clamp-2">
+                                  意见内容：“{revisionSuggestion.sourceCommentSummary}”
+                                </p>
+                              )}
+                            </div>
+                          )}
 
                           {/* When user selected another block while suggestion targets another */}
                           {isDifferentBlockSelected && (
@@ -3508,6 +3825,75 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. In-App Submit Draft For Review Confirmation Modal (replaces window.confirm) */}
+      {showSubmitReviewModal && currentDraft && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-150">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send className="w-5 h-5 text-blue-600" />
+                <h3 className="font-bold text-sm text-slate-800">提交本轮审阅确认</h3>
+              </div>
+              <button
+                onClick={() => setShowSubmitReviewModal(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                aria-label="关闭"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1">
+                <div className="font-semibold text-blue-900">
+                  当前待提交文稿：【{currentDraft.versionNumber}】
+                </div>
+                <div className="text-[11px] text-blue-800">
+                  字数：{currentWordCount} 字 · 拟稿人：{currentDraft.author}
+                </div>
+              </div>
+
+              <div className="space-y-2 text-slate-700">
+                <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>提交审阅与冻结基准影响说明：</span>
+                </div>
+                <ul className="space-y-1.5 pl-5 list-disc text-[11px] text-slate-600 leading-normal">
+                  <li>
+                    <strong>生成冻结基准快照：</strong>系统将以当前版本自动生成不可篡改的审阅基准快照，作为本轮审阅对比基线。
+                  </li>
+                  <li>
+                    <strong>递增审阅轮次：</strong>当前审阅轮次将从第 {task.currentReviewRound || 0} 轮推进至第 {(task.currentReviewRound || 0) + 1} 轮。
+                  </li>
+                  <li>
+                    <strong>变更任务状态：</strong>任务状态将流转至“审阅中”，并自动跳转至审阅修改工作区。
+                  </li>
+                  <li>
+                    <strong>审阅意见严格绑定：</strong>审阅领导提出的修改批注与建议将绑定本轮基准，不污染历史版本。
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5">
+              <button
+                onClick={() => setShowSubmitReviewModal(false)}
+                className="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-100 rounded text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmSubmitForReview}
+                className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>确认提交并进入审阅</span>
+              </button>
             </div>
           </div>
         </div>

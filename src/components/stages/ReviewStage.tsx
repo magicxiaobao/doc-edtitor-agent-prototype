@@ -47,6 +47,7 @@ interface ReviewStageProps {
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: any) => void;
+  onNavigateToDraftComment?: (commentId: string, targetDraftId?: string) => void;
 }
 
 export const ReviewStage: React.FC<ReviewStageProps> = ({
@@ -55,6 +56,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   onProceedToNextStage,
   activeRole,
   onSelectStage,
+  onNavigateToDraftComment,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const reviewBaseDraft = (task.reviewBaseDraftId ? task.drafts.find((d) => d.id === task.reviewBaseDraftId) : undefined) || currentDraft;
@@ -656,9 +658,15 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     {/* Actions for Author */}
                     {isAuthor && (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
                       <div className="pt-2 border-t border-slate-200/70 flex flex-wrap justify-end gap-2">
-                        {onSelectStage && (
+                        {(onNavigateToDraftComment || onSelectStage) && (
                           <button
-                            onClick={() => onSelectStage('drafting')}
+                            onClick={() => {
+                              if (onNavigateToDraftComment) {
+                                onNavigateToDraftComment(cmt.id, task.currentDraftId);
+                              } else if (onSelectStage) {
+                                onSelectStage('drafting');
+                              }
+                            }}
                             className="px-2.5 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs flex items-center gap-1 cursor-pointer font-medium"
                             title="在正文工作区定位原段落、查阅事实依据并生成AI建议或对比采纳"
                           >

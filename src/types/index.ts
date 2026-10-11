@@ -275,6 +275,13 @@ export interface RebindRecord {
   reboundParagraphText?: string;       // 重绑时目标段落的基准正文，用于后续检测正文变化
 }
 
+export interface ReviewNavigationIntent {
+  taskId: string;
+  commentId: string;
+  targetDraftId?: string;
+  timestamp?: number;
+}
+
 export interface ReviewComment {
   id: string;
   type: 'overall' | 'paragraph';
