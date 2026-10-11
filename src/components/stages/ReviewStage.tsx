@@ -37,7 +37,8 @@ import {
   FileText,
   Check,
   ChevronRight,
-  CornerDownRight
+  CornerDownRight,
+  Info
 } from 'lucide-react';
 
 interface ReviewStageProps {
@@ -477,13 +478,25 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 return true;
               })
               .map((cmt) => {
-                const targetBlock = currentDraft?.blocks.find((b) => b.id === cmt.targetBlockId);
+                const effectiveBlockId = cmt.currentBlockId || cmt.targetBlockId;
+                const targetBlock = currentDraft?.blocks.find((b) => b.id === effectiveBlockId);
 
-                // Requirement 6: Accurate detection of location obsolescence
-                const isLocationOutdated = cmt.type === 'paragraph' && (
-                  cmt.targetVersionId !== currentDraft?.id ||
-                  !targetBlock ||
-                  (!!cmt.baseParagraphText && targetBlock.content !== cmt.baseParagraphText)
+                // P1: Accurate detection of location validity based on paragraph mapping & text change
+                const isTargetBlockMissing = cmt.type === 'paragraph' && !targetBlock;
+                const isParagraphTextModified = Boolean(
+                  cmt.type === 'paragraph' &&
+                  !cmt.rebindRecord &&
+                  cmt.baseParagraphText &&
+                  targetBlock &&
+                  targetBlock.content !== cmt.baseParagraphText
+                );
+
+                // Location is outdated ONLY if target block is missing or text has changed
+                const isLocationOutdated = isTargetBlockMissing || isParagraphTextModified;
+
+                // Version discrepancy is displayed separately as an informational note
+                const isDifferentVersion = Boolean(
+                  cmt.targetVersionId && currentDraft && cmt.targetVersionId !== currentDraft.id
                 );
 
                 return (
@@ -495,10 +508,14 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-xs text-slate-800">{cmt.reviewer}</span>
                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700">
-                          {cmt.type === 'overall' ? '整体全局意见' : `第${cmt.targetBlockOrder || '指定'}段批注`}
+                          {cmt.type === 'overall'
+                            ? '整体全局意见'
+                            : cmt.rebindRecord
+                            ? `第${cmt.currentBlockOrder || targetBlock?.order || '?'}段批注（重定位）`
+                            : `第${cmt.targetBlockOrder || '指定'}段批注`}
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          基准版本: {cmt.targetVersionId}
+                          基准版本: {cmt.targetVersionNumber || cmt.targetVersionId}
                         </span>
                       </div>
 
@@ -537,13 +554,50 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                       </div>
                     )}
 
+                    {/* Version discrepancy notice shown separately when location is valid */}
+                    {isDifferentVersion && !isLocationOutdated && (
+                      <div className="flex items-center gap-1.5 text-[10px] text-blue-700 bg-blue-50/70 px-2.5 py-1 rounded border border-blue-200">
+                        <Info className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+                        <span>
+                          版本提示：意见针对审阅基准快照【{cmt.targetVersionNumber || cmt.targetVersionId}】提出，当前工作稿段落映射完整、正文一致。
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Rebind audit trail record */}
+                    {cmt.rebindRecord && (
+                      <div className="flex items-center justify-between text-[10px] text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded border border-purple-200">
+                        <span className="flex items-center gap-1">
+                          <CornerDownRight className="w-3 h-3 text-purple-600 shrink-0" />
+                          <span>
+                            重新绑定记录：已由原第{cmt.rebindRecord.fromBlockOrder || cmt.targetBlockOrder}段重新指定至当前第{cmt.currentBlockOrder || targetBlock?.order}段（{cmt.rebindRecord.reboundBy}）
+                          </span>
+                        </span>
+                        {isAuthor && (
+                          <button
+                            onClick={() => {
+                              setRebindingComment(cmt);
+                              setRebindTargetBlockId(currentDraft?.blocks[0]?.id || '');
+                            }}
+                            className="text-[10px] text-purple-800 hover:underline font-semibold cursor-pointer shrink-0"
+                          >
+                            更改指定段落
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     {/* Requirement 6: Show accurate location outdated notice; never silently attach */}
                     {isLocationOutdated && (
                       <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1.5">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1 font-bold text-amber-800">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span>定位提示：目标段落定位已过期（正文已变动或重构）</span>
+                            <span>
+                              {isTargetBlockMissing
+                                ? '定位提示：目标段落定位已过期（原目标段落已在正文中删除或合并）'
+                                : '定位提示：目标段落定位已过期（正文自意见提出后已有修改）'}
+                            </span>
                           </div>
                           {isAuthor && (
                             <button
@@ -559,7 +613,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                           )}
                         </div>
                         <p className="text-[10px] text-amber-700">
-                          该意见针对草稿【{cmt.targetVersionId}】第{cmt.targetBlockOrder}段提出。为防止错挂，系统已隔离定位。
+                          该意见针对草稿【{cmt.targetVersionNumber || cmt.targetVersionId}】第{cmt.targetBlockOrder || '?'}段提出。为防止错挂，系统已隔离定位。
                         </p>
                         {cmt.baseParagraphText && (
                           <div className="mt-1 p-1 bg-white/80 rounded border border-amber-200 text-[10px] font-mono text-slate-600 italic">
@@ -571,8 +625,16 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
                     {/* Target block context snippet if still valid */}
                     {!isLocationOutdated && targetBlock && (
-                      <div className="p-2 bg-slate-100/70 rounded border border-slate-200 text-[11px] text-slate-600 italic">
-                        目标原段：{targetBlock.content.slice(0, 80)}...
+                      <div className="p-2 bg-slate-100/70 rounded border border-slate-200 text-[11px] text-slate-600 italic space-y-0.5">
+                        <div className="text-[10px] text-slate-400 not-italic">
+                          {cmt.rebindRecord ? `当前重定位段落（第${targetBlock.order}段）：` : `当前目标段落（第${targetBlock.order}段）：`}
+                        </div>
+                        <div>{targetBlock.content.slice(0, 80)}...</div>
+                        {cmt.rebindRecord && cmt.baseParagraphText && (
+                          <div className="text-[10px] text-slate-400 not-italic border-t border-slate-200/60 pt-0.5 mt-0.5">
+                            提出时原第{cmt.targetBlockOrder}段原句：“{cmt.baseParagraphText.slice(0, 50)}...”
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1158,13 +1220,16 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
               className="p-5 space-y-3.5 text-xs"
             >
               <div className="p-2.5 bg-amber-50 rounded border border-amber-200 space-y-1">
-                <div className="font-bold text-amber-900">
-                  【{rebindingComment.reviewer}】提出的意见：
+                <div className="font-bold text-amber-900 flex items-center justify-between">
+                  <span>【{rebindingComment.reviewer}】提出的意见：</span>
+                  <span className="text-[10px] text-amber-700 font-mono">
+                    针对 {rebindingComment.targetVersionNumber || rebindingComment.targetVersionId} 第{rebindingComment.targetBlockOrder || '?'}段
+                  </span>
                 </div>
                 <p className="text-slate-700">{rebindingComment.content}</p>
                 {rebindingComment.baseParagraphText && (
-                  <p className="text-[10px] text-slate-500 italic pt-1">
-                    提出时原句：“{rebindingComment.baseParagraphText.slice(0, 50)}...”
+                  <p className="text-[10px] text-slate-500 italic pt-1 border-t border-amber-200/60 mt-1">
+                    提出时原句：“{rebindingComment.baseParagraphText.slice(0, 60)}...”
                   </p>
                 )}
               </div>

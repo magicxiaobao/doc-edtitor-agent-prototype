@@ -3,7 +3,8 @@ import {
   Task, 
   TaskStage, 
   UserRole, 
-  EvidenceSnippet 
+  EvidenceSnippet,
+  Fact 
 } from './types';
 import { createPresetTask } from './services/mockData';
 import { 
@@ -39,6 +40,12 @@ export function App() {
   const [storageError, setStorageError] = useState<string | null>(null);
 
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
+  const [viewingFact, setViewingFact] = useState<Fact | null>(null);
+
+  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact) => {
+    setViewingSnippet(snippet);
+    setViewingFact(fact || null);
+  };
 
   // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
   useEffect(() => {
@@ -276,7 +283,7 @@ export function App() {
           <StyleAndOutlineStage
             task={currentTask}
             onUpdateTask={handleUpdateCurrentTask}
-            onViewSnippet={setViewingSnippet}
+            onViewSnippet={handleOpenSnippetDrawer}
             onProceedToNextStage={() => handleProceedStage('drafting')}
             activeRole={activeRole}
           />
@@ -286,7 +293,7 @@ export function App() {
           <DraftingStage
             task={currentTask}
             onUpdateTask={handleUpdateCurrentTask}
-            onViewSnippet={setViewingSnippet}
+            onViewSnippet={handleOpenSnippetDrawer}
             onProceedToNextStage={() => handleProceedStage('review')}
             activeRole={activeRole}
             onSelectStage={handleSelectStage}
@@ -316,8 +323,12 @@ export function App() {
       {/* Global Snippet Drawer for Evidence Source Tracing */}
       <SnippetDrawer
         snippet={viewingSnippet}
+        fact={viewingFact}
         documents={currentTask.documents}
-        onClose={() => setViewingSnippet(null)}
+        onClose={() => {
+          setViewingSnippet(null);
+          setViewingFact(null);
+        }}
         task={currentTask}
         currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId)}
       />

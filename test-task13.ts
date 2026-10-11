@@ -16,7 +16,8 @@ import {
   getReviewCommentLocation, 
   implementReviewCommentWithText, 
   updateReviewCommentDecision, 
-  rebindReviewCommentTargetBlock, 
+  rebindReviewCommentTargetBlock,
+  getEffectiveTargetBlockId, 
   generateCoordinationDiff, 
   applyCoordinationDecision 
 } from './src/services/reviewCoordinationService';
@@ -272,8 +273,15 @@ const { updatedTask: taskRebound } = rebindReviewCommentTargetBlock(
   '主笔甲'
 );
 const reboundCmt = taskRebound.reviewComments.find((c) => c.id === newComment.id);
-assert(reboundCmt?.targetBlockId === 'BLK-03', '重新指定段落后，目标段落更新为 BLK-03');
-assert(reboundCmt?.targetBlockOrder === 3, '段落序号自动同步更新为 3');
+assert(
+  reboundCmt?.currentBlockId === 'BLK-03' && reboundCmt?.targetBlockId === 'BLK-02',
+  '重新指定段落后，有效目标段落记录在 currentBlockId 为 BLK-03，原始目标段落 targetBlockId 完整保留为 BLK-02 存证'
+);
+assert(
+  reboundCmt?.currentBlockOrder === 3 && reboundCmt?.targetBlockOrder === 2,
+  '当前段落序号记录在 currentBlockOrder: 3，原始序号 targetBlockOrder: 2 完整保留'
+);
+assert(getEffectiveTargetBlockId(reboundCmt!) === 'BLK-03', 'getEffectiveTargetBlockId 返回重新指定的 BLK-03');
 
 // --------------------------------------------------------------------------
 // [验收 F] 基于旧版本继续编辑或恢复始终产生新工作稿

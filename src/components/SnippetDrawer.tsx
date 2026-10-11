@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task } from '../types';
 import { X, FileText, Calendar, MapPin, Tag, AlertTriangle, ChevronDown, CheckCircle2 } from 'lucide-react';
+import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 
 interface SnippetDrawerProps {
   snippet: EvidenceSnippet | null;
@@ -34,54 +35,48 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
         )
       : null);
 
-  // Check frozen snapshot value in current draft vs current confirmed value in task
-  const snapItem =
-    resolvedFact && currentDraft?.snapshotMetadata?.factSnapshot?.items
-      ? currentDraft.snapshotMetadata.factSnapshot.items.find(
-          (item) => item.factId === resolvedFact.id
-        )
+  // P2: Use shared evidence resolution logic
+  const resolvedData =
+    resolvedFact && task
+      ? resolveDraftFactEvidence(resolvedFact, currentDraft || undefined, task)
       : null;
 
   const isHistoricalOrFinal = Boolean(
-    currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal
+    resolvedData
+      ? resolvedData.isHistoricalOrFinal
+      : currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal
   );
 
-  const hasSnapshotDiff = Boolean(
-    snapItem &&
-      resolvedFact &&
-      (snapItem.value !== resolvedFact.value || snapItem.unit !== resolvedFact.unit)
-  );
-
-  // Determine display values
-  const hasFrozenItem = Boolean(snapItem);
-  const adoptedValue = snapItem
-    ? `${snapItem.value} ${snapItem.unit}`
-    : isHistoricalOrFinal
-    ? '历史快照未收录此事实'
+  const snapItem = resolvedData ? resolvedData.snapItem : null;
+  const hasSnapshotDiff = resolvedData ? resolvedData.hasSnapshotDiff : false;
+  const hasFrozenItem = resolvedData ? resolvedData.hasFrozenItem : false;
+  const adoptedValue = resolvedData
+    ? resolvedData.adoptedValue
     : resolvedFact
     ? `${resolvedFact.value} ${resolvedFact.unit}`
     : '无量化值';
 
-  const currentConfirmedValue = resolvedFact
+  const currentConfirmedValue = resolvedData
+    ? resolvedData.currentConfirmedValue
+    : resolvedFact
     ? `${resolvedFact.value} ${resolvedFact.unit}`
     : '未登记';
 
-  // Snapshot specific fields
-  const frozenPeriod = snapItem?.period;
-  const frozenMetricScope = snapItem?.metricScope;
-  const frozenEvidenceId = snapItem?.primaryEvidenceId;
+  const frozenPeriod = resolvedData?.effectivePeriod;
+  const frozenMetricScope = resolvedData?.effectiveMetricScope;
+  const frozenEvidenceId = resolvedData?.effectiveEvidenceId;
 
   // Evidence snippet resolution:
   // If viewing historical or final snapshot, STRICTLY select snippet matching frozenEvidenceId!
   // If frozenEvidenceId is not found or not recorded, DO NOT show latest snippet as frozen evidence!
   const resolvedSnippet: EvidenceSnippet | null = (() => {
-    if (isHistoricalOrFinal) {
-      if (!frozenEvidenceId) {
-        return null;
-      }
-      return task?.snippets.find((s) => s.id === frozenEvidenceId) || null;
+    if (resolvedData) {
+      return resolvedData.effectiveSnippet;
     }
-    return snippet || (resolvedFact ? task?.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
+    if (isHistoricalOrFinal) {
+      return null;
+    }
+    return snippet || (resolvedFact && task ? task.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
   })();
 
   const resolvedDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
@@ -214,7 +209,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
               )}
             </div>
             <div className="p-3 bg-white border border-blue-200 rounded text-slate-800 text-sm font-medium leading-relaxed shadow-xs">
-              {resolvedSnippet.text}
+              {resolvedSnippet.text || (resolvedSnippet as any).content}
             </div>
             <div className="mt-2.5 flex flex-wrap gap-3 text-xs text-slate-600">
               <span className="flex items-center gap-1">

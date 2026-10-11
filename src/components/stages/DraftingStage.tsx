@@ -11,8 +11,10 @@ import {
   RevisionAction, 
   RevisionSuggestion,
   ReviewComment,
-  ReviewCommentStatus
+  ReviewCommentStatus,
+  Fact
 } from '../../types';
+import { resolveDraftFactEvidence } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
   computeContentHash,
@@ -91,10 +93,11 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet: (snippet: EvidenceSnippet) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
+  initialInspectorTab?: 'ai_suggestions' | 'review_comments' | 'material_evidence';
 }
 
 export const DraftingStage: React.FC<DraftingStageProps> = ({
@@ -104,6 +107,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   onProceedToNextStage,
   activeRole,
   onSelectStage,
+  initialInspectorTab,
 }) => {
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
@@ -113,7 +117,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [showRightInspector, setShowRightInspector] = useState(true);
 
   // Inspector tab: 'ai_suggestions' | 'review_comments' | 'material_evidence'
-  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>('ai_suggestions');
+  const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>(
+    initialInspectorTab || 'ai_suggestions'
+  );
 
   // Review comments filtering and modal state
   const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -1904,9 +1910,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               );
                             })}
 
-                            {/* Review comments targeting this block */}
+                            {/* Review comments targeting this block (including rebound comments) */}
                             {activeReviewComments
-                              .filter((c) => c.type === 'paragraph' && c.targetBlockId === block.id)
+                              .filter((c) => c.type === 'paragraph' && (c.currentBlockId || c.targetBlockId) === block.id)
                               .map((c) => (
                                 <button
                                   key={c.id}
@@ -2129,7 +2135,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                       })
                       .map((cmt) => {
                       const loc = getReviewCommentLocation(cmt, currentDraft);
-                      const isLocationOutdated = !loc.isLocated || !loc.targetBlock || Boolean(loc.warning);
+                      const isLocationOutdated = !loc.isLocated || !loc.targetBlock || Boolean(loc.hasTextModified);
                       const isSelectedComment = selectedCommentId === cmt.id;
 
                       return (
@@ -2145,8 +2151,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-bold text-slate-900">{cmt.reviewer}</span>
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 font-medium">
-                                {cmt.type === 'overall' ? '全局意见' : `第${cmt.targetBlockOrder || '?'}段批注`}
+                                {cmt.type === 'overall'
+                                  ? '全局意见'
+                                  : cmt.rebindRecord
+                                  ? `第${cmt.currentBlockOrder || loc.targetBlock?.order || '?'}段批注（重定位）`
+                                  : `第${cmt.targetBlockOrder || '?'}段批注`}
                               </span>
+                              {loc.isOutdatedVersion && !isLocationOutdated && (
+                                <span className="text-[10px] text-blue-700 font-mono">
+                                  基准: {cmt.targetVersionNumber || cmt.targetVersionId}
+                                </span>
+                              )}
                             </div>
 
                             <span
@@ -2183,6 +2198,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                             </div>
                           )}
 
+                          {/* Rebind audit trail display */}
+                          {cmt.rebindRecord && (
+                            <div className="text-[10px] text-purple-700 bg-purple-50 px-2 py-1 rounded border border-purple-200 flex items-center justify-between">
+                              <span>
+                                重新指定记录：已重定位至第{cmt.currentBlockOrder || loc.targetBlock?.order}段（原第{cmt.rebindRecord.fromBlockOrder || cmt.targetBlockOrder}段）
+                              </span>
+                              {canUserEdit && (
+                                <button
+                                  onClick={() => handleOpenRebindModal(cmt)}
+                                  className="text-purple-800 hover:underline font-bold ml-1 cursor-pointer"
+                                >
+                                  重改
+                                </button>
+                              )}
+                            </div>
+                          )}
+
                           {/* Location & Warning Section */}
                           {cmt.type === 'paragraph' && (
                             <>
@@ -2190,7 +2222,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[10px] text-amber-900 space-y-1">
                                   <div className="flex items-center gap-1 font-bold text-amber-800">
                                     <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                                    <span>定位需复核：原目标段落已变动或已删除</span>
+                                    <span>
+                                      {!loc.targetBlock
+                                        ? '定位需复核：原目标段落已在正文中删除或合并'
+                                        : '定位需复核：当前段落正文自意见提出后已有修改'}
+                                    </span>
                                   </div>
                                   {cmt.baseParagraphText && (
                                     <p className="text-slate-600 italic">
@@ -2727,26 +2763,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     {activeBlock.referencedFactIds.length > 0 ? (
                       activeBlock.referencedFactIds.map((factId) => {
                         const fact = task.facts.find((f) => f.id === factId);
-                        const snippet = task.snippets.find((s) => s.id === fact?.primaryEvidenceId);
                         if (!fact) return null;
 
+                        // P2: Shared evidence reading logic with SnippetDrawer
+                        const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
                         const isFocused = inspectingFactId === fact.id;
-
-                        // Check frozen snapshot value if exists
-                        const snapItem = currentDraft?.snapshotMetadata?.factSnapshot?.items?.find(
-                          (item) => item.factId === fact.id
-                        );
-                        const hasSnapshotDiff =
-                          snapItem &&
-                          (snapItem.value !== fact.value || snapItem.unit !== fact.unit);
-
-                        const hasFrozenItem = Boolean(snapItem);
-                        const adoptedVal = snapItem
-                          ? `${snapItem.value} ${snapItem.unit}`
-                          : isCurrentDraftImmutable
-                          ? '快照未收录此事实'
-                          : `${fact.value} ${fact.unit}`;
-                        const currentVal = `${fact.value} ${fact.unit}`;
 
                         return (
                           <div
@@ -2776,23 +2797,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 <span className="text-[10px] text-slate-400 block">
                                   {isCurrentDraftImmutable ? '稿件冻结采用值' : '当前稿采用值'}
                                 </span>
-                                <span className={`font-bold font-mono ${hasFrozenItem ? 'text-slate-900' : isCurrentDraftImmutable ? 'text-slate-400 text-[10px] italic font-sans' : 'text-slate-900'}`}>
-                                  {adoptedVal}
+                                <span className={`font-bold font-mono ${resolved.hasFrozenItem ? 'text-slate-900' : isCurrentDraftImmutable ? 'text-slate-400 text-[10px] italic font-sans' : 'text-slate-900'}`}>
+                                  {resolved.adoptedValue}
                                 </span>
-                                {isCurrentDraftImmutable && !hasFrozenItem && (
+                                {isCurrentDraftImmutable && !resolved.hasFrozenItem && (
                                   <span className="text-[9px] text-amber-700 block">快照中无此项，不可回溯当时值</span>
                                 )}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 block">任务最新核准值</span>
                                 <span className="font-bold text-blue-800 font-mono">
-                                  {currentVal}
+                                  {resolved.currentConfirmedValue}
                                 </span>
                               </div>
                             </div>
 
                             {/* Version discrepancy notice */}
-                            {hasSnapshotDiff && (
+                            {(resolved.hasSnapshotDiff || resolved.hasPeriodDiff || resolved.hasScopeDiff || resolved.hasEvidenceDiff) && (
                               <div className="p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1">
                                 <div className="font-semibold flex items-center gap-1">
                                   <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -2800,27 +2821,76 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 </div>
                                 <p className="text-[10px] text-amber-800 leading-normal">
                                   {isCurrentDraftImmutable
-                                    ? `本稿属于历史只读快照，按规则优先保持当时冻结依据（${adoptedVal}），当前最新核准值不回填旧稿。`
-                                    : `当前工作稿采用值为【${adoptedVal}】，材料库最新核准为【${currentVal}】。如需更新正文，可重新生成整稿候选或通过段落修改建议更新。`}
+                                    ? `本稿属于历史只读快照，按规则优先保持当时冻结依据（采用值 ${resolved.adoptedValue}、期间 ${resolved.effectivePeriod}、口径 ${resolved.effectiveMetricScope}），任务当前最新核准信息不回填旧稿。`
+                                    : `当前工作稿采用值为【${resolved.adoptedValue}】（期间：${resolved.effectivePeriod}），材料库最新核准为【${resolved.currentConfirmedValue}】（期间：${resolved.currentPeriod}）。如需更新正文，可重新生成整稿候选或通过段落修改建议更新。`}
                                 </p>
                               </div>
                             )}
 
-                            <div className="text-[11px] text-slate-500 space-y-0.5 pt-0.5">
-                              <div>统计期间：<strong className="text-slate-700 font-medium">{fact.period}</strong></div>
-                              {fact.metricScope && (
-                                <div>统计口径：<strong className="text-slate-700 font-medium">{fact.metricScope}</strong></div>
-                              )}
-                            </div>
+                            {/* P2: Period and metric scope display - unified with SnippetDrawer */}
+                            {isCurrentDraftImmutable ? (
+                              <div className="text-[11px] text-slate-600 space-y-1.5 pt-0.5">
+                                <div className="bg-slate-100/80 p-2 rounded space-y-0.5 border border-slate-200/60">
+                                  <span className="text-[10px] text-slate-500 font-semibold block">快照冻结依据元信息：</span>
+                                  <div>统计期间：<strong className="text-slate-800 font-medium">{resolved.effectivePeriod}</strong></div>
+                                  <div>统计口径：<strong className="text-slate-800 font-medium">{resolved.effectiveMetricScope}</strong></div>
+                                </div>
+                                <div className="bg-blue-50/60 p-2 rounded border border-blue-100 space-y-0.5">
+                                  <span className="text-[10px] text-blue-700 font-semibold block">任务当前最新核准信息：</span>
+                                  <div>核准期间：<strong className="text-blue-900 font-medium">{resolved.currentPeriod}</strong></div>
+                                  <div>核准口径：<strong className="text-blue-900 font-medium">{resolved.currentMetricScope}</strong></div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-slate-500 space-y-0.5 pt-0.5">
+                                <div>统计期间：<strong className="text-slate-700 font-medium">{resolved.effectivePeriod}</strong></div>
+                                {resolved.effectiveMetricScope && (
+                                  <div>统计口径：<strong className="text-slate-700 font-medium">{resolved.effectiveMetricScope}</strong></div>
+                                )}
+                              </div>
+                            )}
 
-                            {snippet ? (
+                            {/* P2: Snippet evidence source tracing - unified with SnippetDrawer */}
+                            {isCurrentDraftImmutable ? (
+                              resolved.effectiveSnippet ? (
+                                <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
+                                  <span className="text-[10px] text-slate-600 truncate pr-1">
+                                    冻结出处：{resolved.effectiveDocName} ({resolved.effectiveLocation})
+                                  </span>
+                                  <button
+                                    onClick={() => onViewSnippet(resolved.effectiveSnippet!, fact)}
+                                    className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    <span>在抽屉中核验全文</span>
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              ) : resolved.isEvidenceMissingInSnapshot ? (
+                                <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
+                                  <span className="text-[10px] text-amber-700 italic truncate pr-1">
+                                    出处说明：历史快照未记录原始证据片段ID
+                                  </span>
+                                  <button
+                                    onClick={() => onViewSnippet(resolved.currentSnippet || { id: '', docName: '历史快照无证据记录', sourceDocId: '', text: '', period: resolved.effectivePeriod || '', location: '历史快照无出处记录' }, fact)}
+                                    className="text-[11px] text-amber-800 hover:text-amber-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    <span>查看说明</span>
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-200/60">
+                                  历史快照未收录此事实出处
+                                </div>
+                              )
+                            ) : resolved.effectiveSnippet ? (
                               <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
-                                <span className="text-[10px] text-slate-500">
-                                  出处：{snippet.docName} ({snippet.location || '段落索引'})
+                                <span className="text-[10px] text-slate-500 truncate pr-1">
+                                  出处：{resolved.effectiveDocName} ({resolved.effectiveLocation})
                                 </span>
                                 <button
-                                  onClick={() => onViewSnippet(snippet)}
-                                  className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"
+                                  onClick={() => onViewSnippet(resolved.effectiveSnippet!, fact)}
+                                  className="text-[11px] text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
                                 >
                                   <span>在抽屉中核验全文</span>
                                   <ExternalLink className="w-2.5 h-2.5" />
@@ -3244,13 +3314,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
             <form onSubmit={handleConfirmRebind} className="p-5 space-y-3.5 text-xs">
               <div className="p-2.5 bg-amber-50 rounded border border-amber-200 space-y-1">
-                <div className="font-bold text-amber-900">
-                  【{reboundingComment.reviewer}】提出的意见：
+                <div className="font-bold text-amber-900 flex items-center justify-between">
+                  <span>【{reboundingComment.reviewer}】提出的意见：</span>
+                  <span className="text-[10px] text-amber-700 font-mono">
+                    针对 {reboundingComment.targetVersionNumber || reboundingComment.targetVersionId} 第{reboundingComment.targetBlockOrder || '?'}段
+                  </span>
                 </div>
                 <p className="text-slate-700">{reboundingComment.content}</p>
                 {reboundingComment.baseParagraphText && (
-                  <p className="text-[10px] text-slate-500 italic pt-1">
-                    提出时原句：“{reboundingComment.baseParagraphText.slice(0, 50)}...”
+                  <p className="text-[10px] text-slate-500 italic pt-1 border-t border-amber-200/60 mt-1">
+                    提出时原句：“{reboundingComment.baseParagraphText.slice(0, 60)}...”
                   </p>
                 )}
               </div>

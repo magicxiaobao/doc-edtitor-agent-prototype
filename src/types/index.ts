@@ -263,14 +263,28 @@ export type ReviewCommentStatus =
   | 'rejected'                         // 拒绝并说明
   | 'need_discussion';                 // 待沟通
 
+export interface RebindRecord {
+  reboundAt: string;
+  reboundBy: string;
+  fromBlockId?: string;
+  fromBlockOrder?: number;
+  toBlockId: string;
+  toBlockOrder: number;
+  targetDraftId?: string;
+  reason?: string;
+}
+
 export interface ReviewComment {
   id: string;
   type: 'overall' | 'paragraph';
-  targetBlockId?: string;
-  targetBlockOrder?: number;
-  targetVersionId: string;
-  targetVersionNumber?: string;        // 意见针对的版本号（例如 v1.0 提交审阅基准快照）
-  baseParagraphText?: string;          // 提出意见时的基准原文
+  targetBlockId?: string;              // 提出意见时的原始目标段落ID（原始存证）
+  targetBlockOrder?: number;           // 提出意见时的原始目标段落序号（原始存证）
+  targetVersionId: string;             // 意见针对的基准版本ID（例如 v1.0 提交审阅基准快照）
+  targetVersionNumber?: string;        // 意见针对的版本号
+  baseParagraphText?: string;          // 提出意见时的基准原文（原始存证，不可在重新绑定时被覆盖）
+  currentBlockId?: string;             // 当前有效/重新绑定的目标段落ID
+  currentBlockOrder?: number;          // 当前有效/重新绑定的目标段落序号
+  rebindRecord?: RebindRecord;         // 人工重新指定段落的操作存证记录
   reviewer: string;
   content: string;
   status: ReviewCommentStatus;

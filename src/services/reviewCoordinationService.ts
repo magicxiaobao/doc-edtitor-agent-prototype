@@ -297,13 +297,24 @@ export interface ReviewCommentLocationResult {
   targetBlock?: ParagraphBlock;
   warning?: string;
   isOutdatedVersion?: boolean;
+  hasTextModified?: boolean;
+}
+
+/**
+ * Returns the currently effective target block ID for a review comment.
+ * If the comment has been manually rebound to a new block, returns comment.currentBlockId;
+ * otherwise returns original comment.targetBlockId.
+ */
+export function getEffectiveTargetBlockId(comment: ReviewComment): string | undefined {
+  return comment.currentBlockId || comment.targetBlockId;
 }
 
 /**
  * Requirement 1 & 2: Resolves paragraph comment location against current draft blocks.
- * - MUST look up strictly by stable targetBlockId.
- * - If targetBlockId was deleted/removed, strictly returns isLocated: false with warning "定位需复核",
+ * - MUST look up strictly by stable ID (currentBlockId if rebound, else targetBlockId).
+ * - If target block was deleted/removed, strictly returns isLocated: false with warning "定位需复核",
  *   NEVER incorrectly maps to another block with the same order index!
+ * - Distinguishes between version discrepancy and location validity/text modification.
  */
 export function getReviewCommentLocation(
   comment: ReviewComment,
@@ -313,7 +324,8 @@ export function getReviewCommentLocation(
     return { isLocated: true };
   }
 
-  if (!comment.targetBlockId) {
+  const effectiveBlockId = getEffectiveTargetBlockId(comment);
+  if (!effectiveBlockId) {
     return {
       isLocated: false,
       warning: '定位需复核：意见未关联具体目标段落。',
@@ -321,7 +333,7 @@ export function getReviewCommentLocation(
   }
 
   // MUST look up strictly by stable ID, NEVER fallback to same array index!
-  const block = draft.blocks.find((b) => b.id === comment.targetBlockId);
+  const block = draft.blocks.find((b) => b.id === effectiveBlockId);
   if (!block) {
     return {
       isLocated: false,
@@ -329,13 +341,22 @@ export function getReviewCommentLocation(
     };
   }
 
-  // If found, check if version or base text changed
+  // Check version difference separately from location validity
   const isOutdatedVersion = Boolean(comment.targetVersionId && comment.targetVersionId !== draft.id);
-  if (comment.baseParagraphText && comment.baseParagraphText !== block.content) {
+
+  // Check if paragraph text has been modified since comment creation (only for non-rebound comments)
+  const hasTextModified = Boolean(
+    !comment.rebindRecord &&
+    comment.baseParagraphText &&
+    comment.baseParagraphText !== block.content
+  );
+
+  if (hasTextModified) {
     return {
       isLocated: true,
       targetBlock: block,
       isOutdatedVersion,
+      hasTextModified: true,
       warning: '当前段落正文自意见提出后已有修改（提出时原文与当前内容不同）。',
     };
   }
@@ -344,6 +365,7 @@ export function getReviewCommentLocation(
     isLocated: true,
     targetBlock: block,
     isOutdatedVersion,
+    hasTextModified: false,
   };
 }
 
@@ -389,8 +411,8 @@ export function implementReviewCommentWithText(
     }
   }
 
-  // Determine target block
-  const targetBlockId = comment.targetBlockId;
+  // Determine target block (uses rebound block if present, otherwise original target block)
+  const targetBlockId = getEffectiveTargetBlockId(comment);
   if (!targetBlockId) {
     throw new Error('该意见属于整稿综合意见，请在正文具体段落中针对性落实，或通过审阅协调处理。');
   }
@@ -543,12 +565,23 @@ export function rebindReviewCommentTargetBlock(
   let updatedCommentObj: ReviewComment | undefined;
   const updatedComments = task.reviewComments.map((cmt) => {
     if (cmt.id === commentId) {
+      // P1: Retain original evidentiary record (targetVersionId, targetBlockId, targetBlockOrder, baseParagraphText).
+      // Save current effective block location and rebind audit record separately.
       updatedCommentObj = {
         ...cmt,
         type: 'paragraph' as const,
-        targetBlockId: newBlock.id,
-        targetBlockOrder: newBlock.order,
-        baseParagraphText: newBlock.content,
+        currentBlockId: newBlock.id,
+        currentBlockOrder: newBlock.order,
+        rebindRecord: {
+          reboundAt: new Date().toISOString(),
+          reboundBy: activeRole,
+          fromBlockId: cmt.currentBlockId || cmt.targetBlockId,
+          fromBlockOrder: cmt.currentBlockOrder || cmt.targetBlockOrder,
+          toBlockId: newBlock.id,
+          toBlockOrder: newBlock.order,
+          targetDraftId: currentDraft.id,
+          reason: '主笔人工重新指定意见目标段落',
+        },
         locationOutdated: false,
       };
       return updatedCommentObj;

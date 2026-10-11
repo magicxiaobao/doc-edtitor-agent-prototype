@@ -1,4 +1,4 @@
-import { Task, Fact, UserRole, EvidenceSnippet, SourceDocument } from '../types';
+import { Task, Fact, UserRole, EvidenceSnippet, SourceDocument, DraftVersion, FactItemSnapshot } from '../types';
 import { checkPermission } from './permissionService';
 
 /**
@@ -367,4 +367,141 @@ export function formatDefaultPeriodForTask(startDate?: string, endDate?: string)
     return `${sYear}年${sMonth}至${eMonth}月`;
   }
   return `${sYear}年${sMonth}月至${eYear}年${eMonth}月`;
+}
+
+export interface ResolvedDraftFactEvidence {
+  fact: Fact;
+  snapItem: FactItemSnapshot | null;
+  isHistoricalOrFinal: boolean;
+  hasFrozenItem: boolean;
+
+  // Adopted / effective values for the draft being viewed
+  adoptedValue: string;
+  effectivePeriod: string;
+  effectiveMetricScope: string;
+  effectiveEvidenceId?: string;
+  effectiveSnippet: EvidenceSnippet | null;
+  effectiveDocName?: string;
+  effectiveLocation?: string;
+
+  // Task current latest confirmed values
+  currentConfirmedValue: string;
+  currentPeriod: string;
+  currentMetricScope: string;
+  currentEvidenceId?: string;
+  currentSnippet: EvidenceSnippet | null;
+  currentDocName?: string;
+  currentLocation?: string;
+
+  // Discrepancy checks
+  hasSnapshotDiff: boolean;
+  hasPeriodDiff: boolean;
+  hasScopeDiff: boolean;
+  hasEvidenceDiff: boolean;
+
+  isEvidenceMissingInSnapshot: boolean;
+  isSnapshotMissingFact: boolean;
+}
+
+/**
+ * P2: Shared evidence reading logic between DraftingStage sidebar and SnippetDrawer.
+ * Unifies the resolution of statistical period, metric scope, and primary evidence ID
+ * so historical drafts strictly display frozen values while latest values are explicitly labeled.
+ */
+export function resolveDraftFactEvidence(
+  fact: Fact,
+  draft: DraftVersion | undefined,
+  task: Task
+): ResolvedDraftFactEvidence {
+  const isHistoricalOrFinal = Boolean(draft?.isHistoricalSnapshot || draft?.isFinal);
+  const snapItem = draft?.snapshotMetadata?.factSnapshot?.items?.find(
+    (item) => item.factId === fact.id
+  ) || null;
+  const hasFrozenItem = Boolean(snapItem);
+
+  const adoptedValue = snapItem
+    ? `${snapItem.value} ${snapItem.unit}`
+    : isHistoricalOrFinal
+    ? '历史快照未收录此事实'
+    : `${fact.value} ${fact.unit}`;
+
+  const currentConfirmedValue = `${fact.value} ${fact.unit}`;
+
+  const currentSnippet = task.snippets.find((s) => s.id === fact.primaryEvidenceId) || null;
+  const currentDoc = currentSnippet ? task.documents.find((d) => d.id === currentSnippet.sourceDocId) : undefined;
+  const currentDocName = currentSnippet?.docName || currentDoc?.name || '未知材料文档';
+  const currentLocation = currentSnippet?.location || '段落索引';
+
+  let effectivePeriod: string;
+  let effectiveMetricScope: string;
+  let effectiveEvidenceId: string | undefined;
+  let effectiveSnippet: EvidenceSnippet | null = null;
+  let isEvidenceMissingInSnapshot = false;
+
+  if (isHistoricalOrFinal) {
+    if (snapItem) {
+      effectivePeriod = snapItem.period || '未记录期间';
+      effectiveMetricScope = snapItem.metricScope || '无单独口径';
+      effectiveEvidenceId = snapItem.primaryEvidenceId;
+      if (effectiveEvidenceId) {
+        effectiveSnippet = task.snippets.find((s) => s.id === effectiveEvidenceId) || null;
+      } else {
+        isEvidenceMissingInSnapshot = true;
+      }
+    } else {
+      effectivePeriod = '快照未记录';
+      effectiveMetricScope = '快照未记录';
+      effectiveEvidenceId = undefined;
+      effectiveSnippet = null;
+    }
+  } else {
+    effectivePeriod = fact.period;
+    effectiveMetricScope = fact.metricScope || '标准口径';
+    effectiveEvidenceId = fact.primaryEvidenceId;
+    effectiveSnippet = currentSnippet;
+  }
+
+  const effectiveDoc = effectiveSnippet ? task.documents.find((d) => d.id === effectiveSnippet.sourceDocId) : undefined;
+  const effectiveDocName = effectiveSnippet?.docName || effectiveDoc?.name;
+  const effectiveLocation = effectiveSnippet?.location || '段落索引';
+
+  const hasSnapshotDiff = Boolean(
+    snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)
+  );
+  const hasPeriodDiff = Boolean(
+    snapItem && snapItem.period && snapItem.period !== fact.period
+  );
+  const hasScopeDiff = Boolean(
+    snapItem && (snapItem.metricScope || '') !== (fact.metricScope || '')
+  );
+  const hasEvidenceDiff = Boolean(
+    snapItem && snapItem.primaryEvidenceId && snapItem.primaryEvidenceId !== fact.primaryEvidenceId
+  );
+
+  return {
+    fact,
+    snapItem,
+    isHistoricalOrFinal,
+    hasFrozenItem,
+    adoptedValue,
+    effectivePeriod,
+    effectiveMetricScope,
+    effectiveEvidenceId,
+    effectiveSnippet,
+    effectiveDocName,
+    effectiveLocation,
+    currentConfirmedValue,
+    currentPeriod: fact.period,
+    currentMetricScope: fact.metricScope || '标准口径',
+    currentEvidenceId: fact.primaryEvidenceId,
+    currentSnippet,
+    currentDocName,
+    currentLocation,
+    hasSnapshotDiff,
+    hasPeriodDiff,
+    hasScopeDiff,
+    hasEvidenceDiff,
+    isEvidenceMissingInSnapshot,
+    isSnapshotMissingFact: isHistoricalOrFinal && !snapItem,
+  };
 }
