@@ -344,11 +344,15 @@ export function getReviewCommentLocation(
   // Check version difference separately from location validity
   const isOutdatedVersion = Boolean(comment.targetVersionId && comment.targetVersionId !== draft.id);
 
-  // Check if paragraph text has been modified since comment creation (only for non-rebound comments)
+  // P1/P2: Check if paragraph text has been modified.
+  // If rebounded, compare against the rebound baseline (reboundParagraphText).
+  // Otherwise, compare against original creation baseline (baseParagraphText).
+  const isRebound = Boolean(comment.rebindRecord || comment.currentBlockId);
+  const baselineText = comment.reboundParagraphText || comment.rebindRecord?.reboundParagraphText || comment.baseParagraphText;
+
   const hasTextModified = Boolean(
-    !comment.rebindRecord &&
-    comment.baseParagraphText &&
-    comment.baseParagraphText !== block.content
+    baselineText &&
+    baselineText !== block.content
   );
 
   if (hasTextModified) {
@@ -357,7 +361,9 @@ export function getReviewCommentLocation(
       targetBlock: block,
       isOutdatedVersion,
       hasTextModified: true,
-      warning: '当前段落正文自意见提出后已有修改（提出时原文与当前内容不同）。',
+      warning: isRebound
+        ? '定位需复核：当前重定位段落正文自重新指定后已有修改（重指定时原文与当前内容不同）。'
+        : '定位需复核：当前段落正文自意见提出后已有修改（提出时原文与当前内容不同）。',
     };
   }
 
@@ -565,13 +571,14 @@ export function rebindReviewCommentTargetBlock(
   let updatedCommentObj: ReviewComment | undefined;
   const updatedComments = task.reviewComments.map((cmt) => {
     if (cmt.id === commentId) {
-      // P1: Retain original evidentiary record (targetVersionId, targetBlockId, targetBlockOrder, baseParagraphText).
-      // Save current effective block location and rebind audit record separately.
+      // P1/P2: Retain original evidentiary record (targetVersionId, targetBlockId, targetBlockOrder, baseParagraphText).
+      // Save current effective block location, rebound baseline text, and rebind audit record separately.
       updatedCommentObj = {
         ...cmt,
         type: 'paragraph' as const,
         currentBlockId: newBlock.id,
         currentBlockOrder: newBlock.order,
+        reboundParagraphText: newBlock.content,
         rebindRecord: {
           reboundAt: new Date().toISOString(),
           reboundBy: activeRole,
@@ -581,6 +588,7 @@ export function rebindReviewCommentTargetBlock(
           toBlockOrder: newBlock.order,
           targetDraftId: currentDraft.id,
           reason: '主笔人工重新指定意见目标段落',
+          reboundParagraphText: newBlock.content,
         },
         locationOutdated: false,
       };

@@ -400,6 +400,7 @@ export interface ResolvedDraftFactEvidence {
   hasEvidenceDiff: boolean;
 
   isEvidenceMissingInSnapshot: boolean;
+  isEvidencePrunedOrUnavailable: boolean;
   isSnapshotMissingFact: boolean;
 }
 
@@ -437,6 +438,7 @@ export function resolveDraftFactEvidence(
   let effectiveEvidenceId: string | undefined;
   let effectiveSnippet: EvidenceSnippet | null = null;
   let isEvidenceMissingInSnapshot = false;
+  let isEvidencePrunedOrUnavailable = false;
 
   if (isHistoricalOrFinal) {
     if (snapItem) {
@@ -445,6 +447,9 @@ export function resolveDraftFactEvidence(
       effectiveEvidenceId = snapItem.primaryEvidenceId;
       if (effectiveEvidenceId) {
         effectiveSnippet = task.snippets.find((s) => s.id === effectiveEvidenceId) || null;
+        if (!effectiveSnippet) {
+          isEvidencePrunedOrUnavailable = true;
+        }
       } else {
         isEvidenceMissingInSnapshot = true;
       }
@@ -502,6 +507,7 @@ export function resolveDraftFactEvidence(
     hasScopeDiff,
     hasEvidenceDiff,
     isEvidenceMissingInSnapshot,
+    isEvidencePrunedOrUnavailable,
     isSnapshotMissingFact: isHistoricalOrFinal && !snapItem,
   };
 }

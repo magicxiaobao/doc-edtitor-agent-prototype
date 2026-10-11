@@ -478,26 +478,13 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 return true;
               })
               .map((cmt) => {
-                const effectiveBlockId = cmt.currentBlockId || cmt.targetBlockId;
-                const targetBlock = currentDraft?.blocks.find((b) => b.id === effectiveBlockId);
-
-                // P1: Accurate detection of location validity based on paragraph mapping & text change
+                // P1/P2: Use shared getReviewCommentLocation service for unified location and text change checking
+                const loc = getReviewCommentLocation(cmt, currentDraft);
+                const targetBlock = loc.targetBlock;
                 const isTargetBlockMissing = cmt.type === 'paragraph' && !targetBlock;
-                const isParagraphTextModified = Boolean(
-                  cmt.type === 'paragraph' &&
-                  !cmt.rebindRecord &&
-                  cmt.baseParagraphText &&
-                  targetBlock &&
-                  targetBlock.content !== cmt.baseParagraphText
-                );
-
-                // Location is outdated ONLY if target block is missing or text has changed
-                const isLocationOutdated = isTargetBlockMissing || isParagraphTextModified;
-
-                // Version discrepancy is displayed separately as an informational note
-                const isDifferentVersion = Boolean(
-                  cmt.targetVersionId && currentDraft && cmt.targetVersionId !== currentDraft.id
-                );
+                const isParagraphTextModified = Boolean(loc.hasTextModified);
+                const isLocationOutdated = cmt.type === 'paragraph' && (!loc.isLocated || isTargetBlockMissing || isParagraphTextModified);
+                const isDifferentVersion = Boolean(loc.isOutdatedVersion);
 
                 return (
                   <div
@@ -554,12 +541,14 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                       </div>
                     )}
 
-                    {/* Version discrepancy notice shown separately when location is valid */}
+                    {/* Version discrepancy notice shown separately when location is valid and text is unchanged */}
                     {isDifferentVersion && !isLocationOutdated && (
                       <div className="flex items-center gap-1.5 text-[10px] text-blue-700 bg-blue-50/70 px-2.5 py-1 rounded border border-blue-200">
                         <Info className="w-3.5 h-3.5 shrink-0 text-blue-600" />
                         <span>
-                          版本提示：意见针对审阅基准快照【{cmt.targetVersionNumber || cmt.targetVersionId}】提出，当前工作稿段落映射完整、正文一致。
+                          {cmt.rebindRecord
+                            ? `版本提示：意见针对审阅基准快照【${cmt.targetVersionNumber || cmt.targetVersionId}】提出，当前已重定位至第${cmt.currentBlockOrder || targetBlock?.order || '?'}段落实，重指定正文一致。`
+                            : `版本提示：意见针对审阅基准快照【${cmt.targetVersionNumber || cmt.targetVersionId}】提出，当前工作稿段落映射完整、正文一致。`}
                         </span>
                       </div>
                     )}
@@ -570,14 +559,14 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                         <span className="flex items-center gap-1">
                           <CornerDownRight className="w-3 h-3 text-purple-600 shrink-0" />
                           <span>
-                            重新绑定记录：已由原第{cmt.rebindRecord.fromBlockOrder || cmt.targetBlockOrder}段重新指定至当前第{cmt.currentBlockOrder || targetBlock?.order}段（{cmt.rebindRecord.reboundBy}）
+                            重新绑定记录：原第{cmt.rebindRecord.fromBlockOrder || cmt.targetBlockOrder}段意见，当前指定在第{cmt.currentBlockOrder || targetBlock?.order || '?'}段落实（操作人：{cmt.rebindRecord.reboundBy}）
                           </span>
                         </span>
                         {isAuthor && (
                           <button
                             onClick={() => {
                               setRebindingComment(cmt);
-                              setRebindTargetBlockId(currentDraft?.blocks[0]?.id || '');
+                              setRebindTargetBlockId(targetBlock?.id || currentDraft?.blocks[0]?.id || '');
                             }}
                             className="text-[10px] text-purple-800 hover:underline font-semibold cursor-pointer shrink-0"
                           >
@@ -596,6 +585,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                             <span>
                               {isTargetBlockMissing
                                 ? '定位提示：目标段落定位已过期（原目标段落已在正文中删除或合并）'
+                                : cmt.rebindRecord
+                                ? '定位提示：目标段落定位需复核（当前重定位段落正文自重新指定后已有修改）'
                                 : '定位提示：目标段落定位已过期（正文自意见提出后已有修改）'}
                             </span>
                           </div>
@@ -613,7 +604,11 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                           )}
                         </div>
                         <p className="text-[10px] text-amber-700">
-                          该意见针对草稿【{cmt.targetVersionNumber || cmt.targetVersionId}】第{cmt.targetBlockOrder || '?'}段提出。为防止错挂，系统已隔离定位。
+                          {isTargetBlockMissing
+                            ? `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。原目标段落已在正文中删除或合并，为防止错挂，系统已隔离定位。`
+                            : cmt.rebindRecord
+                            ? `重定位段落正文已有变动。重指定时原文：“${(cmt.rebindRecord.reboundParagraphText || '').slice(0, 45)}...”，请核实当前正文修改是否影响审阅意见答复。`
+                            : `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。提出时基准原句：“${(cmt.baseParagraphText || '').slice(0, 45)}...”，当前段落正文已有修改，请复核。`}
                         </p>
                         {cmt.baseParagraphText && (
                           <div className="mt-1 p-1 bg-white/80 rounded border border-amber-200 text-[10px] font-mono text-slate-600 italic">

@@ -272,6 +272,7 @@ export interface RebindRecord {
   toBlockOrder: number;
   targetDraftId?: string;
   reason?: string;
+  reboundParagraphText?: string;       // 重绑时目标段落的基准正文，用于后续检测正文变化
 }
 
 export interface ReviewComment {
@@ -282,6 +283,7 @@ export interface ReviewComment {
   targetVersionId: string;             // 意见针对的基准版本ID（例如 v1.0 提交审阅基准快照）
   targetVersionNumber?: string;        // 意见针对的版本号
   baseParagraphText?: string;          // 提出意见时的基准原文（原始存证，不可在重新绑定时被覆盖）
+  reboundParagraphText?: string;       // 重新绑定时目标段落的正文（重绑基准，用于后续正文变动复核检测）
   currentBlockId?: string;             // 当前有效/重新绑定的目标段落ID
   currentBlockOrder?: number;          // 当前有效/重新绑定的目标段落序号
   rebindRecord?: RebindRecord;         // 人工重新指定段落的操作存证记录

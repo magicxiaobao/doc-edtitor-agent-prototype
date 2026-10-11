@@ -2225,14 +2225,20 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                     <span>
                                       {!loc.targetBlock
                                         ? '定位需复核：原目标段落已在正文中删除或合并'
+                                        : cmt.rebindRecord
+                                        ? '定位需复核：当前重定位段落正文自重新指定后已有修改'
                                         : '定位需复核：当前段落正文自意见提出后已有修改'}
                                     </span>
                                   </div>
-                                  {cmt.baseParagraphText && (
+                                  {cmt.rebindRecord?.reboundParagraphText ? (
+                                    <p className="text-purple-700 italic">
+                                      重指定时基准句：“{cmt.rebindRecord.reboundParagraphText.slice(0, 45)}...”
+                                    </p>
+                                  ) : cmt.baseParagraphText ? (
                                     <p className="text-slate-600 italic">
                                       提出时原句：“{cmt.baseParagraphText.slice(0, 45)}...”
                                     </p>
-                                  )}
+                                  ) : null}
                                   {canUserEdit && (
                                     <button
                                       onClick={() => handleOpenRebindModal(cmt)}
@@ -2865,13 +2871,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                     <ExternalLink className="w-2.5 h-2.5" />
                                   </button>
                                 </div>
+                              ) : resolved.isEvidencePrunedOrUnavailable ? (
+                                <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
+                                  <span className="text-[10px] text-amber-700 italic truncate pr-1" title={`已记录证据ID: ${resolved.effectiveEvidenceId}，片段原文已清理或归档`}>
+                                    {`出处说明：已记录证据ID(${resolved.effectiveEvidenceId})，原文已清理`}
+                                  </span>
+                                  <button
+                                    onClick={() => onViewSnippet(resolved.currentSnippet || { id: resolved.effectiveEvidenceId || '', docName: `历史证据【${resolved.effectiveEvidenceId}】已清理或归档`, sourceDocId: '', text: `该历史快照已完整记录原始证据ID【${resolved.effectiveEvidenceId}】，但材料库中该证据片段原文已清理或归档不可用。`, period: resolved.effectivePeriod || '', location: '原出处片段已归档' }, fact)}
+                                    className="text-[11px] text-amber-800 hover:text-amber-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    <span>查看说明</span>
+                                    <ExternalLink className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
                               ) : resolved.isEvidenceMissingInSnapshot ? (
                                 <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
                                   <span className="text-[10px] text-amber-700 italic truncate pr-1">
                                     出处说明：历史快照未记录原始证据片段ID
                                   </span>
                                   <button
-                                    onClick={() => onViewSnippet(resolved.currentSnippet || { id: '', docName: '历史快照无证据记录', sourceDocId: '', text: '', period: resolved.effectivePeriod || '', location: '历史快照无出处记录' }, fact)}
+                                    onClick={() => onViewSnippet(resolved.currentSnippet || { id: '', docName: '历史快照未记录证据ID', sourceDocId: '', text: '该历史版本快照中未记录此事实当时的原始证据片段ID。', period: resolved.effectivePeriod || '', location: '历史快照无出处记录' }, fact)}
                                     className="text-[11px] text-amber-800 hover:text-amber-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
                                   >
                                     <span>查看说明</span>
@@ -2880,7 +2899,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 </div>
                               ) : (
                                 <div className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-200/60">
-                                  历史快照未收录此事实出处
+                                  历史快照未收录此事实依据
                                 </div>
                               )
                             ) : resolved.effectiveSnippet ? (

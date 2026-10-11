@@ -433,6 +433,193 @@ assert(
   '抽屉内同样明确标注任务最新核准值期间与口径'
 );
 
+// --------------------------------------------------------------------------
+// 4. [P2 回归] 重绑后再次人工改写目标段落，两页共用定位服务准确提示正文变动复核且绝不误报“正文一致”
+// --------------------------------------------------------------------------
+console.log('\n>>> [验收 4] 重绑后再次人工改写目标段落，两页定位与警告联动测试：');
+
+assert(
+  Boolean(rebindResult.updatedComment.reboundParagraphText),
+  '重绑时成功另存目标段落基准文本 reboundParagraphText'
+);
+assert(
+  rebindResult.updatedComment.reboundParagraphText === block2.content,
+  '重绑保存的基准文本与重绑时的 block2 内容完全一致'
+);
+assert(
+  rebindResult.updatedComment.baseParagraphText === block1.content,
+  '重绑后提出时的原始存证 baseParagraphText 严格保持不变（与 block1 内容一致）'
+);
+
+// Simulate author manually revising block2 text in working draft
+const modifiedDraft: DraftVersion = {
+  ...currentDraft,
+  blocks: currentDraft.blocks.map((b) =>
+    b.id === block2.id ? { ...b, content: '【已人工大幅修改】第二段全面贯彻落实重点专项任务规划部署。' } : b
+  ),
+};
+
+const locAfterEdit = getReviewCommentLocation(rebindResult.updatedComment, modifiedDraft);
+assert(locAfterEdit.isLocated === true, '改动正文后目标段落仍可定位');
+assert(locAfterEdit.hasTextModified === true, '重绑后人工改写目标段落，getReviewCommentLocation 准确检测到正文变化');
+assert(
+  Boolean(locAfterEdit.warning && locAfterEdit.warning.includes('重定位段落正文自重新指定后已有修改')),
+  '定位服务返回明确的重定位段落正文改动警告'
+);
+
+const reviewStageHtmlAfterEdit = ReactDOMServer.renderToString(
+  React.createElement(ReviewStage, {
+    task: {
+      ...taskWithComment,
+      drafts: [modifiedDraft],
+      currentDraftId: modifiedDraft.id,
+      reviewComments: [rebindResult.updatedComment],
+    },
+    onUpdateTask: () => {},
+    onProceedToNextStage: () => {},
+    activeRole: '主笔甲',
+  })
+);
+
+assert(
+  !reviewStageHtmlAfterEdit.includes('正文一致'),
+  '重绑段落正文被修改后，审阅页绝对不显示“正文一致”'
+);
+assert(
+  reviewStageHtmlAfterEdit.includes('定位提示：目标段落定位需复核（当前重定位段落正文自重新指定后已有修改）') ||
+    reviewStageHtmlAfterEdit.includes('重定位段落正文已有变动'),
+  '审阅页展示准确的重定位段落变动需复核提示'
+);
+
+const draftingStageHtmlAfterEdit = ReactDOMServer.renderToString(
+  React.createElement(DraftingStage, {
+    task: {
+      ...taskWithComment,
+      drafts: [modifiedDraft],
+      currentDraftId: modifiedDraft.id,
+      reviewComments: [rebindResult.updatedComment],
+    },
+    onUpdateTask: () => {},
+    onProceedToNextStage: () => {},
+    activeRole: '主笔甲',
+    initialInspectorTab: 'review_comments',
+  })
+);
+
+assert(
+  draftingStageHtmlAfterEdit.includes('定位需复核：当前重定位段落正文自重新指定后已有修改'),
+  '起草页审阅意见列表展示“定位需复核：当前重定位段落正文自重新指定后已有修改”'
+);
+assert(
+  draftingStageHtmlAfterEdit.includes('重指定时基准句'),
+  '起草页明确展示重指定时的基准原句供比对'
+);
+
+// --------------------------------------------------------------------------
+// 5. [P2 回归] 历史证据已清理时，区分三种出处状态，侧栏显示真实原因并保留查看说明入口，抽屉展示真实追溯说明
+// --------------------------------------------------------------------------
+console.log('\n>>> [验收 5] 历史证据已清理时的出处状态区分与抽屉追溯测试：');
+
+// Create a historical draft where primaryEvidenceId is recorded as 'SNIP-PRUNED-88',
+// but 'SNIP-PRUNED-88' is deleted/pruned from task.snippets.
+const prunedFactId = 'FACT-PRUNED-01';
+const draftWithPrunedEvidence: DraftVersion = {
+  id: 'd-hist-pruned',
+  versionNumber: 'v0.9 (归档快照)',
+  blocks: [{ ...block1, referencedFactIds: [prunedFactId] }],
+  createdAt: '2026-09-30T10:00:00Z',
+  isHistoricalSnapshot: true,
+  snapshotMetadata: {
+    factSnapshot: {
+      snapshotTime: '2026-09-30T10:00:00Z',
+      items: [
+        {
+          factId: prunedFactId,
+          metric: '完成清理整改事项',
+          value: '88',
+          unit: '项',
+          period: '2026年1至8月',
+          metricScope: '专项清理行动',
+          primaryEvidenceId: 'SNIP-PRUNED-88',
+          selected: true,
+        },
+      ],
+    },
+  },
+};
+
+const prunedFact = {
+  id: prunedFactId,
+  metric: '完成清理整改事项',
+  value: '95',
+  unit: '项',
+  period: '2026年1至10月',
+  metricScope: '全局整改行动',
+  primaryEvidenceId: 'SNIP-LATEST-95',
+  status: 'confirmed' as const,
+};
+
+const taskWithPrunedEvidence: Task = {
+  ...task,
+  facts: [prunedFact],
+  drafts: [draftWithPrunedEvidence],
+  currentDraftId: draftWithPrunedEvidence.id,
+  snippets: [], // Materials pruned!
+};
+
+const resolvedPruned = resolveDraftFactEvidence(prunedFact, draftWithPrunedEvidence, taskWithPrunedEvidence);
+
+assert(resolvedPruned.isSnapshotMissingFact === false, '快照包含该事实项，isSnapshotMissingFact 为 false');
+assert(resolvedPruned.isEvidenceMissingInSnapshot === false, '快照已记录证据ID，isEvidenceMissingInSnapshot 为 false');
+assert(resolvedPruned.isEvidencePrunedOrUnavailable === true, '片段在材料库中不存在，isEvidencePrunedOrUnavailable 为 true');
+assert(resolvedPruned.effectiveEvidenceId === 'SNIP-PRUNED-88', '正确读取快照记录的证据ID SNIP-PRUNED-88');
+assert(resolvedPruned.effectiveSnippet === null, '材料库无对应片段，effectiveSnippet 为 null');
+
+const draftingSidebarPrunedHtml = ReactDOMServer.renderToString(
+  React.createElement(DraftingStage, {
+    task: taskWithPrunedEvidence,
+    onUpdateTask: () => {},
+    onProceedToNextStage: () => {},
+    activeRole: '主笔甲',
+    initialInspectorTab: 'material_evidence',
+  })
+);
+
+assert(
+  draftingSidebarPrunedHtml.includes('出处说明：已记录证据ID(SNIP-PRUNED-88)，原文已清理'),
+  '侧栏真实展示原因：出处说明：已记录证据ID(SNIP-PRUNED-88)，原文已清理'
+);
+assert(
+  !draftingSidebarPrunedHtml.includes('历史快照未收录此事实出处') &&
+    !draftingSidebarPrunedHtml.includes('历史快照未收录此事实依据'),
+  '侧栏不再错误显示“历史快照未收录此事实出处”'
+);
+assert(
+  draftingSidebarPrunedHtml.includes('查看说明'),
+  '侧栏成功保留【查看说明】入口'
+);
+
+const drawerPrunedHtml = ReactDOMServer.renderToString(
+  React.createElement(SnippetDrawer, {
+    snippet: null,
+    documents: [],
+    onClose: () => {},
+    fact: prunedFact,
+    currentDraft: draftWithPrunedEvidence,
+    task: taskWithPrunedEvidence,
+  })
+);
+
+assert(
+  drawerPrunedHtml.includes('来源追溯真实限制说明'),
+  '抽屉展示来源追溯真实限制说明'
+);
+assert(
+  drawerPrunedHtml.includes('该历史快照已完整记录原始证据ID【SNIP-PRUNED-88】') &&
+    drawerPrunedHtml.includes('材料库中该证据原文已清理或归档不可用'),
+  '抽屉内明确提示已记录原始证据ID且材料库中证据原文已清理或归档，绝不冒充最新证据'
+);
+
 console.log('\n================================================================');
 console.log('   🎉 任务15 P1重新绑定存证与定位有效性、P2历史依据侧栏统一全部通过！');
 console.log('================================================================\n');
