@@ -198,6 +198,45 @@ export interface AuditRecord {
   resolvedAt?: string;
 }
 
+export type ModificationSource =
+  | 'ai_suggestion'
+  | 'ai_suggestion_fine_tuned'
+  | 'manual_edit'
+  | 'review_implementation';
+
+export interface ReviewCommentSnapshotBeforeChange {
+  status: ReviewCommentStatus;
+  authorReply?: string;
+  decisionReason?: string;
+  resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
+  implementationDraftId?: string;
+  implementationVersionNumber?: string;
+  implementationBlockId?: string;
+  implementedAt?: string;
+}
+
+export interface ParagraphModificationLog {
+  id: string;                          // 操作ID (e.g. MOD-LOG-...)
+  taskId: string;                      // 关联任务ID
+  draftId: string;                     // 关联稿件版本ID
+  blockId: string;                     // 目标段落ID
+  blockOrder?: number;                 // 目标段落序号
+  timestamp: string;                   // 操作时间 (ISO string)
+  source: ModificationSource;          // 来源类型
+  sourceDescription: string;           // 来源说明 (例如：采纳经微调的第2段建议)
+  beforeContent: string;               // 修改前正文
+  afterContent: string;                // 实际写入的正文
+  aiOriginalSuggestedText?: string;    // AI生成原始建议（人工微调时不被覆盖）
+  isFineTuned?: boolean;               // 是否经人工微调
+  associatedCommentId?: string;        // 关联审阅意见ID
+  associatedCommentReviewer?: string;  // 关联审阅人
+  previousCommentState?: ReviewCommentSnapshotBeforeChange; // 采纳前意见状态存证（用于安全撤销时精准恢复）
+  status: 'applied' | 'undone';        // 状态：已应用 / 已安全撤销
+  undoneAt?: string;                   // 撤销时间
+  undoneBy?: string;                   // 撤销操作人
+  undoReason?: string;                 // 撤销原因/说明
+}
+
 export interface SnapshotMetadata {
   taskTitle: string;
   startDate: string;
@@ -380,6 +419,7 @@ export interface Task {
   currentReviewRound?: number;         // 当前审阅轮次（例如第1轮、第2轮）
   reviewComments: ReviewComment[];
   auditIssues: AuditIssue[];
+  modificationLogs?: ParagraphModificationLog[]; // 最近修改记录（与版本历史分开，至多20条）
 }
 
 export interface DraftCandidate {

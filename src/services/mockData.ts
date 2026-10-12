@@ -349,6 +349,7 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
     currentDraftId: '',
     reviewComments: [],
     auditIssues: [],
+    modificationLogs: [],
   };
 
   if (scenario === 'blank') {

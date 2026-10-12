@@ -134,6 +134,7 @@ export function validateTaskStructure(task: any): boolean {
   if (!Array.isArray(task.styleRules)) return false;
   if (!Array.isArray(task.reviewComments)) return false;
   if (!Array.isArray(task.auditIssues)) return false;
+  if (task.modificationLogs !== undefined && !Array.isArray(task.modificationLogs)) return false;
 
   // Validate draft structure and paragraph block references
   for (const draft of task.drafts) {
@@ -237,6 +238,7 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
       outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
       reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
       auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
+      modificationLogs: Array.isArray(rawT.modificationLogs) ? rawT.modificationLogs : [],
       isFinalized: !!rawT.isFinalized,
       status: rawT.status || '起草中',
       updatedAt: rawT.updatedAt || new Date().toISOString(),
@@ -300,6 +302,12 @@ export function loadPersistedState(): LoadStateResult {
       if (hasCorruptedTask) {
         throw new Error('存储结构异常：检测到任务对象元数据缺失或结构损坏');
       }
+
+      // Ensure modificationLogs is an array on all loaded tasks (backward compatibility with earlier v2 tasks)
+      tasksToValidate = tasksToValidate.map((t) => ({
+        ...t,
+        modificationLogs: Array.isArray(t.modificationLogs) ? t.modificationLogs : [],
+      }));
 
       const matchedTaskId = tasksToValidate.some((t) => t.id === payload.currentTaskId)
         ? payload.currentTaskId
@@ -577,6 +585,7 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
         currentDraftId: resolvedCurrentDraftId,
         reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
         auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
+        modificationLogs: Array.isArray(rawT.modificationLogs) ? rawT.modificationLogs : [],
         isFinalized: false,
         status: '待恢复', // 使用空结构和“待恢复”状态，保留原文，避免混入示例业务数据
         schemaVersion: CURRENT_SCHEMA_VERSION,

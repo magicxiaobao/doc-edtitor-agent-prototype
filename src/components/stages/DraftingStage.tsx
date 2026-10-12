@@ -23,6 +23,8 @@ import {
   isSupportedDraftInstruction
 } from '../../services/mockDraftService';
 import { CandidateComparisonModal } from '../CandidateComparisonModal';
+import { ParagraphSuggestionEditor } from '../ParagraphSuggestionEditor';
+import { RecentModificationsModal } from '../RecentModificationsModal';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -37,7 +39,12 @@ import {
   acceptDraftCandidate,
   createDraftSnapshot,
   restoreDraftVersion,
-  submitDraftForReview
+  submitDraftForReview,
+  adoptParagraphSuggestion,
+  undoSafeParagraphModification,
+  validateUndoEligibility,
+  getRecentModificationLogs,
+  getLatestAppliedLogForDraft
 } from '../../services/draftLifecycleService';
 import { 
   computeTextDiff 
@@ -231,6 +238,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Version History Drawer
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+
+  // Recent Modifications Modal & Adopt Toast State
+  const [showRecentModificationsModal, setShowRecentModificationsModal] = useState(false);
+  const [adoptFeedback, setAdoptFeedback] = useState<{
+    logId: string;
+    blockOrder: number;
+    blockId: string;
+    message: string;
+  } | null>(null);
 
   // Cancel generation and clear isolated results if task changes
   useEffect(() => {
@@ -853,118 +869,62 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     executeRevisionRequest(targetBlock, revisionSuggestion.action, revisionSuggestion.customPrompt, matchingComment);
   };
 
-  // Adopt revision into target block
-  const handleAdoptRevision = () => {
+  // Adopt revision into target block (AI original or human fine-tuned)
+  const handleAdoptRevision = (pendingTextToAdopt?: string) => {
     if (!revisionSuggestion || !currentDraft) return;
 
-    const perm = checkPermission(activeRole, 'adopt_revision');
-    if (!perm.allowed) {
-      alert(perm.reason || '当前身份无权采纳修改建议');
-      return;
-    }
-
-    if (revisionSuggestion.isUnsupportedPrompt) {
-      alert('当前建议属于未支持的自定义指令，无法采纳至正文。');
-      return;
-    }
-
-    // Task boundary verification
-    if (revisionSuggestion.taskId && revisionSuggestion.taskId !== task.id) {
-      alert('建议失效：该修改建议属于其他公文任务，不可跨任务采纳。');
-      setRevisionSuggestion(null);
-      return;
-    }
-
-    // Version boundary verification
-    if (revisionSuggestion.sourceDraftId && revisionSuggestion.sourceDraftId !== currentDraft.id) {
-      alert('建议失效：该修改建议基于其他草稿版本生成，当前工作版本已变更，不可直接采纳。');
-      setRevisionSuggestion(null);
-      return;
-    }
-
-    // CRITICAL: Verify against original target block by targetBlockId, NEVER activeBlock!
-    const targetBlock = currentDraft.blocks.find((b) => b.id === revisionSuggestion.targetBlockId);
-    if (!targetBlock) {
-      alert('建议失效：未在当前版本找到该建议的目标段落，可能已被删除或重构。');
-      setRevisionSuggestion(null);
-      return;
-    }
-
-    // CRITICAL: Base content modification conflict check
-    if (targetBlock.content !== revisionSuggestion.baseContent) {
-      alert('采纳冲突：检测到目标段落自建议生成后已被人工编辑修改，基准内容已变动。为防止直接覆盖人工文本，建议已失效，请重新基于当前内容生成建议。');
-      return;
-    }
-
-    // In-flight / superseded revision verification
-    if (isRevisionGenerating || activeRevisionRunIdRef.current !== null) {
-      alert('建议生成中或已被新请求覆盖，无法采纳旧建议。请等待当前生成完毕。');
-      return;
-    }
-    if (completedRevisionRunIdRef.current && revisionSuggestion.runId && completedRevisionRunIdRef.current !== revisionSuggestion.runId) {
-      alert('建议已失效：该建议已被后续生成的修改建议替换。');
-      setRevisionSuggestion(null);
-      return;
-    }
-
-    // Zero-diff check: If suggestedText is identical to current content, do not accept as modified
-    if (revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) {
-      alert('未检测到正文文本差异（建议文本与段落当前正文完全相同），无需替换且不能标记审阅意见为已落实！');
-      return;
-    }
+    const textToUse = pendingTextToAdopt !== undefined ? pendingTextToAdopt : revisionSuggestion.suggestedText;
 
     try {
-      const actionName =
-        revisionSuggestion.action === 'custom'
-          ? `执行自定义改写【${revisionSuggestion.customPrompt}】`
-          : `采纳局部修改建议（${revisionSuggestion.action}）`;
-
-      const { updatedTask, workingDraft } = applyDraftContentChange(
+      const result = adoptParagraphSuggestion({
         task,
-        currentDraft.id,
-        (blocks) =>
-          blocks.map((b) =>
-            b.id === revisionSuggestion.targetBlockId
-              ? { ...b, content: revisionSuggestion.suggestedText, updatedAt: new Date().toISOString() }
-              : b
-          ),
-        actionName,
-        activeRole
-      );
-
-      // Rule: If revision was generated from a review comment, update ONLY this comment to implemented!
-      let updatedComments = updatedTask.reviewComments;
-      if (revisionSuggestion.sourceCommentId) {
-        const commentId = revisionSuggestion.sourceCommentId;
-        updatedComments = updatedTask.reviewComments.map((cmt) => {
-          if (cmt.id === commentId) {
-            return {
-              ...cmt,
-              status: 'implemented' as const,
-              authorReply: `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`,
-              decisionReason: revisionSuggestion.diffExplanation,
-              resolutionType: 'text_modified' as const,
-              implementationDraftId: workingDraft.id,
-              implementationVersionNumber: workingDraft.versionNumber,
-              implementationBlockId: targetBlock.id,
-              implementedAt: new Date().toISOString(),
-            };
-          }
-          return cmt;
-        });
-      }
+        currentDraft,
+        suggestion: revisionSuggestion,
+        pendingTextToAdopt: textToUse,
+        activeCompletedRunId: completedRevisionRunIdRef.current,
+        activeRole,
+        isGenerating: isRevisionGenerating,
+      });
 
       onUpdateTask({
-        drafts: updatedTask.drafts,
-        currentDraftId: workingDraft.id,
-        reviewComments: updatedComments,
-        isFinalized: updatedTask.isFinalized,
-        status: updatedTask.status,
+        drafts: result.updatedTask.drafts,
+        currentDraftId: result.workingDraft.id,
+        reviewComments: result.updatedTask.reviewComments,
+        modificationLogs: result.updatedTask.modificationLogs,
+        isFinalized: result.updatedTask.isFinalized,
+        status: result.updatedTask.status,
       });
+
       setRevisionSuggestion(null);
       completedRevisionRunIdRef.current = null;
+
+      // Provide visible feedback toast with direct safe undo trigger
+      setAdoptFeedback({
+        logId: result.logEntry.id,
+        blockOrder: result.targetBlock.order,
+        blockId: result.targetBlock.id,
+        message: result.logEntry.isFineTuned ? '已微调写入' : 'AI建议采纳写入',
+      });
     } catch (err: any) {
       alert(err.message || '采纳建议失败');
+    }
+  };
+
+  // Safe undo handler via unified lifecycle service
+  const handleUndoModification = (logId: string) => {
+    try {
+      const result = undoSafeParagraphModification(task, currentDraft, logId, activeRole);
+      onUpdateTask({
+        drafts: result.updatedTask.drafts,
+        currentDraftId: result.workingDraft.id,
+        reviewComments: result.updatedTask.reviewComments,
+        modificationLogs: result.updatedTask.modificationLogs,
+        isFinalized: result.updatedTask.isFinalized,
+        status: result.updatedTask.status,
+      });
+      setAdoptFeedback(null);
+    } catch (err: any) {
+      alert(err.message || '撤销修改失败');
     }
   };
 
@@ -1546,6 +1506,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </button>
 
           <button
+            type="button"
+            data-testid="btn-open-recent-modifications"
+            onClick={() => setShowRecentModificationsModal(true)}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            title="查看当前文稿的局部AI建议采纳与微调操作存证记录，支持安全撤销"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+            <span>最近修改记录 ({getRecentModificationLogs(task, currentDraft?.id).length})</span>
+          </button>
+
+          <button
             onClick={handleSubmitDraftForReviewClick}
             disabled={!canUserEdit || isCurrentDraftImmutable}
             className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
@@ -2104,6 +2075,47 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                         重新指定目标段落
                       </button>
                     )}
+                  </div>
+                )}
+
+                {/* Adopt Feedback Banner with Safe Undo */}
+                {adoptFeedback && (
+                  <div
+                    data-testid="toast-adopt-success"
+                    className="p-3 bg-emerald-50 border-2 border-emerald-300 rounded-lg text-xs text-emerald-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold text-emerald-900">
+                          已更新第 {adoptFeedback.blockOrder} 段 · 撤销本次修改
+                        </span>
+                        <span className="text-[11px] text-emerald-700 ml-1.5 font-normal">
+                          ({adoptFeedback.message})
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <button
+                        type="button"
+                        data-testid="btn-undo-latest-toast"
+                        onClick={() => handleUndoModification(adoptFeedback.logId)}
+                        className="px-3 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-400 rounded text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                        title="安全撤销本次修改并恢复原正文"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>撤销本次修改</span>
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="btn-close-adopt-toast"
+                        onClick={() => setAdoptFeedback(null)}
+                        className="p-1 text-emerald-600 hover:text-emerald-800 rounded hover:bg-emerald-100 cursor-pointer"
+                        title="关闭提示"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -2869,294 +2881,22 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                       </div>
                     )}
 
-                    {/* Revision Diff Comparison Box */}
-                    {revisionSuggestion && (() => {
-                      const targetBlock = currentDraft?.blocks.find((b) => b.id === revisionSuggestion.targetBlockId);
-                      const isTaskMismatch = Boolean(revisionSuggestion.taskId && revisionSuggestion.taskId !== task.id);
-                      const isDraftVersionMismatch = Boolean(
-                        revisionSuggestion.sourceDraftId &&
-                        currentDraft &&
-                        revisionSuggestion.sourceDraftId !== currentDraft.id
-                      );
-                      const isTargetBlockMissing = Boolean(!targetBlock);
-                      const isModifiedAfter = Boolean(targetBlock && targetBlock.content !== revisionSuggestion.baseContent);
-                      const isZeroDiff = Boolean(targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim());
-                      const isDifferentBlockSelected = Boolean(activeBlock && activeBlock.id !== revisionSuggestion.targetBlockId);
-                      const isSupersededRun = Boolean(
-                        completedRevisionRunIdRef.current &&
-                        revisionSuggestion.runId &&
-                        completedRevisionRunIdRef.current !== revisionSuggestion.runId
-                      );
-
-                      const isAdoptDisabled = Boolean(
-                        !canUserEdit ||
-                        isRevisionGenerating ||
-                        isTaskMismatch ||
-                        isDraftVersionMismatch ||
-                        isTargetBlockMissing ||
-                        isModifiedAfter ||
-                        isZeroDiff ||
-                        isSupersededRun ||
-                        revisionSuggestion.isUnsupportedPrompt
-                      );
-
-                      const adoptDisabledReason = (() => {
-                        if (!canUserEdit) return `权限受限：当前身份为【${activeRole}】，仅主笔甲可采纳修改正文`;
-                        if (isRevisionGenerating) return '新建议生成中，不可采纳';
-                        if (isTaskMismatch) return '建议失效：该修改建议属于其他公文任务，不可跨任务采纳';
-                        if (isDraftVersionMismatch) return '建议失效：该修改建议基于其他草稿版本生成，当前工作版本已变更，不可采纳';
-                        if (isTargetBlockMissing) return '建议失效：未在当前版本找到该建议的目标段落，可能已被删除或重构';
-                        if (isModifiedAfter) return '目标段落基准自生成后已被人工编辑修改，无法采纳覆盖';
-                        if (isZeroDiff) return '建议文本与当前段落完全一致（零差异），不能采纳标记已落实';
-                        if (isSupersededRun) return '建议已失效：该建议已被后续生成的修改建议替换';
-                        if (revisionSuggestion.isUnsupportedPrompt) return '未支持的自定义指令，无法采纳';
-                        return `采纳替换第${targetBlock?.order || revisionSuggestion.targetBlockOrder}段`;
-                      })();
-
-                      const diffSegments =
-                        revisionSuggestion.diffSegments ||
-                        computeTextDiff(revisionSuggestion.baseContent, revisionSuggestion.suggestedText);
-
-                      return (
-                        <div className="p-3.5 bg-blue-50/70 border-2 border-blue-200 rounded-lg space-y-3 text-xs shadow-2xs">
-                          {/* Suggestion Header */}
-                          <div className="flex items-center justify-between pb-2 border-b border-blue-200/80">
-                            <div className="font-bold text-sm text-blue-900 flex items-center gap-1.5">
-                              <Sparkles className="w-4 h-4 text-blue-600" />
-                              <span>修改建议对比</span>
-                            </div>
-                            <span className="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded font-medium">
-                              {revisionSuggestion.action === 'custom'
-                                ? `指令：${revisionSuggestion.customPrompt?.slice(0, 12)}...`
-                                : revisionSuggestion.action === 'compress'
-                                ? '压缩精炼'
-                                : revisionSuggestion.action === 'expand'
-                                ? '补充表达'
-                                : revisionSuggestion.action === 'formal'
-                                ? '正式文风'
-                                : revisionSuggestion.action === 'highlight'
-                                ? '突出重点'
-                                : revisionSuggestion.action}
-                            </span>
-                          </div>
-
-                          {/* Target binding info */}
-                          <div className="text-xs text-slate-700 bg-white p-2.5 rounded border border-blue-100 flex items-center justify-between">
-                            <span>
-                              建议绑定目标：<strong className="text-blue-900 font-bold">第 {targetBlock?.order || revisionSuggestion.targetBlockOrder || '?'} 段</strong>
-                            </span>
-                            <details className="text-[11px] text-slate-400">
-                              <summary className="cursor-pointer hover:text-slate-600">内部标识</summary>
-                              <span className="font-mono text-[10px] text-slate-500 block pt-0.5">{targetBlock?.id}</span>
-                            </details>
-                          </div>
-
-                          {/* Source review comment context */}
-                          {revisionSuggestion.sourceCommentId && (
-                            <div className="p-2 bg-white rounded border border-blue-200 text-xs text-blue-950 space-y-0.5">
-                              <div className="flex items-center justify-between">
-                                <span className="font-semibold flex items-center gap-1 text-blue-800">
-                                  <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
-                                  依据【{revisionSuggestion.sourceCommentReviewer || '审阅人'}】意见生成
-                                </span>
-                                <span className="text-[10px] text-blue-600 font-mono">{revisionSuggestion.sourceCommentId}</span>
-                              </div>
-                              {revisionSuggestion.sourceCommentSummary && (
-                                <p className="text-[11px] text-slate-600 line-clamp-2">
-                                  意见内容：“{revisionSuggestion.sourceCommentSummary}”
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {/* When user selected another block while suggestion targets another */}
-                          {isDifferentBlockSelected && (
-                            <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
-                              <div className="font-semibold flex items-center gap-1">
-                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                                <span>光标段落与建议目标不一致</span>
-                              </div>
-                              <p className="text-xs text-amber-800 leading-normal">
-                                当前光标位于第<strong>{activeBlock?.order}段</strong>，采纳建议将<strong>仅更新原目标第{targetBlock?.order || revisionSuggestion.targetBlockOrder}段</strong>，不会误改写当前光标段落。
-                              </p>
-                              {targetBlock && (
-                                <button
-                                  onClick={() => handleJumpToTargetBlock(targetBlock.id)}
-                                  className="text-xs text-blue-700 hover:underline font-bold flex items-center gap-0.5 cursor-pointer pt-0.5"
-                                >
-                                  <CornerDownRight className="w-3 h-3" />
-                                  <span>回到目标第{targetBlock.order}段</span>
-                                </button>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Base modification conflict invalidation alert */}
-                          {isModifiedAfter && (
-                            <div className="p-2.5 bg-rose-50 border border-rose-300 rounded text-xs text-rose-900 space-y-1">
-                              <div className="font-bold flex items-center gap-1 text-rose-800">
-                                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                                <span>建议已失效（基准内容已被人工修改）</span>
-                              </div>
-                              <p className="text-xs text-rose-800 leading-normal">
-                                目标段落自建议生成后已被人工编辑修改。为防止直接覆盖人工编写的内容，旧建议已锁定无法采纳。请重新基于当前文本生成建议。
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Unsupported Prompt Notice */}
-                          {revisionSuggestion.isUnsupportedPrompt && (
-                            <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
-                              <div className="font-bold text-amber-900 flex items-center gap-1">
-                                <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                                <span>未支持的演示指令</span>
-                              </div>
-                              <p className="text-xs text-amber-800 leading-normal">
-                                {revisionSuggestion.unsupportedPromptNotice}
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Text Diff Comparison: Original vs Suggested */}
-                          <div className="space-y-2.5">
-                            {/* Original Text at Generation */}
-                            <div className="space-y-1">
-                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-                                生成时原文（基准对照）：
-                              </span>
-                              <div className="p-2.5 bg-white/90 rounded border border-slate-200 text-slate-600 text-sm leading-relaxed select-text font-serif">
-                                {revisionSuggestion.baseContent}
-                              </div>
-                            </div>
-
-                            {/* Suggested Text */}
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">
-                                  AI建议修改：
-                                </span>
-                                <span className="text-xs text-slate-500">
-                                  字数变化：原 {revisionSuggestion.baseContent.length} 字 → 现 {revisionSuggestion.suggestedText.length} 字 (
-                                  {revisionSuggestion.suggestedText.length - revisionSuggestion.baseContent.length >= 0 ? '+' : ''}
-                                  {revisionSuggestion.suggestedText.length - revisionSuggestion.baseContent.length}字)
-                                </span>
-                              </div>
-                              <div className="p-3 bg-white rounded border border-blue-200 text-slate-900 text-sm leading-relaxed select-text font-serif">
-                                {revisionSuggestion.suggestedText}
-                              </div>
-                            </div>
-
-                            {/* Visible Diff View with Explicit Badges */}
-                            <div className="space-y-1 pt-1">
-                              <span className="text-xs font-bold text-slate-600 block">
-                                可见改动差异（含文字标识）：
-                              </span>
-                              <div className="p-3 bg-white rounded border border-slate-200 text-sm leading-relaxed text-slate-800 select-text font-serif">
-                                {diffSegments.map((seg, sIdx) => {
-                                  if (seg.type === 'equal') {
-                                    return <span key={sIdx}>{seg.text}</span>;
-                                  }
-                                  if (seg.type === 'added') {
-                                    return (
-                                      <span
-                                        key={sIdx}
-                                        className="bg-emerald-100 text-emerald-900 px-1 py-0.5 mx-0.5 rounded font-medium border-b-2 border-emerald-500 inline-flex items-center gap-0.5"
-                                        title="新增内容"
-                                      >
-                                        <span className="text-[10px] font-bold bg-emerald-300 text-emerald-900 px-1 rounded font-sans">
-                                          +新增
-                                        </span>
-                                        <span>{seg.text}</span>
-                                      </span>
-                                    );
-                                  }
-                                  if (seg.type === 'removed') {
-                                    return (
-                                      <span
-                                        key={sIdx}
-                                        className="bg-rose-100 text-rose-900 line-through px-1 py-0.5 mx-0.5 rounded opacity-75 border-b-2 border-rose-400 inline-flex items-center gap-0.5"
-                                        title="删减内容"
-                                      >
-                                        <span className="text-[10px] font-bold bg-rose-300 text-rose-900 px-1 rounded no-underline font-sans">
-                                          -删减
-                                        </span>
-                                        <span>{seg.text}</span>
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Revision Explanation & Facts check */}
-                          <div className="space-y-1.5 pt-1 text-xs text-blue-900 bg-white/70 p-2.5 rounded border border-blue-100">
-                            <div>
-                              <strong className="text-slate-900">改写目的与说明：</strong>
-                              <span className="text-slate-700 ml-1 leading-relaxed">{revisionSuggestion.diffExplanation}</span>
-                            </div>
-
-                            {revisionSuggestion.needsVerificationNotes && revisionSuggestion.needsVerificationNotes.length > 0 && (
-                              <div className="pt-1.5 border-t border-blue-100/80">
-                                <strong className="text-amber-800">需核对项：</strong>
-                                <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-xs text-amber-900">
-                                  {revisionSuggestion.needsVerificationNotes.map((note, nIdx) => (
-                                    <li key={nIdx}>{note}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Action Buttons: Adopt, Discard, Regenerate, Copy */}
-                          <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-blue-200/80">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={handleCopyRevision}
-                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
-                                title="复制建议文本至剪贴板（不改写正文）"
-                              >
-                                <Copy className="w-3.5 h-3.5 text-slate-500" />
-                                <span>复制建议</span>
-                              </button>
-                              <button
-                                onClick={handleRegenerateRevision}
-                                disabled={isRevisionGenerating}
-                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                title="以当前段落重新生成建议"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                                <span>重新生成</span>
-                              </button>
-                            </div>
-
-                            <div className="flex gap-2">
-                              <button
-                                onClick={handleDiscardRevision}
-                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-600 rounded text-xs cursor-pointer"
-                                title="放弃此建议（正文不改变）"
-                              >
-                                放弃
-                              </button>
-                              <button
-                                onClick={handleAdoptRevision}
-                                disabled={isAdoptDisabled}
-                                className={`px-4 py-1.5 rounded text-xs font-bold shadow-xs flex items-center gap-1.5 ${
-                                  isAdoptDisabled
-                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                                    : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
-                                }`}
-                                title={adoptDisabledReason}
-                              >
-                                <Check className="w-4 h-4" />
-                                <span>采纳到目标段落</span>
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    {/* Revision Diff Comparison & Fine-tuning Editor */}
+                    {revisionSuggestion && (
+                      <ParagraphSuggestionEditor
+                        task={task}
+                        currentDraft={currentDraft}
+                        suggestion={revisionSuggestion}
+                        activeRole={activeRole}
+                        activeBlock={activeBlock}
+                        activeCompletedRunId={completedRevisionRunIdRef.current}
+                        isGenerating={isRevisionGenerating}
+                        onAdopt={handleAdoptRevision}
+                        onDiscard={handleDiscardRevision}
+                        onRegenerate={handleRegenerateRevision}
+                        onJumpToTargetBlock={handleJumpToTargetBlock}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -4001,6 +3741,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </div>
         </div>
       )}
+
+      {/* Recent Modifications & Safe Undo Modal */}
+      <RecentModificationsModal
+        isOpen={showRecentModificationsModal}
+        onClose={() => setShowRecentModificationsModal(false)}
+        task={task}
+        currentDraft={currentDraft}
+        activeRole={activeRole}
+        onUndo={handleUndoModification}
+      />
     </div>
   );
 };

@@ -6,7 +6,11 @@ import {
   FinalizationValidationResult,
   AuditIssue,
   SnapshotMetadata,
-  DraftCandidate
+  DraftCandidate,
+  RevisionSuggestion,
+  ParagraphModificationLog,
+  ReviewCommentSnapshotBeforeChange,
+  ReviewComment
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
 import { checkPermission } from './permissionService';
@@ -705,5 +709,557 @@ export function submitDraftForReview(
   };
 
   return { updatedTask, workingDraft: targetDraft, baselineSnapshot };
+}
+
+export const MAX_MODIFICATION_LOGS = 20;
+
+export interface ParagraphSuggestionValidationParams {
+  task: Task;
+  currentDraft: DraftVersion | undefined;
+  suggestion: RevisionSuggestion;
+  pendingTextToAdopt: string;
+  activeCompletedRunId: string | null;
+  activeRole: UserRole;
+  isGenerating?: boolean;
+}
+
+export interface ParagraphSuggestionValidationResult {
+  valid: boolean;
+  reason?: string;
+  targetBlock?: ParagraphBlock;
+  isFineTuned: boolean;
+  isZeroDiff: boolean;
+  isModifiedAfter: boolean;
+  isTaskMismatch: boolean;
+  isDraftVersionMismatch: boolean;
+  isSupersededRun: boolean;
+  isTargetBlockMissing: boolean;
+}
+
+/**
+ * Shared validation function for paragraph suggestion adoption.
+ * Used across UI button states, tooltips, warnings, and actual adoption execution.
+ */
+export function validateParagraphSuggestionAcceptance(
+  params: ParagraphSuggestionValidationParams
+): ParagraphSuggestionValidationResult {
+  const {
+    task,
+    currentDraft,
+    suggestion,
+    pendingTextToAdopt,
+    activeCompletedRunId,
+    activeRole,
+    isGenerating,
+  } = params;
+
+  const targetBlock = currentDraft?.blocks.find((b) => b.id === suggestion.targetBlockId);
+  const isTargetBlockMissing = !targetBlock;
+  const isTaskMismatch = Boolean(suggestion.taskId && suggestion.taskId !== task.id);
+  const isDraftVersionMismatch = Boolean(
+    suggestion.sourceDraftId &&
+    currentDraft &&
+    suggestion.sourceDraftId !== currentDraft.id
+  );
+  const isModifiedAfter = Boolean(targetBlock && targetBlock.content !== suggestion.baseContent);
+  const isZeroDiff = Boolean(targetBlock && pendingTextToAdopt.trim() === targetBlock.content.trim());
+  const isSupersededRun = Boolean(
+    activeCompletedRunId &&
+    suggestion.runId &&
+    activeCompletedRunId !== suggestion.runId
+  );
+  const isFineTuned = Boolean(
+    pendingTextToAdopt.trim() !== suggestion.suggestedText.trim()
+  );
+
+  const perm = checkPermission(activeRole, 'adopt_revision');
+  if (!perm.allowed) {
+    return {
+      valid: false,
+      reason: perm.reason || `权限受限：当前身份为【${activeRole}】，仅主笔甲可采纳修改正文`,
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isGenerating) {
+    return {
+      valid: false,
+      reason: '新建议生成中或请求进行中，不可采纳旧建议',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isTaskMismatch) {
+    return {
+      valid: false,
+      reason: '建议失效：该修改建议属于其他公文任务，不可跨任务采纳',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isDraftVersionMismatch) {
+    return {
+      valid: false,
+      reason: '建议失效：该修改建议基于其他草稿版本生成，当前工作版本已变更，不可采纳',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (currentDraft && (currentDraft.isHistoricalSnapshot || currentDraft.isFinal)) {
+    return {
+      valid: false,
+      reason: '当前版本为只读历史快照或已定稿，不可直接采纳修改；请先创建新工作稿',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isTargetBlockMissing) {
+    return {
+      valid: false,
+      reason: '建议失效：未在当前版本找到该建议的目标段落，可能已被删除或重构',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isModifiedAfter) {
+    return {
+      valid: false,
+      reason: '目标段落基准自建议生成后已被人工编辑修改，基准变动导致建议失效，无法采纳覆盖',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isSupersededRun) {
+    return {
+      valid: false,
+      reason: '建议已失效：该建议已被后续生成的修改建议替换或已取消',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (suggestion.isUnsupportedPrompt) {
+    return {
+      valid: false,
+      reason: '未支持的自定义指令，无法采纳',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  if (isZeroDiff) {
+    return {
+      valid: false,
+      reason: '待采纳文本与当前段落正文完全一致（零差异），无需替换且不能标记审阅意见为已落实',
+      targetBlock,
+      isFineTuned,
+      isZeroDiff,
+      isModifiedAfter,
+      isTaskMismatch,
+      isDraftVersionMismatch,
+      isSupersededRun,
+      isTargetBlockMissing,
+    };
+  }
+
+  return {
+    valid: true,
+    targetBlock,
+    isFineTuned,
+    isZeroDiff,
+    isModifiedAfter,
+    isTaskMismatch,
+    isDraftVersionMismatch,
+    isSupersededRun,
+    isTargetBlockMissing,
+  };
+}
+
+export interface AdoptParagraphSuggestionResult {
+  updatedTask: Task;
+  workingDraft: DraftVersion;
+  logEntry: ParagraphModificationLog;
+  targetBlock: ParagraphBlock;
+}
+
+/**
+ * Unified service for adopting a paragraph suggestion (AI original or fine-tuned).
+ * Enforces role permission, task/version boundaries, run ID, target block baseline check,
+ * and zero-difference check.
+ * Updates review comments if applicable, captures prior comment state, and appends to modificationLogs.
+ */
+export function adoptParagraphSuggestion(
+  params: ParagraphSuggestionValidationParams
+): AdoptParagraphSuggestionResult {
+  const validation = validateParagraphSuggestionAcceptance(params);
+  if (!validation.valid || !validation.targetBlock) {
+    throw new Error(validation.reason || '无法采纳修改建议');
+  }
+
+  const { task, currentDraft, suggestion, pendingTextToAdopt, activeRole } = params;
+  const draftIdToUse = currentDraft?.id || task.currentDraftId;
+  const targetBlock = validation.targetBlock;
+  const isFineTuned = validation.isFineTuned;
+  const finalContent = pendingTextToAdopt.trim();
+
+  const actionDescription = isFineTuned
+    ? `采纳第${targetBlock.order}段微调建议`
+    : suggestion.action === 'custom'
+    ? `执行第${targetBlock.order}段自定义改写【${suggestion.customPrompt?.slice(0, 16) || ''}】`
+    : `采纳第${targetBlock.order}段修改建议（${suggestion.action}）`;
+
+  // Apply content modification to draft
+  const { updatedTask: taskWithModifiedDraft, workingDraft } = applyDraftContentChange(
+    task,
+    draftIdToUse,
+    (blocks) =>
+      blocks.map((b) =>
+        b.id === targetBlock.id
+          ? { ...b, content: finalContent, updatedAt: new Date().toISOString() }
+          : b
+      ),
+    actionDescription,
+    activeRole
+  );
+
+  // If associated with a review comment, record previous comment state and update ONLY this comment
+  let previousCommentState: ReviewCommentSnapshotBeforeChange | undefined;
+  let updatedComments = taskWithModifiedDraft.reviewComments;
+
+  if (suggestion.sourceCommentId) {
+    const existingCmt = taskWithModifiedDraft.reviewComments.find((c) => c.id === suggestion.sourceCommentId);
+    if (existingCmt) {
+      previousCommentState = {
+        status: existingCmt.status,
+        authorReply: existingCmt.authorReply,
+        decisionReason: existingCmt.decisionReason,
+        resolutionType: existingCmt.resolutionType,
+        implementationDraftId: existingCmt.implementationDraftId,
+        implementationVersionNumber: existingCmt.implementationVersionNumber,
+        implementationBlockId: existingCmt.implementationBlockId,
+        implementedAt: existingCmt.implementedAt,
+      };
+
+      updatedComments = taskWithModifiedDraft.reviewComments.map((cmt) => {
+        if (cmt.id === suggestion.sourceCommentId) {
+          return {
+            ...cmt,
+            status: 'implemented' as const,
+            authorReply: isFineTuned
+              ? `主笔已采纳微调后的建议并更新第${targetBlock.order}段正文。`
+              : `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`,
+            decisionReason: isFineTuned
+              ? `人工微调采纳（原建议：${suggestion.diffExplanation}）`
+              : suggestion.diffExplanation,
+            resolutionType: 'text_modified' as const,
+            implementationDraftId: workingDraft.id,
+            implementationVersionNumber: workingDraft.versionNumber,
+            implementationBlockId: targetBlock.id,
+            implementedAt: new Date().toISOString(),
+          };
+        }
+        return cmt;
+      });
+    }
+  }
+
+  // Create modification log entry
+  const logEntry: ParagraphModificationLog = {
+    id: `MOD-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+    taskId: task.id,
+    draftId: workingDraft.id,
+    blockId: targetBlock.id,
+    blockOrder: targetBlock.order,
+    timestamp: new Date().toISOString(),
+    source: isFineTuned ? 'ai_suggestion_fine_tuned' : 'ai_suggestion',
+    sourceDescription: actionDescription,
+    beforeContent: targetBlock.content,
+    afterContent: finalContent,
+    aiOriginalSuggestedText: suggestion.suggestedText,
+    isFineTuned,
+    associatedCommentId: suggestion.sourceCommentId,
+    associatedCommentReviewer: suggestion.sourceCommentReviewer,
+    previousCommentState,
+    status: 'applied',
+  };
+
+  const currentLogs = task.modificationLogs || [];
+  const updatedLogs = [logEntry, ...currentLogs].slice(0, MAX_MODIFICATION_LOGS);
+
+  const finalUpdatedTask: Task = {
+    ...taskWithModifiedDraft,
+    reviewComments: updatedComments,
+    modificationLogs: updatedLogs,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    updatedTask: finalUpdatedTask,
+    workingDraft,
+    logEntry,
+    targetBlock,
+  };
+}
+
+export interface ValidateUndoEligibilityResult {
+  canUndo: boolean;
+  reason?: string;
+  log?: ParagraphModificationLog;
+  targetBlock?: ParagraphBlock;
+  associatedComment?: ReviewComment;
+}
+
+/**
+ * Validates whether a specific modification log is eligible for safe undo.
+ * Enforces role permissions, working draft mutability, draft ID match,
+ * latest applied operation condition, target block existence, unmodified text check,
+ * and review comment state consistency.
+ */
+export function validateUndoEligibility(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  logId: string,
+  activeRole: UserRole
+): ValidateUndoEligibilityResult {
+  const perm = checkPermission(activeRole, 'adopt_revision');
+  if (!perm.allowed) {
+    return { canUndo: false, reason: `权限受限：当前身份为【${activeRole}】，仅主笔甲可执行正文撤销` };
+  }
+
+  if (!currentDraft) {
+    return { canUndo: false, reason: '未找到当前文稿，无法执行撤销' };
+  }
+
+  if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || task.isFinalized) {
+    return { canUndo: false, reason: '当前文稿已归档/定稿或为只读历史快照，禁止撤销正文修改' };
+  }
+
+  const logs = task.modificationLogs || [];
+  const log = logs.find((l) => l.id === logId);
+  if (!log) {
+    return { canUndo: false, reason: '未找到指定的修改记录' };
+  }
+
+  if (log.draftId !== currentDraft.id) {
+    return { canUndo: false, reason: '稿件版本已切换（该修改属于其他版本），不支持跨版本撤销' };
+  }
+
+  if (log.status === 'undone') {
+    return { canUndo: false, reason: '该操作此前已被撤销，不可重复撤销' };
+  }
+
+  // Must be the latest applied operation on this specific working draft
+  const latestAppliedOnDraft = logs.find((l) => l.draftId === currentDraft.id && l.status === 'applied');
+  if (latestAppliedOnDraft && latestAppliedOnDraft.id !== log.id) {
+    return { canUndo: false, reason: '该操作不是当前工作稿的最近一次局部采纳（已有后续修改操作），不可跨历史操作跳跃撤销' };
+  }
+
+  const targetBlock = currentDraft.blocks.find((b) => b.id === log.blockId);
+  if (!targetBlock) {
+    return { canUndo: false, reason: '目标段落已在正文中删除或合并，无法安全恢复原内容' };
+  }
+
+  if (targetBlock.content !== log.afterContent) {
+    return { canUndo: false, reason: '目标段落在此次采纳后已被后续人工编辑或修改，正文已变动，不可覆盖后续最新正文' };
+  }
+
+  // If associated with a review comment, verify the comment has not been subsequently handled
+  let associatedComment: ReviewComment | undefined;
+  if (log.associatedCommentId) {
+    associatedComment = task.reviewComments.find((c) => c.id === log.associatedCommentId);
+    if (!associatedComment) {
+      return { canUndo: false, reason: '关联审阅意见已不存在，无法校验意见状态' };
+    }
+    if (associatedComment.status !== 'implemented') {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新处理（状态已非已落实），为保护后续审阅沟通记录，阻断撤销' };
+    }
+    if (
+      associatedComment.implementationBlockId !== log.blockId ||
+      associatedComment.implementationDraftId !== log.draftId
+    ) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新指定或另行落实，阻断撤销' };
+    }
+  }
+
+  return {
+    canUndo: true,
+    log,
+    targetBlock,
+    associatedComment,
+  };
+}
+
+export interface UndoSafeParagraphModificationResult {
+  updatedTask: Task;
+  workingDraft: DraftVersion;
+  undoneLog: ParagraphModificationLog;
+  targetBlock: ParagraphBlock;
+}
+
+/**
+ * Unified service to safely undo a paragraph modification.
+ * Restores target block content, reverts associated review comment state (if applicable),
+ * and marks the modification log as undone without deleting the evidentiary record.
+ */
+export function undoSafeParagraphModification(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  logId: string,
+  activeRole: UserRole
+): UndoSafeParagraphModificationResult {
+  const validation = validateUndoEligibility(task, currentDraft, logId, activeRole);
+  if (!validation.canUndo || !validation.log || !validation.targetBlock) {
+    throw new Error(validation.reason || '无法撤销该修改');
+  }
+
+  const log = validation.log;
+  const targetBlock = validation.targetBlock;
+  const draftIdToUse = currentDraft?.id || task.currentDraftId;
+
+  // Restore target block content back to beforeContent
+  const { updatedTask: taskWithRevertedDraft, workingDraft } = applyDraftContentChange(
+    task,
+    draftIdToUse,
+    (blocks) =>
+      blocks.map((b) =>
+        b.id === targetBlock.id
+          ? { ...b, content: log.beforeContent, updatedAt: new Date().toISOString() }
+          : b
+      ),
+    `撤销第${log.blockOrder || targetBlock.order}段采纳修改（恢复原正文）`,
+    activeRole
+  );
+
+  // Restore associated review comment state if applicable
+  let updatedComments = taskWithRevertedDraft.reviewComments;
+  if (log.associatedCommentId && log.previousCommentState) {
+    const prev = log.previousCommentState;
+    updatedComments = taskWithRevertedDraft.reviewComments.map((cmt) => {
+      if (cmt.id === log.associatedCommentId) {
+        return {
+          ...cmt,
+          status: prev.status,
+          authorReply: prev.authorReply,
+          decisionReason: prev.decisionReason,
+          resolutionType: prev.resolutionType,
+          implementationDraftId: prev.implementationDraftId,
+          implementationVersionNumber: prev.implementationVersionNumber,
+          implementationBlockId: prev.implementationBlockId,
+          implementedAt: prev.implementedAt,
+        };
+      }
+      return cmt;
+    });
+  }
+
+  // Update log entry status to 'undone' (keep record intact for evidentiary purposes)
+  const updatedLogs = (taskWithRevertedDraft.modificationLogs || []).map((l) => {
+    if (l.id === log.id) {
+      const undoneItem: ParagraphModificationLog = {
+        ...l,
+        status: 'undone' as const,
+        undoneAt: new Date().toISOString(),
+        undoneBy: activeRole,
+        undoReason: '主笔安全撤销最近局部采纳修改（已精准恢复原正文与关联意见状态）',
+      };
+      return undoneItem;
+    }
+    return l;
+  });
+
+  const finalUpdatedTask: Task = {
+    ...taskWithRevertedDraft,
+    reviewComments: updatedComments,
+    modificationLogs: updatedLogs,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const undoneLog = updatedLogs.find((l) => l.id === log.id)!;
+
+  return {
+    updatedTask: finalUpdatedTask,
+    workingDraft,
+    undoneLog,
+    targetBlock,
+  };
+}
+
+/**
+ * Returns recent modification logs for a specific draft or all drafts,
+ * sorted latest first.
+ */
+export function getRecentModificationLogs(task: Task, draftId?: string): ParagraphModificationLog[] {
+  const allLogs = task.modificationLogs || [];
+  if (!draftId) return allLogs;
+  return allLogs.filter((l) => l.draftId === draftId);
+}
+
+/**
+ * Returns the latest applied log that may be eligible for undo on the given draft.
+ */
+export function getLatestAppliedLogForDraft(task: Task, draftId: string): ParagraphModificationLog | undefined {
+  const logs = task.modificationLogs || [];
+  return logs.find((l) => l.draftId === draftId && l.status === 'applied');
 }
 
