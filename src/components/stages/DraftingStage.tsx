@@ -679,7 +679,14 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         currentDraft.id,
         (blocks) =>
           blocks.map((b) =>
-            b.id === blockId ? { ...b, content: newContent, updatedAt: new Date().toISOString() } : b
+            b.id === blockId
+              ? {
+                  ...b,
+                  content: newContent,
+                  updatedAt: new Date().toISOString(),
+                  revisionSeq: (typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : 1) + 1,
+                }
+              : b
           ),
         '手工编辑修改段落',
         activeRole

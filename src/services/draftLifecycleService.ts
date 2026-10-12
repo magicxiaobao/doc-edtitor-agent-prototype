@@ -231,11 +231,52 @@ export function applyDraftContentChange(
   }
 
   const isImmutable = targetDraft.isFinal === true || targetDraft.isHistoricalSnapshot === true;
+  const nowIso = new Date().toISOString();
+
+  // Helper to process updated blocks: increments revisionSeq on actually changed blocks
+  const processUpdatedBlocks = (
+    origBlocks: ParagraphBlock[],
+    newBlocks: ParagraphBlock[]
+  ): ParagraphBlock[] => {
+    return newBlocks.map((b) => {
+      const orig = origBlocks.find((o) => o.id === b.id);
+      if (!orig) {
+        // Newly added block
+        return {
+          ...b,
+          updatedAt: b.updatedAt || nowIso,
+          revisionSeq: typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : 1,
+        };
+      }
+
+      const origSeq = typeof orig.revisionSeq === 'number' && Number.isFinite(orig.revisionSeq) && orig.revisionSeq > 0 ? orig.revisionSeq : 1;
+      const isContentChanged = b.content !== orig.content;
+
+      if (isContentChanged) {
+        // Block content actually changed: automatically increment revision sequence
+        const explicitSeq = typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : undefined;
+        const nextSeq = (explicitSeq !== undefined && explicitSeq > origSeq) ? explicitSeq : origSeq + 1;
+        const nextUpdatedAt = (b.updatedAt && b.updatedAt !== orig.updatedAt) ? b.updatedAt : nowIso;
+        return {
+          ...b,
+          updatedAt: nextUpdatedAt,
+          revisionSeq: nextSeq,
+        };
+      }
+
+      // Content did not change
+      return {
+        ...b,
+        revisionSeq: typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : origSeq,
+      };
+    });
+  };
 
   if (isImmutable) {
     // Fork a new working draft and record sourceDraftId
     const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作草稿·基于${targetDraft.isFinal ? '定稿' : '历史快照'}修改)`;
-    const newBlocks = blockUpdater(JSON.parse(JSON.stringify(targetDraft.blocks)));
+    const rawNewBlocks = blockUpdater(JSON.parse(JSON.stringify(targetDraft.blocks)));
+    const newBlocks = processUpdatedBlocks(targetDraft.blocks, rawNewBlocks);
 
     const newWorkingDraft: DraftVersion = {
       id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -264,7 +305,8 @@ export function applyDraftContentChange(
     return { updatedTask, workingDraft: newWorkingDraft, forkedNewDraft: true };
   } else {
     // Modify existing working draft
-    const updatedBlocks = blockUpdater(JSON.parse(JSON.stringify(targetDraft.blocks)));
+    const rawUpdatedBlocks = blockUpdater(JSON.parse(JSON.stringify(targetDraft.blocks)));
+    const updatedBlocks = processUpdatedBlocks(targetDraft.blocks, rawUpdatedBlocks);
     const updatedDraft: DraftVersion = {
       ...targetDraft,
       blocks: updatedBlocks,
@@ -975,9 +1017,6 @@ export function adoptParagraphSuggestion(
     ? `执行第${targetBlock.order}段自定义改写【${suggestion.customPrompt?.slice(0, 16) || ''}】`
     : `采纳第${targetBlock.order}段修改建议（${suggestion.action}）`;
 
-  const appliedBlockUpdatedAt = new Date().toISOString();
-  const nextRevisionSeq = (targetBlock.revisionSeq || 0) + 1;
-
   // Apply content modification to draft
   const { updatedTask: taskWithModifiedDraft, workingDraft } = applyDraftContentChange(
     task,
@@ -985,12 +1024,19 @@ export function adoptParagraphSuggestion(
     (blocks) =>
       blocks.map((b) =>
         b.id === targetBlock.id
-          ? { ...b, content: finalContent, updatedAt: appliedBlockUpdatedAt, revisionSeq: nextRevisionSeq }
+          ? { ...b, content: finalContent }
           : b
       ),
     actionDescription,
     activeRole
   );
+
+  // 采纳日志从实际写入结果取得时间戳与序号
+  const writtenBlock = workingDraft.blocks.find((b) => b.id === targetBlock.id) || targetBlock;
+  const appliedBlockUpdatedAt = writtenBlock.updatedAt || new Date().toISOString();
+  const appliedRevisionSeq = typeof writtenBlock.revisionSeq === 'number' && Number.isFinite(writtenBlock.revisionSeq)
+    ? writtenBlock.revisionSeq
+    : ((targetBlock.revisionSeq || 1) + 1);
 
   // If associated with a review comment, record previous comment state and update ONLY this comment
   let previousCommentState: ReviewCommentSnapshotBeforeChange | undefined;
@@ -1073,7 +1119,7 @@ export function adoptParagraphSuggestion(
     previousCommentState,
     postAdoptionCommentState,
     appliedBlockUpdatedAt,
-    appliedRevisionSeq: nextRevisionSeq,
+    appliedRevisionSeq,
     status: 'applied',
   };
 
@@ -1091,7 +1137,7 @@ export function adoptParagraphSuggestion(
     updatedTask: finalUpdatedTask,
     workingDraft,
     logEntry,
-    targetBlock,
+    targetBlock: writtenBlock,
   };
 }
 
@@ -1166,11 +1212,16 @@ export function validateUndoEligibility(
     return { canUndo: false, reason: '目标段落在此次采纳后已被后续人工编辑修改（段落时间戳已更新），即使正文内容相同，亦不可覆盖后续操作' };
   }
 
-  if (
-    log.appliedRevisionSeq !== undefined &&
-    targetBlock.revisionSeq !== undefined &&
-    targetBlock.revisionSeq !== log.appliedRevisionSeq
-  ) {
+  // 必须具有采纳时的修改序号安全存证。旧日志或段落缺少安全依据时保留展示，保守禁用撤销。
+  if (typeof log.appliedRevisionSeq !== 'number' || !Number.isFinite(log.appliedRevisionSeq)) {
+    return { canUndo: false, reason: '该修改记录缺少修改序号安全存证依据（采纳序号缺失），为保护数据一致性，已保守禁用撤销' };
+  }
+
+  if (typeof targetBlock.revisionSeq !== 'number' || !Number.isFinite(targetBlock.revisionSeq)) {
+    return { canUndo: false, reason: '目标段落缺少修改序号安全存证依据（段落序号缺失），为保护数据一致性，已保守禁用撤销' };
+  }
+
+  if (targetBlock.revisionSeq !== log.appliedRevisionSeq) {
     return { canUndo: false, reason: '目标段落在此次采纳后已有后续修改序号，不可跨操作撤销' };
   }
 

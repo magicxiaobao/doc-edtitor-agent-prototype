@@ -408,9 +408,10 @@ async function runTask17Tests() {
 
   const taskF = adoptF.updatedTask;
   const draftF = adoptF.workingDraft;
+  const logF = adoptF.logEntry;
   const logIdF = adoptF.logEntry.id;
 
-  // F1: Target block manually edited subsequently
+  // F1: Target block manually edited subsequently via real editing path
   const { updatedTask: taskF1, workingDraft: draftF1 } = applyDraftContentChange(
     taskF,
     draftF.id,
@@ -418,27 +419,40 @@ async function runTask17Tests() {
       blocks.map((b) =>
         b.id === block2A.id ? { ...b, content: '后续主笔又进行了新的正文手工修改。', updatedAt: '2026-10-12T11:00:00.000Z' } : b
       ),
-    '后续手工修改',
+    '手工编辑修改段落',
     '主笔甲'
+  );
+  const blockAfterEdit1 = draftF1.blocks.find((b) => b.id === block2A.id)!;
+  assert(
+    typeof blockAfterEdit1.revisionSeq === 'number' && blockAfterEdit1.revisionSeq > (logF.appliedRevisionSeq || 1),
+    'F1-seq: 真实人工编辑路径（未注入revisionSeq）会自动递增修改序号'
   );
   const undoF1 = validateUndoEligibility(taskF1, draftF1, logIdF, '主笔甲');
   assert(undoF1.canUndo === false, 'F1: 正文被后续人工编辑后阻断撤销');
   assert(undoF1.reason!.includes('已变动') || undoF1.reason!.includes('人工编辑'), 'F2: 提示正文已变动不可覆盖');
 
-  // F1-b: Target block edited and then edited back to the EXACT same text (different updatedAt / revisionSeq)
+  // F1-b: Target block edited and then edited back to the EXACT same text in the SAME timestamp (real clock / same millisecond)
+  // Calling applyDraftContentChange without injecting revisionSeq, keeping updatedAt identical to logF.appliedBlockUpdatedAt
   const { updatedTask: taskF1SameText, workingDraft: draftF1SameText } = applyDraftContentChange(
-    taskF,
-    draftF.id,
+    taskF1,
+    draftF1.id,
     (blocks) =>
       blocks.map((b) =>
-        b.id === block2A.id ? { ...b, content: humanFineTunedText, updatedAt: '2026-10-12T12:00:00.000Z', revisionSeq: 99 } : b
+        b.id === block2A.id
+          ? { ...b, content: humanFineTunedText, updatedAt: logF.appliedBlockUpdatedAt }
+          : b
       ),
     '后续手工修改后改回原文本',
     '主笔甲'
   );
+  const blockAfterEdit2 = draftF1SameText.blocks.find((b) => b.id === block2A.id)!;
+  assert(
+    typeof blockAfterEdit2.revisionSeq === 'number' && blockAfterEdit2.revisionSeq > blockAfterEdit1.revisionSeq,
+    'F1-b-seq: 改回相同文本后修改序号再次自动递增'
+  );
   const undoF1SameText = validateUndoEligibility(taskF1SameText, draftF1SameText, logIdF, '主笔甲');
-  assert(undoF1SameText.canUndo === false, 'F1-b: 改回相同文本后因时间戳/修改序号变动依然安全阻断撤销');
-  assert(undoF1SameText.reason!.includes('时间戳') || undoF1SameText.reason!.includes('修改'), 'F1-c: 提示段落已被后续修改');
+  assert(undoF1SameText.canUndo === false, 'F1-b: 相同时间戳改回相同文本场景下因修改序号递增依然安全阻断撤销');
+  assert(undoF1SameText.reason!.includes('序号') || undoF1SameText.reason!.includes('修改'), 'F1-c: 提示段落已有后续修改序号');
 
   // F2: Review comment subsequently handled (status changed)
   const taskF2: Task = {
@@ -495,6 +509,34 @@ async function runTask17Tests() {
   assert(undoLegacy.canUndo === false, 'F2-f: 旧日志缺少安全依据时保守禁用撤销');
   assert(undoLegacy.reason!.includes('缺少') || undoLegacy.reason!.includes('保守禁用'), 'F2-g: 提示缺少安全依据保守禁用');
 
+  // F2-f: Missing revisionSeq security evidence
+  const taskMissingLogSeq: Task = {
+    ...taskF,
+    modificationLogs: taskF.modificationLogs!.map((l) => ({
+      ...l,
+      appliedRevisionSeq: undefined,
+    })),
+  };
+  const undoMissingLogSeq = validateUndoEligibility(taskMissingLogSeq, draftF, logIdF, '主笔甲');
+  assert(undoMissingLogSeq.canUndo === false, 'F2-h: 修改记录缺少采纳序号安全存证时保守禁用撤销');
+  assert(undoMissingLogSeq.reason!.includes('缺少') && undoMissingLogSeq.reason!.includes('序号'), 'F2-i: 提示缺少修改序号安全存证');
+
+  const taskMissingBlockSeq: Task = {
+    ...taskF,
+    drafts: taskF.drafts.map((d) =>
+      d.id === draftF.id
+        ? {
+            ...d,
+            blocks: d.blocks.map((b) => (b.id === block2A.id ? { ...b, revisionSeq: undefined } : b)),
+          }
+        : d
+    ),
+  };
+  const draftMissingBlockSeq = taskMissingBlockSeq.drafts.find((d) => d.id === draftF.id)!;
+  const undoMissingBlockSeq = validateUndoEligibility(taskMissingBlockSeq, draftMissingBlockSeq, logIdF, '主笔甲');
+  assert(undoMissingBlockSeq.canUndo === false, 'F2-j: 目标段落缺少修改序号安全存证时保守禁用撤销');
+  assert(undoMissingBlockSeq.reason!.includes('缺少') && undoMissingBlockSeq.reason!.includes('序号'), 'F2-k: 提示段落缺少修改序号安全存证');
+
   // F3: Draft finalized or immutable
   const taskF3: Task = {
     ...taskF,
@@ -550,6 +592,13 @@ async function runTask17Tests() {
   const corruptedTask: any = {
     ...taskA,
     id: 'TASK-CORRUPTED-LOGS-99',
+    drafts: taskA.drafts.map((d) => ({
+      ...d,
+      blocks: d.blocks.map((b) => ({
+        ...b,
+        revisionSeq: 7,
+      })),
+    })),
     modificationLogs: [null],
   };
   assert(validateTaskStructure(corruptedTask) === false, 'G7: 包含 [null] 的 modificationLogs 结构校验严格失败');
@@ -570,6 +619,7 @@ async function runTask17Tests() {
   assert(recoverRes.success === true, 'G10: 成功从备份区恢复任务');
   const recoveredTaskItem = recoverRes.recoveredTasks.find((t) => t.id === corruptedTask.id)!;
   assert(Array.isArray(recoveredTaskItem.modificationLogs) && recoveredTaskItem.modificationLogs.length === 0, 'G11: 恢复过程中清理损坏日志，保留任务主体');
+  assert(recoveredTaskItem.drafts[0].blocks[0].revisionSeq === 7, 'G11-b: 异常备份恢复时保留合法修改序号 (revisionSeq)');
 
   const safeLogsResult = getRecentModificationLogs({ ...taskA, modificationLogs: [null as any] }, draftA.id);
   assert(Array.isArray(safeLogsResult) && safeLogsResult.length === 0, 'G12: getRecentModificationLogs 防御性忽略 null，不抛异常');

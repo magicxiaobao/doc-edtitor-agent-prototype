@@ -219,6 +219,7 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
         content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
         referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
         updatedAt: b?.updatedAt || new Date().toISOString(),
+        revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
       })) : [];
 
       // 历史依据缺失应保留“未知/缺失”，禁止将任务当前快照凭空回填成历史草稿的审批依据
@@ -526,6 +527,7 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
             referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
             updatedAt: b?.updatedAt || new Date().toISOString(),
+            revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
           }));
 
           // 保留原有草稿版本属性，禁止按数组位置推断可编辑性。
