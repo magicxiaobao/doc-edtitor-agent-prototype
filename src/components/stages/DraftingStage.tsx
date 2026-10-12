@@ -115,13 +115,6 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   navIntent,
   onClearNavIntent,
 }) => {
-  // Requirement 8: Immediate cross-task intent isolation guard
-  if (navIntent && navIntent.taskId !== task.id) {
-    if (onClearNavIntent) {
-      onClearNavIntent();
-    }
-  }
-
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
 
@@ -131,7 +124,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Inspector tab: 'ai_suggestions' | 'review_comments' | 'material_evidence'
   const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>(() => {
-    if (navIntent?.commentId) return 'review_comments';
+    if (navIntent && navIntent.taskId === task.id && navIntent.commentId) return 'review_comments';
     return initialInspectorTab || 'ai_suggestions';
   });
 
@@ -175,9 +168,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Selected block for editing / inspection
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(() => {
     if (navIntent && navIntent.taskId === task.id && navIntent.commentId) {
-      const cmt = (task.reviewComments || []).find((c) => c.id === navIntent.commentId);
-      if (cmt && currentDraft) {
-        const resolved = resolveReviewNavigationContext(cmt, currentDraft);
+      const initDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+      const isImmutable = Boolean(initDraft?.isHistoricalSnapshot || initDraft?.isFinal);
+      const comments = isImmutable ? (initDraft?.frozenReviewComments || []) : (task.reviewComments || []);
+      const cmt = comments.find((c) => c.id === navIntent.commentId);
+      if (cmt && initDraft) {
+        const resolved = resolveReviewNavigationContext(cmt, initDraft);
         if (resolved.targetBlock) {
           return resolved.targetBlock.id;
         }
@@ -201,8 +197,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const activeDraftRunIdRef = useRef<string | null>(null);
   const completedCandidateRunIdRef = useRef<string | null>(null);
   const currentTaskIdRef = useRef<string>(task.id);
+  const currentDraftIdRef = useRef<string>(currentDraft?.id || '');
   const isUnmountedRef = useRef(false);
   const generateTimerRef = useRef<any>(null);
+
+  useEffect(() => {
+    currentDraftIdRef.current = currentDraft?.id || '';
+  }, [currentDraft?.id]);
 
   // Local paragraph revision state
   const [revisionSuggestion, setRevisionSuggestion] = useState<RevisionSuggestion | null>(null);
@@ -319,11 +320,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const activeReviewComments: ReviewComment[] =
     isCurrentDraftImmutable
       ? (currentDraft?.frozenReviewComments || [])
-      : task.reviewComments;
+      : (task.reviewComments || []);
 
-  // Selected comment
-  const selectedComment = activeReviewComments.find((c) => c.id === selectedCommentId)
-    || task.reviewComments.find((c) => c.id === selectedCommentId);
+  // Selected comment: STRICTLY query within activeReviewComments of the current version.
+  // NEVER fallback to task.reviewComments to prevent polluting historical snapshots with current comments.
+  const selectedComment = activeReviewComments.find((c) => c.id === selectedCommentId);
   const selectedCommentNavContext = selectedComment
     ? resolveReviewNavigationContext(selectedComment, currentDraft)
     : null;
@@ -343,6 +344,44 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     ? new Date(task.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : '刚刚';
 
+  // Version switch cleanup effect: cancel in-flight requests, clear suggestions and stale location (Requirement P2)
+  const previousDraftIdRef = useRef<string | undefined>(currentDraft?.id);
+  useEffect(() => {
+    if (previousDraftIdRef.current && previousDraftIdRef.current !== currentDraft?.id) {
+      // 1. Cancel in-flight revision request
+      if (revisionAbortControllerRef.current) {
+        revisionAbortControllerRef.current.abort();
+        revisionAbortControllerRef.current = null;
+      }
+      setIsRevisionGenerating(false);
+      setActiveRevisionRunId(null);
+      activeRevisionRunIdRef.current = null;
+      completedRevisionRunIdRef.current = null;
+
+      // 2. Clear revision suggestions and error
+      setRevisionSuggestion(null);
+      setRevisionError(null);
+      setCustomPromptInput('');
+
+      // 3. Clear invalid / stale block selection if block doesn't exist in new draft
+      if (selectedBlockId && currentDraft) {
+        const blockStillExists = currentDraft.blocks.some((b) => b.id === selectedBlockId);
+        if (!blockStillExists) {
+          setSelectedBlockId(null);
+        }
+      }
+
+      // 4. Clear invalid / stale comment selection if comment doesn't exist in new draft's comments
+      if (selectedCommentId) {
+        const commentStillExists = activeReviewComments.some((c) => c.id === selectedCommentId);
+        if (!commentStillExists) {
+          setSelectedCommentId(null);
+        }
+      }
+    }
+    previousDraftIdRef.current = currentDraft?.id;
+  }, [currentDraft?.id, currentDraft?.blocks, activeReviewComments, selectedBlockId, selectedCommentId]);
+
   // Requirement 1, 2, 3, 8: Handle navigation intent from ReviewStage
   const lastProcessedNavRef = useRef<string | null>(null);
 
@@ -359,10 +398,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
     lastProcessedNavRef.current = intentKey;
 
-    const targetComment = activeReviewComments.find((c) => c.id === navIntent.commentId)
-      || task.reviewComments.find((c) => c.id === navIntent.commentId);
+    const targetComment = activeReviewComments.find((c) => c.id === navIntent.commentId);
 
-    if (!targetComment) return;
+    if (!targetComment) {
+      // Comment does not exist in current draft's review comments (e.g. historical snapshot)
+      setSelectedCommentId(navIntent.commentId);
+      return;
+    }
 
     // 1. Expand inspector and switch to 'review_comments' tab
     setShowRightInspector(true);
@@ -674,6 +716,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     sourceComment?: ReviewComment
   ) => {
     if (!currentDraft) return;
+    const requestedDraftId = currentDraft.id;
 
     // Abort previous running revision request if any
     if (revisionAbortControllerRef.current) {
@@ -716,8 +759,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         delayMs: 350,
       });
 
-      // Strict validation against current task boundary and active runId
-      if (currentTaskIdRef.current !== task.id || activeRevisionRunIdRef.current !== runId) {
+      // Strict validation against current task boundary, current draft version boundary, and active runId (Requirement P2)
+      if (
+        currentTaskIdRef.current !== task.id ||
+        currentDraftIdRef.current !== requestedDraftId ||
+        currentDraft.id !== requestedDraftId ||
+        activeRevisionRunIdRef.current !== runId
+      ) {
         return;
       }
 
@@ -728,8 +776,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       activeRevisionRunIdRef.current = null;
       revisionAbortControllerRef.current = null;
     } catch (err: any) {
-      if (activeRevisionRunIdRef.current !== runId) {
-        return; // Ignore errors from superseded / cancelled requests
+      if (
+        currentTaskIdRef.current !== task.id ||
+        currentDraftIdRef.current !== requestedDraftId ||
+        currentDraft.id !== requestedDraftId ||
+        activeRevisionRunIdRef.current !== runId
+      ) {
+        return; // Ignore errors from superseded / cancelled requests or switched drafts
       }
       if (err.name === 'AbortError' || err.message?.includes('取消')) {
         // Cleanly aborted by user, no error banner
@@ -1982,6 +2035,29 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
               {/* Document Paragraph Blocks */}
               <div className="space-y-6">
+                {/* Historical Version Missing Comment Notice (Requirement P1) */}
+                {selectedCommentId && !selectedComment && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-950 flex items-center justify-between shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <div>
+                        <span className="font-bold">审阅记录说明：</span>
+                        <span>
+                          {isCurrentDraftImmutable
+                            ? `当前查看的是历史快照版本（${currentDraft.versionNumber}），该版本未收录此审阅意见记录。系统已严格隔离，不回退展示最新审阅意见。`
+                            : '当前文稿未找到该审阅意见，可能已被删除或归档。'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSelectedCommentId(null)}
+                      className="px-2 py-0.5 text-xs text-amber-800 hover:text-amber-950 border border-amber-300 rounded bg-white cursor-pointer"
+                    >
+                      清除选择
+                    </button>
+                  </div>
+                )}
+
                 {/* Overall Comment Navigation Context Banner */}
                 {selectedComment && selectedComment.type === 'overall' && (
                   <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-xs text-indigo-950 space-y-1.5 shadow-2xs">
@@ -2796,8 +2872,46 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     {/* Revision Diff Comparison Box */}
                     {revisionSuggestion && (() => {
                       const targetBlock = currentDraft?.blocks.find((b) => b.id === revisionSuggestion.targetBlockId);
-                      const isModifiedAfter = targetBlock && targetBlock.content !== revisionSuggestion.baseContent;
-                      const isDifferentBlockSelected = activeBlock && activeBlock.id !== revisionSuggestion.targetBlockId;
+                      const isTaskMismatch = Boolean(revisionSuggestion.taskId && revisionSuggestion.taskId !== task.id);
+                      const isDraftVersionMismatch = Boolean(
+                        revisionSuggestion.sourceDraftId &&
+                        currentDraft &&
+                        revisionSuggestion.sourceDraftId !== currentDraft.id
+                      );
+                      const isTargetBlockMissing = Boolean(!targetBlock);
+                      const isModifiedAfter = Boolean(targetBlock && targetBlock.content !== revisionSuggestion.baseContent);
+                      const isZeroDiff = Boolean(targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim());
+                      const isDifferentBlockSelected = Boolean(activeBlock && activeBlock.id !== revisionSuggestion.targetBlockId);
+                      const isSupersededRun = Boolean(
+                        completedRevisionRunIdRef.current &&
+                        revisionSuggestion.runId &&
+                        completedRevisionRunIdRef.current !== revisionSuggestion.runId
+                      );
+
+                      const isAdoptDisabled = Boolean(
+                        !canUserEdit ||
+                        isRevisionGenerating ||
+                        isTaskMismatch ||
+                        isDraftVersionMismatch ||
+                        isTargetBlockMissing ||
+                        isModifiedAfter ||
+                        isZeroDiff ||
+                        isSupersededRun ||
+                        revisionSuggestion.isUnsupportedPrompt
+                      );
+
+                      const adoptDisabledReason = (() => {
+                        if (!canUserEdit) return `权限受限：当前身份为【${activeRole}】，仅主笔甲可采纳修改正文`;
+                        if (isRevisionGenerating) return '新建议生成中，不可采纳';
+                        if (isTaskMismatch) return '建议失效：该修改建议属于其他公文任务，不可跨任务采纳';
+                        if (isDraftVersionMismatch) return '建议失效：该修改建议基于其他草稿版本生成，当前工作版本已变更，不可采纳';
+                        if (isTargetBlockMissing) return '建议失效：未在当前版本找到该建议的目标段落，可能已被删除或重构';
+                        if (isModifiedAfter) return '目标段落基准自生成后已被人工编辑修改，无法采纳覆盖';
+                        if (isZeroDiff) return '建议文本与当前段落完全一致（零差异），不能采纳标记已落实';
+                        if (isSupersededRun) return '建议已失效：该建议已被后续生成的修改建议替换';
+                        if (revisionSuggestion.isUnsupportedPrompt) return '未支持的自定义指令，无法采纳';
+                        return `采纳替换第${targetBlock?.order || revisionSuggestion.targetBlockOrder}段`;
+                      })();
 
                       const diffSegments =
                         revisionSuggestion.diffSegments ||
@@ -3027,35 +3141,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               </button>
                               <button
                                 onClick={handleAdoptRevision}
-                                disabled={
-                                  Boolean(isModifiedAfter) ||
-                                  Boolean(revisionSuggestion.isUnsupportedPrompt) ||
-                                  Boolean(targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) ||
-                                  isRevisionGenerating ||
-                                  !canUserEdit
-                                }
+                                disabled={isAdoptDisabled}
                                 className={`px-4 py-1.5 rounded text-xs font-bold shadow-xs flex items-center gap-1.5 ${
-                                  isModifiedAfter ||
-                                  revisionSuggestion.isUnsupportedPrompt ||
-                                  (targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()) ||
-                                  isRevisionGenerating ||
-                                  !canUserEdit
+                                  isAdoptDisabled
                                     ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                                     : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
                                 }`}
-                                title={
-                                  !canUserEdit
-                                    ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可采纳修改正文`
-                                    : isRevisionGenerating
-                                    ? '新建议生成中，不可采纳'
-                                    : targetBlock && revisionSuggestion.suggestedText.trim() === targetBlock.content.trim()
-                                    ? '建议文本与当前段落完全一致（零差异），不能采纳标记已落实'
-                                    : isModifiedAfter
-                                    ? '目标段落基准自生成后已被人工编辑修改，无法采纳覆盖'
-                                    : revisionSuggestion.isUnsupportedPrompt
-                                    ? '未支持的自定义指令，无法采纳'
-                                    : `采纳替换第${targetBlock?.order || revisionSuggestion.targetBlockOrder}段`
-                                }
+                                title={adoptDisabledReason}
                               >
                                 <Check className="w-4 h-4" />
                                 <span>采纳到目标段落</span>
@@ -3394,18 +3486,29 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
                     <div className="pt-1 flex justify-end gap-2">
                       {!isCurrent && (
-                        <button
-                          onClick={() => handleRestoreDraft(ver)}
-                          disabled={!canUserEdit}
-                          className={`px-2.5 py-1 border rounded text-[11px] font-medium transition-colors ${
-                            !canUserEdit
-                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                              : 'text-blue-700 hover:bg-blue-50 border-blue-200 cursor-pointer'
-                          }`}
-                          title={!canUserEdit ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可恢复历史版本` : '恢复至此版本 (生成新版本)'}
-                        >
-                          恢复至此版本 (生成新工作稿)
-                        </button>
+                        <>
+                          <button
+                            onClick={() => {
+                              onUpdateTask({ currentDraftId: ver.id });
+                              setShowVersionHistory(false);
+                            }}
+                            className="px-2.5 py-1 border rounded text-[11px] font-medium text-slate-700 hover:bg-slate-50 border-slate-300 cursor-pointer"
+                          >
+                            查看此版本
+                          </button>
+                          <button
+                            onClick={() => handleRestoreDraft(ver)}
+                            disabled={!canUserEdit}
+                            className={`px-2.5 py-1 border rounded text-[11px] font-medium transition-colors ${
+                              !canUserEdit
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                : 'text-blue-700 hover:bg-blue-50 border-blue-200 cursor-pointer'
+                            }`}
+                            title={!canUserEdit ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可恢复历史版本` : '恢复至此版本 (生成新版本)'}
+                          >
+                            恢复至此版本 (生成新工作稿)
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
