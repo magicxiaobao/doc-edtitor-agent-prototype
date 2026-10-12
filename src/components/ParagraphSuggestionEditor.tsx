@@ -76,9 +76,9 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
     return currentDraft?.blocks.find((b) => b.id === suggestion.targetBlockId);
   }, [currentDraft?.blocks, suggestion.targetBlockId]);
 
-  // Detect whether human fine-tuning has occurred
+  // Detect whether human fine-tuning has occurred (exact comparison, preserving whitespace/newlines)
   const isFineTuned = useMemo(() => {
-    return pendingText.trim() !== suggestion.suggestedText.trim();
+    return pendingText !== suggestion.suggestedText;
   }, [pendingText, suggestion.suggestedText]);
 
   // Character count delta: baseline -> current pending text

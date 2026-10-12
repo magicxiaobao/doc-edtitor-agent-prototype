@@ -10,6 +10,7 @@ import {
   RevisionSuggestion,
   ParagraphModificationLog,
   ReviewCommentSnapshotBeforeChange,
+  ReviewCommentSnapshotAfterChange,
   ReviewComment
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
@@ -762,14 +763,14 @@ export function validateParagraphSuggestionAcceptance(
     suggestion.sourceDraftId !== currentDraft.id
   );
   const isModifiedAfter = Boolean(targetBlock && targetBlock.content !== suggestion.baseContent);
-  const isZeroDiff = Boolean(targetBlock && pendingTextToAdopt.trim() === targetBlock.content.trim());
+  const isZeroDiff = Boolean(targetBlock && pendingTextToAdopt === targetBlock.content);
   const isSupersededRun = Boolean(
-    activeCompletedRunId &&
-    suggestion.runId &&
+    !activeCompletedRunId ||
+    !suggestion.runId ||
     activeCompletedRunId !== suggestion.runId
   );
   const isFineTuned = Boolean(
-    pendingTextToAdopt.trim() !== suggestion.suggestedText.trim()
+    pendingTextToAdopt !== suggestion.suggestedText
   );
 
   const perm = checkPermission(activeRole, 'adopt_revision');
@@ -879,9 +880,14 @@ export function validateParagraphSuggestionAcceptance(
   }
 
   if (isSupersededRun) {
+    const runReason = !activeCompletedRunId
+      ? '没有已完成的有效运行记录（请求未完成或已被取消），不可采纳建议'
+      : (!suggestion.runId || activeCompletedRunId !== suggestion.runId)
+      ? '建议已失效：该建议所属运行ID与当前有效运行ID不一致（已生成新建议或已重置）'
+      : '运行记录失效，不可采纳';
     return {
       valid: false,
-      reason: '建议已失效：该建议已被后续生成的修改建议替换或已取消',
+      reason: runReason,
       targetBlock,
       isFineTuned,
       isZeroDiff,
@@ -961,13 +967,16 @@ export function adoptParagraphSuggestion(
   const draftIdToUse = currentDraft?.id || task.currentDraftId;
   const targetBlock = validation.targetBlock;
   const isFineTuned = validation.isFineTuned;
-  const finalContent = pendingTextToAdopt.trim();
+  const finalContent = pendingTextToAdopt; // 原样写入最终待采纳文本，不进行 trim()
 
   const actionDescription = isFineTuned
     ? `采纳第${targetBlock.order}段微调建议`
     : suggestion.action === 'custom'
     ? `执行第${targetBlock.order}段自定义改写【${suggestion.customPrompt?.slice(0, 16) || ''}】`
     : `采纳第${targetBlock.order}段修改建议（${suggestion.action}）`;
+
+  const appliedBlockUpdatedAt = new Date().toISOString();
+  const nextRevisionSeq = (targetBlock.revisionSeq || 0) + 1;
 
   // Apply content modification to draft
   const { updatedTask: taskWithModifiedDraft, workingDraft } = applyDraftContentChange(
@@ -976,7 +985,7 @@ export function adoptParagraphSuggestion(
     (blocks) =>
       blocks.map((b) =>
         b.id === targetBlock.id
-          ? { ...b, content: finalContent, updatedAt: new Date().toISOString() }
+          ? { ...b, content: finalContent, updatedAt: appliedBlockUpdatedAt, revisionSeq: nextRevisionSeq }
           : b
       ),
     actionDescription,
@@ -985,6 +994,7 @@ export function adoptParagraphSuggestion(
 
   // If associated with a review comment, record previous comment state and update ONLY this comment
   let previousCommentState: ReviewCommentSnapshotBeforeChange | undefined;
+  let postAdoptionCommentState: ReviewCommentSnapshotAfterChange | undefined;
   let updatedComments = taskWithModifiedDraft.reviewComments;
 
   if (suggestion.sourceCommentId) {
@@ -1001,23 +1011,43 @@ export function adoptParagraphSuggestion(
         implementedAt: existingCmt.implementedAt,
       };
 
+      const adoptedReply = isFineTuned
+        ? `主笔已采纳微调后的建议并更新第${targetBlock.order}段正文。`
+        : `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`;
+      const adoptedDecisionReason = isFineTuned
+        ? `人工微调采纳（原建议：${suggestion.diffExplanation}）`
+        : suggestion.diffExplanation;
+      const implementedAt = new Date().toISOString();
+
       updatedComments = taskWithModifiedDraft.reviewComments.map((cmt) => {
         if (cmt.id === suggestion.sourceCommentId) {
-          return {
+          const updatedCmt: ReviewComment = {
             ...cmt,
             status: 'implemented' as const,
-            authorReply: isFineTuned
-              ? `主笔已采纳微调后的建议并更新第${targetBlock.order}段正文。`
-              : `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`,
-            decisionReason: isFineTuned
-              ? `人工微调采纳（原建议：${suggestion.diffExplanation}）`
-              : suggestion.diffExplanation,
+            authorReply: adoptedReply,
+            decisionReason: adoptedDecisionReason,
             resolutionType: 'text_modified' as const,
             implementationDraftId: workingDraft.id,
             implementationVersionNumber: workingDraft.versionNumber,
             implementationBlockId: targetBlock.id,
-            implementedAt: new Date().toISOString(),
+            implementedAt,
           };
+
+          postAdoptionCommentState = {
+            status: updatedCmt.status,
+            authorReply: updatedCmt.authorReply,
+            decisionReason: updatedCmt.decisionReason,
+            resolutionType: updatedCmt.resolutionType,
+            implementationDraftId: updatedCmt.implementationDraftId,
+            implementationVersionNumber: updatedCmt.implementationVersionNumber,
+            implementationBlockId: updatedCmt.implementationBlockId,
+            implementedAt: updatedCmt.implementedAt,
+            currentBlockId: updatedCmt.currentBlockId,
+            targetBlockId: updatedCmt.targetBlockId,
+            reboundAt: updatedCmt.rebindRecord?.reboundAt,
+          };
+
+          return updatedCmt;
         }
         return cmt;
       });
@@ -1041,6 +1071,9 @@ export function adoptParagraphSuggestion(
     associatedCommentId: suggestion.sourceCommentId,
     associatedCommentReviewer: suggestion.sourceCommentReviewer,
     previousCommentState,
+    postAdoptionCommentState,
+    appliedBlockUpdatedAt,
+    appliedRevisionSeq: nextRevisionSeq,
     status: 'applied',
   };
 
@@ -1124,6 +1157,23 @@ export function validateUndoEligibility(
     return { canUndo: false, reason: '目标段落在此次采纳后已被后续人工编辑或修改，正文已变动，不可覆盖后续最新正文' };
   }
 
+  // 必须具有采纳时的段落安全存证。旧日志缺少安全依据时保留展示，保守禁用撤销。
+  if (!log.appliedBlockUpdatedAt) {
+    return { canUndo: false, reason: '该修改记录缺少段落安全存证依据（段落时间戳缺失），为保护数据一致性，已保守禁用撤销' };
+  }
+
+  if (targetBlock.updatedAt !== log.appliedBlockUpdatedAt) {
+    return { canUndo: false, reason: '目标段落在此次采纳后已被后续人工编辑修改（段落时间戳已更新），即使正文内容相同，亦不可覆盖后续操作' };
+  }
+
+  if (
+    log.appliedRevisionSeq !== undefined &&
+    targetBlock.revisionSeq !== undefined &&
+    targetBlock.revisionSeq !== log.appliedRevisionSeq
+  ) {
+    return { canUndo: false, reason: '目标段落在此次采纳后已有后续修改序号，不可跨操作撤销' };
+  }
+
   // If associated with a review comment, verify the comment has not been subsequently handled
   let associatedComment: ReviewComment | undefined;
   if (log.associatedCommentId) {
@@ -1131,14 +1181,36 @@ export function validateUndoEligibility(
     if (!associatedComment) {
       return { canUndo: false, reason: '关联审阅意见已不存在，无法校验意见状态' };
     }
-    if (associatedComment.status !== 'implemented') {
-      return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新处理（状态已非已落实），为保护后续审阅沟通记录，阻断撤销' };
+
+    // 必须具有采纳后的意见状态存证。旧日志缺少安全依据时保留展示，保守禁用撤销。
+    if (!log.postAdoptionCommentState) {
+      return { canUndo: false, reason: '该记录关联审阅意见但缺少采纳后意见快照存证，为保护审阅沟通记录，已保守禁用撤销' };
+    }
+
+    const postState = log.postAdoptionCommentState;
+    if (associatedComment.status !== postState.status) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新处理（意见状态已改变），为保护后续审阅沟通记录，阻断撤销' };
+    }
+    if (associatedComment.authorReply !== postState.authorReply) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后回复说明已被修改，为保护后续回复内容，阻断撤销' };
+    }
+    if (associatedComment.decisionReason !== postState.decisionReason) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后处理说明已被修改，为保护后续审阅决定，阻断撤销' };
+    }
+    if (associatedComment.resolutionType !== postState.resolutionType) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后处理方式已被修改，阻断撤销' };
     }
     if (
-      associatedComment.implementationBlockId !== log.blockId ||
-      associatedComment.implementationDraftId !== log.draftId
+      associatedComment.implementationBlockId !== postState.implementationBlockId ||
+      associatedComment.implementationDraftId !== postState.implementationDraftId
     ) {
       return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新指定或另行落实，阻断撤销' };
+    }
+    if (
+      associatedComment.currentBlockId !== postState.currentBlockId ||
+      associatedComment.rebindRecord?.reboundAt !== postState.reboundAt
+    ) {
+      return { canUndo: false, reason: '关联审阅意见在此次采纳后已被重新绑定段落，为保护最新定位存证，阻断撤销' };
     }
   }
 
@@ -1184,7 +1256,12 @@ export function undoSafeParagraphModification(
     (blocks) =>
       blocks.map((b) =>
         b.id === targetBlock.id
-          ? { ...b, content: log.beforeContent, updatedAt: new Date().toISOString() }
+          ? {
+              ...b,
+              content: log.beforeContent,
+              updatedAt: new Date().toISOString(),
+              revisionSeq: (b.revisionSeq || 0) + 1,
+            }
           : b
       ),
     `撤销第${log.blockOrder || targetBlock.order}段采纳修改（恢复原正文）`,
@@ -1251,8 +1328,9 @@ export function undoSafeParagraphModification(
  */
 export function getRecentModificationLogs(task: Task, draftId?: string): ParagraphModificationLog[] {
   const allLogs = task.modificationLogs || [];
-  if (!draftId) return allLogs;
-  return allLogs.filter((l) => l.draftId === draftId);
+  const safeLogs = allLogs.filter((l) => l && typeof l === 'object');
+  if (!draftId) return safeLogs;
+  return safeLogs.filter((l) => l.draftId === draftId);
 }
 
 /**
@@ -1260,6 +1338,6 @@ export function getRecentModificationLogs(task: Task, draftId?: string): Paragra
  */
 export function getLatestAppliedLogForDraft(task: Task, draftId: string): ParagraphModificationLog | undefined {
   const logs = task.modificationLogs || [];
-  return logs.find((l) => l.draftId === draftId && l.status === 'applied');
+  return logs.find((l) => l && typeof l === 'object' && l.draftId === draftId && l.status === 'applied');
 }
 

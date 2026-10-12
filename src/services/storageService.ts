@@ -113,6 +113,21 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
   return tasks;
 }
 
+export function isValidModificationLog(log: any): boolean {
+  if (!log || typeof log !== 'object') return false;
+  if (typeof log.id !== 'string' || !log.id) return false;
+  if (typeof log.taskId !== 'string' || !log.taskId) return false;
+  if (typeof log.draftId !== 'string' || !log.draftId) return false;
+  if (typeof log.blockId !== 'string' || !log.blockId) return false;
+  if (typeof log.timestamp !== 'string') return false;
+  if (typeof log.source !== 'string') return false;
+  if (typeof log.sourceDescription !== 'string') return false;
+  if (typeof log.beforeContent !== 'string') return false;
+  if (typeof log.afterContent !== 'string') return false;
+  if (log.status !== 'applied' && log.status !== 'undone') return false;
+  return true;
+}
+
 /**
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
@@ -134,7 +149,12 @@ export function validateTaskStructure(task: any): boolean {
   if (!Array.isArray(task.styleRules)) return false;
   if (!Array.isArray(task.reviewComments)) return false;
   if (!Array.isArray(task.auditIssues)) return false;
-  if (task.modificationLogs !== undefined && !Array.isArray(task.modificationLogs)) return false;
+  if (task.modificationLogs !== undefined) {
+    if (!Array.isArray(task.modificationLogs)) return false;
+    for (const log of task.modificationLogs) {
+      if (!isValidModificationLog(log)) return false;
+    }
+  }
 
   // Validate draft structure and paragraph block references
   for (const draft of task.drafts) {
@@ -238,7 +258,9 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
       outlineSnapshot: outlineSnapshot || rawT.outlineSnapshot,
       reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
       auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
-      modificationLogs: Array.isArray(rawT.modificationLogs) ? rawT.modificationLogs : [],
+      modificationLogs: Array.isArray(rawT.modificationLogs)
+        ? rawT.modificationLogs.filter(isValidModificationLog)
+        : [],
       isFinalized: !!rawT.isFinalized,
       status: rawT.status || '起草中',
       updatedAt: rawT.updatedAt || new Date().toISOString(),
@@ -585,7 +607,9 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
         currentDraftId: resolvedCurrentDraftId,
         reviewComments: Array.isArray(rawT.reviewComments) ? rawT.reviewComments : [],
         auditIssues: Array.isArray(rawT.auditIssues) ? rawT.auditIssues : [],
-        modificationLogs: Array.isArray(rawT.modificationLogs) ? rawT.modificationLogs : [],
+        modificationLogs: Array.isArray(rawT.modificationLogs)
+          ? rawT.modificationLogs.filter(isValidModificationLog)
+          : [],
         isFinalized: false,
         status: '待恢复', // 使用空结构和“待恢复”状态，保留原文，避免混入示例业务数据
         schemaVersion: CURRENT_SCHEMA_VERSION,

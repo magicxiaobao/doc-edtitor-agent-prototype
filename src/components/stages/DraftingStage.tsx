@@ -449,7 +449,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       setSelectedBlockId(navCtx.targetBlock.id);
       setTimeout(() => {
         const el = document.getElementById(`block-card-${navCtx.targetBlock!.id}`);
-        if (el) {
+        if (el && typeof el.scrollIntoView === 'function') {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 50);

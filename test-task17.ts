@@ -18,7 +18,11 @@ import {
   savePersistedState,
   loadPersistedState,
   setStorageItem,
-  STORAGE_KEY_V2
+  getStorageItem,
+  validateTaskStructure,
+  recoverTasksFromCorruptedBackup,
+  STORAGE_KEY_V2,
+  BACKUP_CORRUPTED_KEY
 } from './src/services/storageService';
 import { requestParagraphRevisionAsync } from './src/services/paragraphRevisionAdapter';
 import {
@@ -37,6 +41,7 @@ const dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></
 (globalThis as any).window = dom.window;
 (globalThis as any).document = dom.window.document;
 (globalThis as any).HTMLElement = dom.window.HTMLElement;
+dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 function mountTestComponent(element: React.ReactElement) {
@@ -411,7 +416,7 @@ async function runTask17Tests() {
     draftF.id,
     (blocks) =>
       blocks.map((b) =>
-        b.id === block2A.id ? { ...b, content: '后续主笔又进行了新的正文手工修改。' } : b
+        b.id === block2A.id ? { ...b, content: '后续主笔又进行了新的正文手工修改。', updatedAt: '2026-10-12T11:00:00.000Z' } : b
       ),
     '后续手工修改',
     '主笔甲'
@@ -420,7 +425,22 @@ async function runTask17Tests() {
   assert(undoF1.canUndo === false, 'F1: 正文被后续人工编辑后阻断撤销');
   assert(undoF1.reason!.includes('已变动') || undoF1.reason!.includes('人工编辑'), 'F2: 提示正文已变动不可覆盖');
 
-  // F2: Review comment subsequently handled
+  // F1-b: Target block edited and then edited back to the EXACT same text (different updatedAt / revisionSeq)
+  const { updatedTask: taskF1SameText, workingDraft: draftF1SameText } = applyDraftContentChange(
+    taskF,
+    draftF.id,
+    (blocks) =>
+      blocks.map((b) =>
+        b.id === block2A.id ? { ...b, content: humanFineTunedText, updatedAt: '2026-10-12T12:00:00.000Z', revisionSeq: 99 } : b
+      ),
+    '后续手工修改后改回原文本',
+    '主笔甲'
+  );
+  const undoF1SameText = validateUndoEligibility(taskF1SameText, draftF1SameText, logIdF, '主笔甲');
+  assert(undoF1SameText.canUndo === false, 'F1-b: 改回相同文本后因时间戳/修改序号变动依然安全阻断撤销');
+  assert(undoF1SameText.reason!.includes('时间戳') || undoF1SameText.reason!.includes('修改'), 'F1-c: 提示段落已被后续修改');
+
+  // F2: Review comment subsequently handled (status changed)
   const taskF2: Task = {
     ...taskF,
     reviewComments: taskF.reviewComments.map((c) =>
@@ -429,7 +449,51 @@ async function runTask17Tests() {
   };
   const undoF2 = validateUndoEligibility(taskF2, draftF, logIdF, '主笔甲');
   assert(undoF2.canUndo === false, 'F3: 关联意见被后续重新处理后阻断撤销');
-  assert(undoF2.reason!.includes('意见') && undoF2.reason!.includes('后续'), 'F4: 提示意见已被后续处理');
+  assert(undoF2.reason!.includes('意见') && (undoF2.reason!.includes('后续') || undoF2.reason!.includes('改变')), 'F4: 提示意见已被后续处理');
+
+  // F2-b: Comment reply modified while status remains 'implemented'
+  const taskF2ReplyChanged: Task = {
+    ...taskF,
+    reviewComments: taskF.reviewComments.map((c) =>
+      c.id === commentE.id ? { ...c, authorReply: '已由主笔在后续座谈中另行当面解释说明。' } : c
+    ),
+  };
+  const undoF2Reply = validateUndoEligibility(taskF2ReplyChanged, draftF, logIdF, '主笔甲');
+  assert(undoF2Reply.canUndo === false, 'F2-b: 状态仍为 implemented 但回复已被后续修改时阻断撤销');
+  assert(undoF2Reply.reason!.includes('回复说明已被修改') || undoF2Reply.reason!.includes('回复'), 'F2-c: 提示回复已被修改阻断');
+
+  // F2-c: Comment decisionReason modified while status remains 'implemented'
+  const taskF2ReasonChanged: Task = {
+    ...taskF,
+    reviewComments: taskF.reviewComments.map((c) =>
+      c.id === commentE.id ? { ...c, decisionReason: '后续研讨重新确定采纳理由。' } : c
+    ),
+  };
+  const undoF2Reason = validateUndoEligibility(taskF2ReasonChanged, draftF, logIdF, '主笔甲');
+  assert(undoF2Reason.canUndo === false, 'F2-d: 状态仍为 implemented 但处理说明已被后续修改时阻断撤销');
+
+  // F2-d: Comment rebound to another block while status remains 'implemented'
+  const taskF2Rebound: Task = {
+    ...taskF,
+    reviewComments: taskF.reviewComments.map((c) =>
+      c.id === commentE.id ? { ...c, currentBlockId: 'BLK-OTHER', rebindRecord: { reboundAt: new Date().toISOString(), reboundBy: '主笔甲', toBlockId: 'BLK-OTHER', toBlockOrder: 9 } } : c
+    ),
+  };
+  const undoF2Rebound = validateUndoEligibility(taskF2Rebound, draftF, logIdF, '主笔甲');
+  assert(undoF2Rebound.canUndo === false, 'F2-e: 意见被重新绑定后阻断撤销');
+
+  // F2-e: Legacy log lacking security evidence
+  const legacyLogTask: Task = {
+    ...taskF,
+    modificationLogs: taskF.modificationLogs!.map((l) => ({
+      ...l,
+      appliedBlockUpdatedAt: undefined,
+      postAdoptionCommentState: undefined,
+    })),
+  };
+  const undoLegacy = validateUndoEligibility(legacyLogTask, draftF, logIdF, '主笔甲');
+  assert(undoLegacy.canUndo === false, 'F2-f: 旧日志缺少安全依据时保守禁用撤销');
+  assert(undoLegacy.reason!.includes('缺少') || undoLegacy.reason!.includes('保守禁用'), 'F2-g: 提示缺少安全依据保守禁用');
 
   // F3: Draft finalized or immutable
   const taskF3: Task = {
@@ -481,6 +545,76 @@ async function runTask17Tests() {
   const loadedOldTask = loadedOldState.tasks.find((t) => t.id === oldTaskWithoutLogs.id)!;
   assert(Array.isArray(loadedOldTask.modificationLogs), 'G5: 旧数据缺少该字段时兼容为空数组');
   assert(loadedOldTask.modificationLogs!.length === 0, 'G6: 绝不伪造过去的修改操作历史');
+
+  // 3. Strict validation on corrupted modificationLogs: [null] & recovery
+  const corruptedTask: any = {
+    ...taskA,
+    id: 'TASK-CORRUPTED-LOGS-99',
+    modificationLogs: [null],
+  };
+  assert(validateTaskStructure(corruptedTask) === false, 'G7: 包含 [null] 的 modificationLogs 结构校验严格失败');
+
+  setStorageItem(STORAGE_KEY_V2, JSON.stringify({
+    schemaVersion: 2,
+    currentTaskId: corruptedTask.id,
+    activeRole: '主笔甲',
+    tasks: [corruptedTask],
+    lastSavedAt: new Date().toISOString(),
+  }));
+
+  const loadedCorruptedState = loadPersistedState();
+  assert(loadedCorruptedState.isCorrupted === true, 'G8: 存储结构异常时安全隔离并标记 isCorrupted，未抛出 TypeError');
+  assert(getStorageItem(BACKUP_CORRUPTED_KEY) !== null, 'G9: 原始损坏数据安全存证于备份区，未静默丢弃');
+
+  const recoverRes = recoverTasksFromCorruptedBackup();
+  assert(recoverRes.success === true, 'G10: 成功从备份区恢复任务');
+  const recoveredTaskItem = recoverRes.recoveredTasks.find((t) => t.id === corruptedTask.id)!;
+  assert(Array.isArray(recoveredTaskItem.modificationLogs) && recoveredTaskItem.modificationLogs.length === 0, 'G11: 恢复过程中清理损坏日志，保留任务主体');
+
+  const safeLogsResult = getRecentModificationLogs({ ...taskA, modificationLogs: [null as any] }, draftA.id);
+  assert(Array.isArray(safeLogsResult) && safeLogsResult.length === 0, 'G12: getRecentModificationLogs 防御性忽略 null，不抛异常');
+
+  // 4. Missing/invalid run ID check
+  const nullRunCheck = validateParagraphSuggestionAcceptance({
+    task: taskA,
+    currentDraft: draftA,
+    suggestion: suggestionA,
+    pendingTextToAdopt: humanFineTunedText,
+    activeCompletedRunId: null,
+    activeRole: '主笔甲',
+  });
+  assert(nullRunCheck.valid === false, 'G13: activeCompletedRunId 为 null 时阻断采纳');
+  assert(nullRunCheck.reason!.includes('运行') || nullRunCheck.reason!.includes('有效'), 'G14: 提示没有已完成的有效运行记录');
+
+  let nullRunAdoptThrew = false;
+  try {
+    adoptParagraphSuggestion({
+      task: taskA,
+      currentDraft: draftA,
+      suggestion: suggestionA,
+      pendingTextToAdopt: humanFineTunedText,
+      activeCompletedRunId: null,
+      activeRole: '主笔甲',
+    });
+  } catch (err: any) {
+    nullRunAdoptThrew = true;
+  }
+  assert(nullRunAdoptThrew === true, 'G15: adoptParagraphSuggestion 对 null 运行ID严格抛出异常阻断');
+
+  // 5. Preserving exact whitespace / newlines in pending text
+  const textWithWhitespace = '  \n【重点举措】这是包含前置换行与缩进的微调正文。\n  ';
+  const adoptWsResult = adoptParagraphSuggestion({
+    task: taskA,
+    currentDraft: draftA,
+    suggestion: suggestionA,
+    pendingTextToAdopt: textWithWhitespace,
+    activeCompletedRunId: mockRunIdA,
+    activeRole: '主笔甲',
+  });
+  const updatedBlockWs = adoptWsResult.workingDraft.blocks.find((b) => b.id === block2A.id)!;
+  assert(updatedBlockWs.content === textWithWhitespace, 'G16: 采纳正文原样写入，未删除首尾换行与空格');
+  assert(adoptWsResult.logEntry.afterContent === textWithWhitespace, 'G17: 存证日志 afterContent 原样保留换行与空格');
+  assert(adoptWsResult.logEntry.isFineTuned === true, 'G18: 微调标记按原始文本准确判定');
 
   // --------------------------------------------------------------------------
   // [验收用例 H] 长文本下查看、微调与操作，采纳按钮固定底栏
@@ -534,9 +668,9 @@ async function runTask17Tests() {
   longEditorMount.unmount();
 
   // --------------------------------------------------------------------------
-  // [特别验收用例 1] 生成建议 → 完成前切换版本 → 等待旧请求结束 → 确认无旧建议、错误或正文写入
+  // [特别验收用例 1] 真实发起生成建议 → 完成前切换版本 → 等待旧请求结束 → 确认无旧建议、错误或正文写入
   // --------------------------------------------------------------------------
-  console.log('\n>>> [特别验收 1] 生成前切换版本隔离测试:');
+  console.log('\n>>> [特别验收 1] 真实生成中切换版本隔离测试:');
 
   let stageUpdatedTask: Partial<Task> | null = null;
   const stageMount = mountTestComponent(
@@ -551,7 +685,25 @@ async function runTask17Tests() {
     })
   );
 
-  // Switch draft version in props
+  // 1. Select block 2 to enable revision operations
+  const block2CardEl = stageMount.container.querySelector(`#block-card-${block2A.id}`) as HTMLElement;
+  assert(block2CardEl !== null, 'P1.0: 找到第2段卡片');
+  act(() => {
+    block2CardEl.click();
+  });
+
+  // 2. Locate and click real shortcut revision button
+  const btnCompressStage = Array.from(stageMount.container.querySelectorAll('button')).find(
+    (b) => b.textContent && b.textContent.includes('压缩精炼')
+  );
+  assert(btnCompressStage !== undefined, 'P1.1: 找到【压缩精炼】生成建议按钮');
+
+  // Trigger real async generation
+  act(() => {
+    btnCompressStage!.click();
+  });
+
+  // 3. Switch draft version while async request is actively in-flight
   const draftVersion2: DraftVersion = {
     ...draftA,
     id: 'DRAFT-VERSION-NEW-999',
@@ -577,16 +729,26 @@ async function runTask17Tests() {
     );
   });
 
-  // Verify that suggestions editor is not showing stale suggestion
+  // 4. Wait for the in-flight asynchronous generation to complete
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  // 5. Verify that suggestions editor is not showing stale suggestion and no unhandled error occurred
   const staleSuggestionEditor = stageMount.container.querySelector('[data-testid="paragraph-suggestion-editor"]');
-  assert(staleSuggestionEditor === null, 'P1: 版本切换后旧建议与旧请求已彻底清理');
+  assert(staleSuggestionEditor === null, 'P1.2: 【关键隔离】版本切换后旧异步生成结果未回填，建议编辑器未挂载');
+
+  const staleErrorEl = stageMount.container.querySelector('[data-testid="revision-error"]');
+  assert(staleErrorEl === null, 'P1.3: 无残留生成错误或未捕获异常');
+
+  assert(stageUpdatedTask === null, 'P1.4: 旧异步请求未向切换后的新版本写入任何正文');
 
   stageMount.unmount();
 
   // --------------------------------------------------------------------------
-  // [特别验收用例 2] 同一挂载实例从第2段意见切到第3段 → 确认定位、意见和建议上下文同步切换
+  // [特别验收用例 2] 同一挂载实例：生成第2段意见建议 → 人工微调 → 切换第3段意见 → 确认旧建议、微调内容彻底隔离
   // --------------------------------------------------------------------------
-  console.log('\n>>> [特别验收 2] 跨段落意见上下文同步切换测试:');
+  console.log('\n>>> [特别验收 2] 已有微调建议后切换意见上下文隔离测试:');
 
   const block3A = draftA.blocks[2];
   const commentOnBlock2: ReviewComment = {
@@ -620,11 +782,15 @@ async function runTask17Tests() {
     reviewComments: [commentOnBlock2, commentOnBlock3],
   };
 
+  let navUpdatedTask: Partial<Task> | null = null;
+
   // Mount with navIntent pointing to Block 2 comment
   const navMount = mountTestComponent(
     React.createElement(DraftingStage, {
       task: taskWithTwoComments,
-      onUpdateTask: () => {},
+      onUpdateTask: (updated) => {
+        navUpdatedTask = updated;
+      },
       onViewSnippet: () => {},
       onProceedToNextStage: () => {},
       activeRole: '主笔甲',
@@ -637,12 +803,57 @@ async function runTask17Tests() {
   const block2Card = navMount.container.querySelector(`#block-card-${block2A.id}`);
   assert(block2Card !== null && block2Card.textContent!.includes('来源：【审阅乙】审阅意见'), 'P2.1: 初始定位至第2段意见');
 
+  // Trigger real generation on Block 2 based on review comment
+  const btnGenBlock2 = Array.from(navMount.container.querySelectorAll('button')).find(
+    (b) => b.textContent && b.textContent.includes('依据此意见生成修改建议')
+  );
+  assert(btnGenBlock2 !== undefined, 'P2.2: 找到【依据此意见生成修改建议】按钮');
+
+  await act(async () => {
+    btnGenBlock2!.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  // Suggestion editor is mounted
+  const editorBlock2 = navMount.container.querySelector('[data-testid="paragraph-suggestion-editor"]');
+  assert(editorBlock2 !== null, 'P2.3: 真实AI修改建议生成成功并展现于右侧');
+
+  // Switch to editor view tab
+  const editorTabBtnNav = navMount.container.querySelector('[data-testid="tab-editor-view"]') as HTMLButtonElement;
+  assert(editorTabBtnNav !== null, 'P2.4: 找到待采纳文本视图切换标签');
+  act(() => {
+    editorTabBtnNav.click();
+  });
+
+  // Perform human fine-tuning in pending text area
+  const textareaPending = navMount.container.querySelector('[data-testid="textarea-pending-text"]') as HTMLTextAreaElement;
+  assert(textareaPending !== null, 'P2.5: 找到待采纳文本编辑输入框');
+
+  act(() => {
+    const propKey = Object.keys(textareaPending).find((k) => k.startsWith('__reactProps'));
+    if (propKey && (textareaPending as any)[propKey]?.onChange) {
+      (textareaPending as any)[propKey].onChange({
+        target: { value: '这是主笔甲针对第2段意见进行的专属人工微调内容' },
+      });
+    } else {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+      nativeSetter.call(textareaPending, '这是主笔甲针对第2段意见进行的专属人工微调内容');
+      textareaPending.dispatchEvent(new Event('input', { bubbles: true }));
+      textareaPending.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+  const badgeFineTuned = navMount.container.querySelector('[data-testid="badge-fine-tuned"]');
+  assert(badgeFineTuned !== null, 'P2.6: 确认展示【已人工微调】标识与微调差异');
+
   // Switch navIntent to Block 3 comment in the SAME mounted instance
   act(() => {
     navMount.rerender(
       React.createElement(DraftingStage, {
         task: taskWithTwoComments,
-        onUpdateTask: () => {},
+        onUpdateTask: (updated) => {
+          navUpdatedTask = updated;
+        },
         onViewSnippet: () => {},
         onProceedToNextStage: () => {},
         activeRole: '主笔甲',
@@ -652,8 +863,20 @@ async function runTask17Tests() {
     );
   });
 
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+
   const block3Card = navMount.container.querySelector(`#block-card-${block3A.id}`);
-  assert(block3Card !== null && block3Card.textContent!.includes('来源：【审阅丁】审阅意见'), 'P2.2: 同一挂载实例顺利切换定位至第3段意见');
+  assert(block3Card !== null && block3Card.textContent!.includes('来源：【审阅丁】审阅意见'), 'P2.7: 同一挂载实例顺利切换定位至第3段意见');
+
+  const editorAfterSwitch = navMount.container.querySelector('[data-testid="paragraph-suggestion-editor"]');
+  assert(editorAfterSwitch === null, 'P2.8: 【关键隔离】切换意见后第2段旧建议及其人工微调状态同步清空，绝不泄漏至第3段');
+
+  const staleErrorSwitch = navMount.container.querySelector('[data-testid="revision-error"]');
+  assert(staleErrorSwitch === null, 'P2.9: 无残留错误');
+
+  assert(navUpdatedTask === null, 'P2.10: 切换意见上下文过程中未发生任何非预期正文写入');
 
   navMount.unmount();
 

@@ -156,6 +156,7 @@ export interface ParagraphBlock {
   hasUnverifiedData?: boolean;
   hasPendingReviewComment?: boolean;
   updatedAt: string;
+  revisionSeq?: number;
 }
 
 export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight' | 'custom';
@@ -215,6 +216,20 @@ export interface ReviewCommentSnapshotBeforeChange {
   implementedAt?: string;
 }
 
+export interface ReviewCommentSnapshotAfterChange {
+  status: ReviewCommentStatus;
+  authorReply?: string;
+  decisionReason?: string;
+  resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
+  implementationDraftId?: string;
+  implementationVersionNumber?: string;
+  implementationBlockId?: string;
+  implementedAt?: string;
+  currentBlockId?: string;
+  targetBlockId?: string;
+  reboundAt?: string;
+}
+
 export interface ParagraphModificationLog {
   id: string;                          // 操作ID (e.g. MOD-LOG-...)
   taskId: string;                      // 关联任务ID
@@ -231,6 +246,9 @@ export interface ParagraphModificationLog {
   associatedCommentId?: string;        // 关联审阅意见ID
   associatedCommentReviewer?: string;  // 关联审阅人
   previousCommentState?: ReviewCommentSnapshotBeforeChange; // 采纳前意见状态存证（用于安全撤销时精准恢复）
+  postAdoptionCommentState?: ReviewCommentSnapshotAfterChange; // 采纳后意见状态存证（核验后续是否被再次编辑、回复或重绑）
+  appliedBlockUpdatedAt?: string;      // 采纳写入时目标段落的 updatedAt 时间戳（核验后续正文是否被再次修改）
+  appliedRevisionSeq?: number;         // 采纳时的修改序号
   status: 'applied' | 'undone';        // 状态：已应用 / 已安全撤销
   undoneAt?: string;                   // 撤销时间
   undoneBy?: string;                   // 撤销操作人
