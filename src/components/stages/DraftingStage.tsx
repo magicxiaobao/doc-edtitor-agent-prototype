@@ -25,6 +25,7 @@ import {
 import { CandidateComparisonModal } from '../CandidateComparisonModal';
 import { ParagraphSuggestionEditor } from '../ParagraphSuggestionEditor';
 import { RecentModificationsModal } from '../RecentModificationsModal';
+import { AutoResizeParagraphTextarea } from '../AutoResizeParagraphTextarea';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -96,7 +97,8 @@ import {
   UserCheck,
   MessageCircle,
   HelpCircle,
-  XCircle
+  XCircle,
+  Menu
 } from 'lucide-react';
 
 interface DraftingStageProps {
@@ -199,6 +201,35 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [showCandidateComparisonModal, setShowCandidateComparisonModal] = useState(false);
   const [draftInstructionInput, setDraftInstructionInput] = useState<string>('突出成效，减少铺垫');
   const [showPrepDetails, setShowPrepDetails] = useState(false);
+  const [showWholeDraftAdjust, setShowWholeDraftAdjust] = useState(false);
+  const [showTabletInspectorDrawer, setShowTabletInspectorDrawer] = useState(false);
+  const [showTabletOutlineDrawer, setShowTabletOutlineDrawer] = useState(false);
+  const lastTabletTriggerRef = useRef<HTMLElement | null>(null);
+
+  // Close tablet drawers on Escape with focus restoration
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showTabletInspectorDrawer) {
+          setShowTabletInspectorDrawer(false);
+          if (selectedBlockId) {
+            setTimeout(() => {
+              const el = document.getElementById(`block-card-${selectedBlockId}`);
+              if (el && typeof el.scrollIntoView === 'function') {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+              lastTabletTriggerRef.current?.focus();
+            }, 30);
+          }
+        } else if (showTabletOutlineDrawer) {
+          setShowTabletOutlineDrawer(false);
+          lastTabletTriggerRef.current?.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showTabletInspectorDrawer, showTabletOutlineDrawer, selectedBlockId]);
   const draftCancelledRef = useRef(false);
   const [activeDraftRunId, setActiveDraftRunId] = useState<string | null>(null);
   const activeDraftRunIdRef = useRef<string | null>(null);
@@ -314,6 +345,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Prerequisite check: facts, style, outline must all be confirmed
   const isPrerequisiteMet = isFactReady && isStyleReady && isOutlineReady && isPeriodReady;
+  const hasExistingDraft = Boolean(currentDraft && currentDraft.blocks && currentDraft.blocks.length > 0);
 
   const handleJumpStage = (stage: TaskStage) => {
     if (onSelectStage) {
@@ -1545,217 +1577,490 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       </div>
 
       {/* 2. Preparation Status Bar */}
-      <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2.5">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-800 flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5 text-blue-700" />
-              起草前准备状态
-            </span>
-            <span
-              className={`text-[11px] px-2 py-0.5 rounded font-medium flex items-center gap-1 ${
-                isPrerequisiteMet
-                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                  : 'bg-amber-50 text-amber-800 border border-amber-200'
-              }`}
-            >
-              {isPrerequisiteMet ? (
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-              ) : (
-                <AlertTriangle className="w-3 h-3 text-amber-600" />
-              )}
-              <span>{isPrerequisiteMet ? '前序审批完备 · 具备起草条件' : '准备条件未满足'}</span>
-            </span>
-          </div>
+      {hasExistingDraft ? (
+        // Existing Draft: Defaults to Compact Status Bar with summary metrics and expand button
+        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
+                <FileText className="w-3.5 h-3.5 text-blue-700" />
+                起草准备概况
+              </span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1 ${
+                  isPrerequisiteMet
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}
+              >
+                {isPrerequisiteMet ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                )}
+                <span>{isPrerequisiteMet ? '前序审批完备 · 具备起草条件' : '准备条件未满足'}</span>
+              </span>
 
-          <button
-            onClick={() => setShowPrepDetails(!showPrepDetails)}
-            className="text-slate-500 hover:text-slate-800 text-[11px] flex items-center gap-1 cursor-pointer"
-          >
-            <span>{showPrepDetails ? '收起说明' : '展开指标口径说明'}</span>
-            <ChevronDown
-              className={`w-3 h-3 transition-transform ${showPrepDetails ? 'rotate-180' : ''}`}
-            />
-          </button>
-        </div>
-
-        {/* 5 Indicator Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
-          <div
-            className={`p-2 rounded border ${
-              isFactReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
-            }`}
-          >
-            <div className="text-[10px] text-slate-500">1. 事实清单</div>
-            <div className="font-bold mt-0.5 text-slate-800">{confirmedFactsCount} 项已核准</div>
-            <div className="text-[10px] text-slate-400">
-              {task.factSnapshot ? '快照已锁定' : '快照未生成'}
-            </div>
-          </div>
-
-          <div
-            className={`p-2 rounded border ${
-              isStyleReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
-            }`}
-          >
-            <div className="text-[10px] text-slate-500">2. 单位文风</div>
-            <div className="font-bold mt-0.5 text-slate-800">{activeStyleRulesCount} 条规则生效</div>
-            <div className="text-[10px] text-slate-400">
-              {task.styleConfirmed ? '已核准通过' : '未核准'}
-            </div>
-          </div>
-
-          <div
-            className={`p-2 rounded border ${
-              isOutlineReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
-            }`}
-          >
-            <div className="text-[10px] text-slate-500">3. 章节大纲</div>
-            <div className="font-bold mt-0.5 text-slate-800">{outlineSectionsCount} 个章节</div>
-            <div className="text-[10px] text-slate-400">
-              {task.outlineConfirmed ? '大纲已审批' : '未审批'}
-            </div>
-          </div>
-
-          <div
-            className={`p-2 rounded border ${
-              isPeriodReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
-            }`}
-          >
-            <div className="text-[10px] text-slate-500">4. 统计期间</div>
-            <div className="font-bold mt-0.5 text-slate-800">{taskPeriodStr}</div>
-            <div className="text-[10px] text-slate-400">
-              {isPeriodReady ? '口径已设定' : '未设定'}
-            </div>
-          </div>
-
-          <div className="p-2 rounded border bg-slate-50/80 border-slate-200">
-            <div className="text-[10px] text-slate-500">5. 目标字数</div>
-            <div className="font-bold mt-0.5 text-slate-800">{task.targetWordCount || 2000} 字</div>
-            <div className="text-[10px] text-slate-400">
-              当前文稿 {currentWordCount} 字
-            </div>
-          </div>
-        </div>
-
-        {/* Deficiency alert if not met */}
-        {!isPrerequisiteMet && (
-          <div className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-2">
-            <div className="flex items-center gap-1.5 font-semibold text-amber-900">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>起草条件不足说明：</span>
-            </div>
-            <ul className="list-disc list-inside text-[11px] text-amber-800 space-y-0.5">
-              {!isFactReady && <li>事实清单尚未核准或事实快照缺失/已失效（需包含有效核准事实）。</li>}
-              {!isStyleReady && <li>单位文风规范尚未核准或快照缺失。</li>}
-              {!isOutlineReady && <li>章节大纲规划尚未确认审批通过。</li>}
-              {!isPeriodReady && <li>任务起止日期及统计期间未设定完整。</li>}
-            </ul>
-            <p className="text-[11px] text-amber-700">
-              系统保护现有文稿，<strong>旧正文保持可浏览与手动编辑</strong>。请先前往前序阶段完成审批后再执行整稿起草。
-            </p>
-            <div className="flex items-center gap-2 pt-1 flex-wrap">
-              {!isFactReady && (
-                <button
-                  onClick={() => handleJumpStage('material_fact')}
-                  className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
-                >
-                  前往核准事实清单
-                </button>
-              )}
-              {(!isStyleReady || !isOutlineReady) && (
-                <button
-                  onClick={() => handleJumpStage('style_outline')}
-                  className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
-                >
-                  前往确认文风与大纲
-                </button>
+              {isPrerequisiteMet && (
+                <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 flex-wrap">
+                  <span className="text-slate-300">|</span>
+                  <span>已核准事实 <strong className="text-slate-700 font-mono">{confirmedFactsCount}</strong> 项</span>
+                  <span>· 文风 <strong className="text-slate-700 font-mono">{activeStyleRulesCount}</strong> 条</span>
+                  <span>· 大纲 <strong className="text-slate-700 font-mono">{outlineSectionsCount}</strong> 章</span>
+                  <span>· 期间 <strong className="text-slate-700">{taskPeriodStr}</strong></span>
+                  <span>· 目标 <strong className="text-slate-700 font-mono">{task.targetWordCount}</strong> 字</span>
+                </div>
               )}
             </div>
-          </div>
-        )}
 
-        {/* Collapsible Explanations */}
-        {showPrepDetails && isPrerequisiteMet && (
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-600 space-y-1">
-            <div>• 事实依据：已核准事实与台账口径一致，起草服务将严格保留所有数值、单位与期间。</div>
-            <div>• 文风大纲：按已确认大纲结构进行确定性合成，各章节按分配事实生成，无虚构案例。</div>
-            <div>• 版本继承：起草生成的整稿将作为候选稿供主笔在差异对比后决定是否整体采纳。</div>
-          </div>
-        )}
-      </div>
-
-      {/* 3. Round Drafting Instruction Input Bar */}
-      <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2">
-        <div className="flex items-center justify-between flex-wrap gap-1">
-          <label htmlFor="round-draft-instruction" className="font-bold text-slate-800 flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-blue-700" />
-            <span>本轮写作要求（表达意图与行文侧重）：</span>
-          </label>
-          <span className="text-[11px] text-slate-400">受已核准事实、文风与大纲严格约束</span>
-        </div>
-        <div className="flex gap-2">
-          <input
-            id="round-draft-instruction"
-            type="text"
-            value={draftInstructionInput}
-            onChange={(e) => setDraftInstructionInput(e.target.value)}
-            placeholder="例如：突出成效，减少铺垫；优化问题与安排的对应；改成面向单位负责人的汇报口吻..."
-            className="flex-1 p-2 bg-slate-50 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white focus:outline-hidden"
-          />
-          <button
-            onClick={() => handleStartGenerate(draftInstructionInput)}
-            disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
-            className={`px-4 py-2 rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
-              !isPrerequisiteMet || isGenerating || !canUserEdit
-                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                : 'bg-blue-700 hover:bg-blue-800 text-white'
-            }`}
-            title={
-              !canUserEdit
-                ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
-                : !isPrerequisiteMet
-                ? '前序审批未就绪，无法起草'
-                : task.drafts.length === 0
-                ? '生成首轮初稿'
-                : '生成整稿候选稿'
-            }
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>
-              {isGenerating
-                ? '起草生成中...'
-                : task.drafts.length === 0
-                ? '生成首轮初稿'
-                : '生成整稿候选'}
-            </span>
-          </button>
-        </div>
-        {/* Preset Instruction Chips */}
-        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-          <span className="text-[11px] text-slate-400 font-medium">常用指令预设：</span>
-          {[
-            '突出成效，减少铺垫',
-            '减少铺垫，精简表达',
-            '优化问题与安排的对应',
-            '改成面向单位负责人的汇报口吻',
-            '标准公文规范起草',
-          ].map((preset) => (
             <button
-              key={preset}
-              type="button"
-              onClick={() => setDraftInstructionInput(preset)}
-              className={`text-[11px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
-                draftInstructionInput === preset
-                  ? 'bg-blue-50 text-blue-800 border-blue-300 font-medium'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+              onClick={() => setShowPrepDetails(!showPrepDetails)}
+              aria-expanded={showPrepDetails}
+              aria-label={showPrepDetails ? '收起准备指标口径说明' : '展开准备指标口径说明'}
+              className="text-slate-600 hover:text-slate-900 text-xs flex items-center gap-1 cursor-pointer font-medium focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden px-2 py-0.5 rounded hover:bg-slate-100"
+            >
+              <span>{showPrepDetails ? '收起指标详情' : '展开指标口径'}</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${showPrepDetails ? 'rotate-180' : ''}`}
+              />
+            </button>
+          </div>
+
+          {/* Deficiency alert if not met - NEVER hidden even if compact! */}
+          {!isPrerequisiteMet && (
+            <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-1.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-1.5 font-semibold text-amber-900">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>起草前置条件不足（真实缺口）：</span>
+                  <span className="font-normal text-amber-800">
+                    {!isFactReady && '事实清单未核准/快照缺失；'}
+                    {!isStyleReady && '文风规范未核准；'}
+                    {!isOutlineReady && '大纲尚未审批；'}
+                    {!isPeriodReady && '统计期间未设定；'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {!isFactReady && (
+                    <button
+                      onClick={() => handleJumpStage('material_fact')}
+                      className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
+                    >
+                      前往核准事实
+                    </button>
+                  )}
+                  {(!isStyleReady || !isOutlineReady) && (
+                    <button
+                      onClick={() => handleJumpStage('style_outline')}
+                      className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
+                    >
+                      前往确认文风与大纲
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-[11px] text-amber-700">
+                现有文稿已受保护，旧正文保持可浏览与微调。请补充前序审批后生成整稿，禁止使用虚构正文补足。
+              </p>
+            </div>
+          )}
+
+          {/* 5 Indicator Cards when expanded */}
+          {showPrepDetails && (
+            <div className="pt-2 border-t border-slate-100 space-y-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
+                <div
+                  className={`p-2 rounded border ${
+                    isFactReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="text-xs text-slate-500">1. 事实清单</div>
+                  <div className="font-bold mt-0.5 text-slate-800">{confirmedFactsCount} 项已核准</div>
+                  <div className="text-xs text-slate-400">
+                    {task.factSnapshot ? '快照已锁定' : '快照未生成'}
+                  </div>
+                </div>
+
+                <div
+                  className={`p-2 rounded border ${
+                    isStyleReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="text-xs text-slate-500">2. 单位文风</div>
+                  <div className="font-bold mt-0.5 text-slate-800">{activeStyleRulesCount} 条规则生效</div>
+                  <div className="text-xs text-slate-400">
+                    {task.styleConfirmed ? '已核准通过' : '未核准'}
+                  </div>
+                </div>
+
+                <div
+                  className={`p-2 rounded border ${
+                    isOutlineReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="text-xs text-slate-500">3. 章节大纲</div>
+                  <div className="font-bold mt-0.5 text-slate-800">{outlineSectionsCount} 个章节</div>
+                  <div className="text-xs text-slate-400">
+                    {task.outlineConfirmed ? '大纲已审批' : '未审批'}
+                  </div>
+                </div>
+
+                <div
+                  className={`p-2 rounded border ${
+                    isPeriodReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="text-xs text-slate-500">4. 统计期间</div>
+                  <div className="font-bold mt-0.5 text-slate-800">{taskPeriodStr}</div>
+                  <div className="text-xs text-slate-400">
+                    {isPeriodReady ? '口径已设定' : '未设定'}
+                  </div>
+                </div>
+
+                <div className="p-2 rounded border bg-slate-50/80 border-slate-200">
+                  <div className="text-xs text-slate-500">5. 目标字数</div>
+                  <div className="font-bold mt-0.5 text-slate-800">{task.targetWordCount || 2000} 字</div>
+                  <div className="text-xs text-slate-400">
+                    当前文稿 {currentWordCount} 字
+                  </div>
+                </div>
+              </div>
+
+              {isPrerequisiteMet && (
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 space-y-1">
+                  <div>• 事实依据：已核准事实与台账口径一致，起草服务将严格保留所有数值、单位与期间。</div>
+                  <div>• 文风大纲：按已确认大纲结构进行确定性合成，各章节按分配事实生成，无虚构案例。</div>
+                  <div>• 版本继承：起草生成的整稿将作为候选稿供主笔在差异对比后决定是否整体采纳。</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        // No draft yet: Prominently display full preparation cards
+        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-blue-700" />
+                起草前准备状态
+              </span>
+              <span
+                className={`text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1 ${
+                  isPrerequisiteMet
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}
+              >
+                {isPrerequisiteMet ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                )}
+                <span>{isPrerequisiteMet ? '前序审批完备 · 具备起草条件' : '准备条件未满足'}</span>
+              </span>
+            </div>
+
+            <button
+              onClick={() => setShowPrepDetails(!showPrepDetails)}
+              aria-expanded={showPrepDetails}
+              aria-label={showPrepDetails ? '收起准备指标口径说明' : '展开指标口径说明'}
+              className="text-slate-500 hover:text-slate-800 text-xs flex items-center gap-1 cursor-pointer font-medium focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+            >
+              <span>{showPrepDetails ? '收起说明' : '展开指标口径说明'}</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 transition-transform ${showPrepDetails ? 'rotate-180' : ''}`}
+              />
+            </button>
+          </div>
+
+          {/* 5 Indicator Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 text-xs">
+            <div
+              className={`p-2.5 rounded border ${
+                isFactReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
               }`}
             >
-              {preset}
-            </button>
-          ))}
+              <div className="text-xs text-slate-500">1. 事实清单</div>
+              <div className="font-bold mt-0.5 text-slate-800">{confirmedFactsCount} 项已核准</div>
+              <div className="text-xs text-slate-400">
+                {task.factSnapshot ? '快照已锁定' : '快照未生成'}
+              </div>
+            </div>
+
+            <div
+              className={`p-2.5 rounded border ${
+                isStyleReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="text-xs text-slate-500">2. 单位文风</div>
+              <div className="font-bold mt-0.5 text-slate-800">{activeStyleRulesCount} 条规则生效</div>
+              <div className="text-xs text-slate-400">
+                {task.styleConfirmed ? '已核准通过' : '未核准'}
+              </div>
+            </div>
+
+            <div
+              className={`p-2.5 rounded border ${
+                isOutlineReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="text-xs text-slate-500">3. 章节大纲</div>
+              <div className="font-bold mt-0.5 text-slate-800">{outlineSectionsCount} 个章节</div>
+              <div className="text-xs text-slate-400">
+                {task.outlineConfirmed ? '大纲已审批' : '未审批'}
+              </div>
+            </div>
+
+            <div
+              className={`p-2.5 rounded border ${
+                isPeriodReady ? 'bg-slate-50/80 border-slate-200' : 'bg-amber-50/70 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="text-xs text-slate-500">4. 统计期间</div>
+              <div className="font-bold mt-0.5 text-slate-800">{taskPeriodStr}</div>
+              <div className="text-xs text-slate-400">
+                {isPeriodReady ? '口径已设定' : '未设定'}
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded border bg-slate-50/80 border-slate-200">
+              <div className="text-xs text-slate-500">5. 目标字数</div>
+              <div className="font-bold mt-0.5 text-slate-800">{task.targetWordCount || 2000} 字</div>
+              <div className="text-xs text-slate-400">
+                当前文稿 {currentWordCount} 字
+              </div>
+            </div>
+          </div>
+
+          {/* Deficiency alert if not met */}
+          {!isPrerequisiteMet && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-2">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-900">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>起草条件不足说明：</span>
+              </div>
+              <ul className="list-disc list-inside text-xs text-amber-800 space-y-0.5">
+                {!isFactReady && <li>事实清单尚未核准或事实快照缺失/已失效（需包含有效核准事实）。</li>}
+                {!isStyleReady && <li>单位文风规范尚未核准或快照缺失。</li>}
+                {!isOutlineReady && <li>章节大纲规划尚未确认审批通过。</li>}
+                {!isPeriodReady && <li>任务起止日期及统计期间未设定完整。</li>}
+              </ul>
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
+                {!isFactReady && (
+                  <button
+                    onClick={() => handleJumpStage('material_fact')}
+                    className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
+                  >
+                    前往核准事实清单
+                  </button>
+                )}
+                {(!isStyleReady || !isOutlineReady) && (
+                  <button
+                    onClick={() => handleJumpStage('style_outline')}
+                    className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-semibold cursor-pointer"
+                  >
+                    前往确认文风与大纲
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showPrepDetails && isPrerequisiteMet && (
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 space-y-1">
+              <div>• 事实依据：已核准事实与台账口径一致，起草服务将严格保留所有数值、单位与期间。</div>
+              <div>• 文风大纲：按已确认大纲结构进行确定性合成，各章节按分配事实生成，无虚构案例。</div>
+              <div>• 版本继承：起草生成的整稿将作为候选稿供主笔在差异对比后决定是否整体采纳。</div>
+            </div>
+          )}
         </div>
-      </div>
+      )}
+
+      {/* 3. Round Drafting Instruction / Whole Draft Adjustment */}
+      {hasExistingDraft ? (
+        // Existing Draft: Organized into "整稿调整" header and expandable instruction area
+        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-2.5">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setShowWholeDraftAdjust(!showWholeDraftAdjust)}
+              aria-expanded={showWholeDraftAdjust}
+              aria-label="整稿调整指令区展开或收起"
+              className="flex items-center gap-2 text-left cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden p-1 rounded hover:bg-slate-50"
+            >
+              <Sparkles className="w-4 h-4 text-blue-700 shrink-0" />
+              <span className="font-bold text-sm text-slate-900">整稿调整</span>
+              <span className="text-xs bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded font-medium">
+                影响整篇，生成候选后由主笔确认
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-500 transition-transform ${showWholeDraftAdjust ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {!showWholeDraftAdjust && !isGenerating && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-500 hidden md:inline">
+                  当前侧重：“{draftInstructionInput}”
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleStartGenerate(draftInstructionInput)}
+                  disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
+                  className={`px-3.5 py-1.5 rounded text-sm font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                    !isPrerequisiteMet || isGenerating || !canUserEdit
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-blue-700 hover:bg-blue-800 text-white'
+                  }`}
+                  title={
+                    !canUserEdit
+                      ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
+                      : !isPrerequisiteMet
+                      ? '前序审批未就绪，无法起草'
+                      : '生成整稿候选稿'
+                  }
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>生成整稿候选</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {(showWholeDraftAdjust || isGenerating) && (
+            <div className="pt-2 border-t border-slate-100 space-y-2 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <label htmlFor="round-draft-instruction" className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                  <span>整篇改写要求（表达意图与行文侧重）：</span>
+                </label>
+                <span className="text-xs text-slate-400">受已核准事实、文风与大纲严格约束</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  id="round-draft-instruction"
+                  type="text"
+                  value={draftInstructionInput}
+                  onChange={(e) => setDraftInstructionInput(e.target.value)}
+                  placeholder="例如：突出成效，减少铺垫；优化问题与安排的对应；改成面向单位负责人的汇报口吻..."
+                  className="flex-1 p-2 bg-slate-50 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white focus:outline-hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleStartGenerate(draftInstructionInput)}
+                  disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
+                  className={`px-4 py-2 rounded text-sm font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                    !isPrerequisiteMet || isGenerating || !canUserEdit
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-blue-700 hover:bg-blue-800 text-white'
+                  }`}
+                  title={
+                    !canUserEdit
+                      ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
+                      : !isPrerequisiteMet
+                      ? '前序审批未就绪，无法起草'
+                      : '生成整稿候选'
+                  }
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isGenerating ? '起草生成中...' : '生成整稿候选'}</span>
+                </button>
+              </div>
+              {/* Preset Instruction Chips */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-xs text-slate-400 font-medium">常用指令预设：</span>
+                {[
+                  '突出成效，减少铺垫',
+                  '减少铺垫，精简表达',
+                  '优化问题与安排的对应',
+                  '改成面向单位负责人的汇报口吻',
+                  '标准公文规范起草',
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setDraftInstructionInput(preset)}
+                    className={`text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                      draftInstructionInput === preset
+                        ? 'bg-blue-50 text-blue-800 border-blue-300 font-medium'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-200 leading-relaxed">
+                <strong>范围说明：</strong>本功能将重新合成整篇公文并创建独立候选稿（影响整篇），候选稿将在双栏对比中清晰展示差异，由主笔确认采纳后方会写入新工作稿，现有文稿在此之前受严格保护。如仅需修改个别段落，请直接在正文段落中调用局部AI建议（仅修改第N段）。
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        // No draft yet: Prominent Round Drafting Instruction Input Bar with "生成首轮初稿"
+        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-2xs text-xs space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-1">
+            <label htmlFor="round-draft-instruction" className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-blue-700" />
+              <span>本轮写作要求（表达意图与行文侧重）：</span>
+            </label>
+            <span className="text-xs text-slate-400">受已核准事实、文风与大纲严格约束</span>
+          </div>
+          <div className="flex gap-2">
+            <input
+              id="round-draft-instruction"
+              type="text"
+              value={draftInstructionInput}
+              onChange={(e) => setDraftInstructionInput(e.target.value)}
+              placeholder="例如：突出成效，减少铺垫；优化问题与安排的对应；改成面向单位负责人的汇报口吻..."
+              className="flex-1 p-2.5 bg-slate-50 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white focus:outline-hidden"
+            />
+            <button
+              onClick={() => handleStartGenerate(draftInstructionInput)}
+              disabled={isGenerating || !isPrerequisiteMet || !canUserEdit}
+              className={`px-5 py-2.5 rounded text-sm font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                !isPrerequisiteMet || isGenerating || !canUserEdit
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-blue-700 hover:bg-blue-800 text-white'
+              }`}
+              title={
+                !canUserEdit
+                  ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可起草正文`
+                  : !isPrerequisiteMet
+                  ? '前序审批未就绪，无法起草'
+                  : '生成首轮初稿'
+              }
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>{isGenerating ? '起草生成中...' : '生成首轮初稿'}</span>
+            </button>
+          </div>
+          {/* Preset Instruction Chips */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            <span className="text-xs text-slate-400 font-medium">常用指令预设：</span>
+            {[
+              '突出成效，减少铺垫',
+              '减少铺垫，精简表达',
+              '优化问题与安排的对应',
+              '改成面向单位负责人的汇报口吻',
+              '标准公文规范起草',
+            ].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setDraftInstructionInput(preset)}
+                className={`text-xs px-2.5 py-1 rounded border transition-colors cursor-pointer ${
+                  draftInstructionInput === preset
+                    ? 'bg-blue-50 text-blue-800 border-blue-300 font-medium'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+                }`}
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Immutable Draft Alert Notice */}
       {isCurrentDraftImmutable && currentDraft && (
@@ -1912,7 +2217,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       <div className="grid grid-cols-12 gap-4 items-start min-h-[640px]">
         {/* Left: Collapsible Outline Navigation */}
         {showLeftNav ? (
-          <div className="col-span-12 lg:col-span-3 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 space-y-3 sticky top-18 max-h-[82vh] overflow-y-auto">
+          <div className="hidden lg:block lg:col-span-3 xl:col-span-2 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 space-y-3 sticky top-18 max-h-[82vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 text-blue-700" />
@@ -1920,7 +2225,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               </span>
               <button
                 onClick={() => setShowLeftNav(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
                 title="折叠导航栏"
                 aria-label="折叠导航栏"
               >
@@ -1975,7 +2280,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           <div className="col-span-1 hidden lg:block">
             <button
               onClick={() => setShowLeftNav(true)}
-              className="p-2 bg-white border border-slate-200 rounded shadow-xs text-slate-600 hover:text-slate-900 cursor-pointer"
+              className="p-2 bg-white border border-slate-200 rounded shadow-xs text-slate-600 hover:text-slate-900 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
               title="展开章节导航"
               aria-label="展开章节导航"
             >
@@ -1988,16 +2293,50 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         <div
           className={`${
             showLeftNav && showRightInspector
-              ? 'col-span-12 lg:col-span-6'
+              ? 'col-span-12 lg:col-span-6 xl:col-span-7'
               : !showLeftNav && showRightInspector
-              ? 'col-span-12 lg:col-span-8'
+              ? 'col-span-12 lg:col-span-8 xl:col-span-8'
               : showLeftNav && !showRightInspector
-              ? 'col-span-12 lg:col-span-9'
-              : 'col-span-12'
-          } bg-white rounded-lg border border-slate-200 shadow-sm p-6 sm:p-10 min-h-[640px] flex flex-col justify-between`}
+              ? 'col-span-12 lg:col-span-9 xl:col-span-10'
+              : 'col-span-12 max-w-4xl mx-auto'
+          } bg-white rounded-lg border border-slate-200 shadow-sm p-5 sm:p-8 xl:p-10 min-h-[640px] flex flex-col justify-between`}
         >
           {currentDraft ? (
             <div className="space-y-6">
+              {/* Tablet Quick Access Bar: Instant Outline & Inspector Access on <= 1024px */}
+              <div className="lg:hidden flex items-center justify-between gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs mb-3 flex-wrap">
+                <button
+                  type="button"
+                  data-testid="btn-open-tablet-outline"
+                  onClick={(e) => {
+                    lastTabletTriggerRef.current = e.currentTarget;
+                    setShowTabletOutlineDrawer(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-md font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                  aria-label="打开章节大纲导航"
+                >
+                  <FileText className="w-4 h-4 text-blue-700" />
+                  <span>章节导航 ({task.outline.length})</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-open-tablet-inspector"
+                  onClick={(e) => {
+                    lastTabletTriggerRef.current = e.currentTarget;
+                    setShowTabletInspectorDrawer(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-md font-semibold text-blue-800 hover:bg-blue-100 cursor-pointer shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                  aria-label="打开段落辅助面板"
+                >
+                  <Sparkles className="w-4 h-4 text-blue-700" />
+                  <span>辅助面板</span>
+                  {activeBlock && (
+                    <span className="bg-blue-200 text-blue-900 px-1.5 py-0.2 rounded text-xs font-mono font-bold">
+                      第{activeBlock.order}段
+                    </span>
+                  )}
+                </button>
+              </div>
               {/* Document Header */}
               <div className="text-center pb-6 border-b border-slate-200 space-y-2">
                 <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight font-serif leading-snug">
@@ -2179,20 +2518,90 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           </div>
                         )}
 
-                        {/* Paragraph content (editable in working draft, readonly in snapshot/reviewer) */}
-                        <textarea
-                          rows={Math.max(2, Math.ceil(block.content.length / 36))}
+                        {/* Paragraph content (auto-resizes to render content fully without scrollbars) */}
+                        <AutoResizeParagraphTextarea
+                          id={`paragraph-textarea-${block.id}`}
+                          data-testid={`textarea-block-${block.id}`}
                           value={block.content}
                           readOnly={isCurrentDraftImmutable || !canUserEdit}
                           disabled={!canUserEdit && !isReviewerOnly}
-                          onChange={(e) => handleUpdateBlockContent(block.id, e.target.value)}
-                          className={`w-full bg-transparent resize-none focus:outline-hidden text-slate-900 text-base leading-relaxed text-justify indent-8 font-normal font-sans ${
-                            isCurrentDraftImmutable ? 'cursor-default select-text' : ''
-                          }`}
+                          onChange={(val) => handleUpdateBlockContent(block.id, val)}
+                          className={isCurrentDraftImmutable ? 'cursor-default select-text' : ''}
                         />
 
-                        {/* Block metadata & facts pill */}
-                        <div className="mt-2.5 flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-100">
+                        {/* Paragraph quick actions (accessible immediately on paragraph card) */}
+                        <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs text-slate-700 font-bold">
+                              第{block.order || idx + 1}段
+                            </span>
+                            <span className="text-xs text-slate-400">
+                              ({block.content.length}字)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedBlockId(block.id);
+                                setInspectorTab('ai_suggestions');
+                                setShowRightInspector(true);
+                                lastTabletTriggerRef.current = e.currentTarget;
+                                setShowTabletInspectorDrawer(true);
+                              }}
+                              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                              title={`针对第${block.order}段打开AI修改建议（仅修改第${block.order}段）`}
+                              aria-label={`第${block.order}段AI修改建议`}
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                              <span>AI建议</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedBlockId(block.id);
+                                setInspectorTab('review_comments');
+                                setShowRightInspector(true);
+                                lastTabletTriggerRef.current = e.currentTarget;
+                                setShowTabletInspectorDrawer(true);
+                              }}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                              title={`查看针对第${block.order}段的审阅意见`}
+                              aria-label={`第${block.order}段审阅意见`}
+                            >
+                              <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
+                              <span>
+                                意见 ({activeReviewComments.filter((c) => (c.currentBlockId || c.targetBlockId) === block.id).length})
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedBlockId(block.id);
+                                setInspectorTab('material_evidence');
+                                setShowRightInspector(true);
+                                lastTabletTriggerRef.current = e.currentTarget;
+                                setShowTabletInspectorDrawer(true);
+                              }}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                              title={`查看第${block.order}段关联的事实与出处依据`}
+                              aria-label={`第${block.order}段材料依据`}
+                            >
+                              <FileText className="w-3.5 h-3.5 text-slate-500" />
+                              <span>
+                                依据 ({block.referencedFactIds.length})
+                              </span>
+                            </button>
+                          </div>
+
+                          <span className="text-xs text-slate-400 group-hover:text-slate-600 transition-colors">
+                            {isSelected ? '当前正在定位' : '点击定位段落'}
+                          </span>
+                        </div>
+
+                        {/* Block metadata & facts / comments pills */}
+                        <div className="mt-2 flex flex-wrap items-center justify-between text-xs text-slate-400 pt-1.5 border-t border-slate-100/60">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-mono text-[11px] text-slate-500 font-medium">
                               第{block.order || idx + 1}段
@@ -3145,7 +3554,381 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         )}
       </div>
 
-      {/* Save Version Snapshot Modal */}
+      {/* Tablet Outline Navigation Drawer */}
+      {showTabletOutlineDrawer && (
+        <div
+          data-testid="drawer-tablet-outline"
+          role="dialog"
+          aria-modal="true"
+          aria-label="章节大纲导航"
+          className="fixed inset-0 z-50 overflow-hidden bg-slate-900/50 backdrop-blur-xs flex justify-start animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-xs sm:max-w-sm bg-white h-full shadow-2xl flex flex-col border-r border-slate-200">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-700" />
+                <h3 className="font-bold text-sm text-slate-800">章节大纲导航</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTabletOutlineDrawer(false);
+                  lastTabletTriggerRef.current?.focus();
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100 cursor-pointer"
+                aria-label="关闭章节大纲导航"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {task.outline.map((sec, idx) => {
+                const firstBlockOfSec = currentDraft?.blocks.find((b) => b.sectionId === sec.id);
+                const isCurrentSecActive = activeBlock?.sectionId === sec.id;
+
+                return (
+                  <div
+                    key={sec.id}
+                    onClick={() => {
+                      if (firstBlockOfSec) {
+                        setSelectedBlockId(firstBlockOfSec.id);
+                        setShowTabletOutlineDrawer(false);
+                        setTimeout(() => {
+                          const el = document.getElementById(`block-card-${firstBlockOfSec.id}`);
+                          if (el && typeof el.scrollIntoView === 'function') {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }
+                          lastTabletTriggerRef.current?.focus();
+                        }, 50);
+                      }
+                    }}
+                    className={`p-3 rounded-lg border transition-colors cursor-pointer text-xs ${
+                      isCurrentSecActive
+                        ? 'bg-blue-50/80 border-blue-300 text-blue-900 font-medium'
+                        : 'bg-slate-50 hover:bg-slate-100 border-slate-200/70 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="font-semibold">
+                        {idx + 1}. {sec.title}
+                      </span>
+                      {isCurrentSecActive && (
+                        <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 flex justify-between">
+                      <span>建议：{sec.suggestedWordCount}字</span>
+                      <span>{sec.assignedFactIds.length}项依据</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-3 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500 space-y-1">
+              <div>当前正文字数：<strong className="text-slate-800 font-mono">{currentWordCount}</strong> 字</div>
+              <div>目标总字数：<strong className="text-slate-800 font-mono">{task.targetWordCount}</strong> 字</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tablet Inspector Drawer */}
+      {showTabletInspectorDrawer && (
+        <div
+          data-testid="drawer-tablet-inspector"
+          role="dialog"
+          aria-modal="true"
+          aria-label="段落辅助面板"
+          className="fixed inset-0 z-50 overflow-hidden bg-slate-900/50 backdrop-blur-xs flex justify-end animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-md sm:max-w-lg bg-white h-full shadow-2xl flex flex-col border-l border-slate-200">
+            {/* Header with Block context and Close */}
+            <div className="p-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Sparkles className="w-4 h-4 text-blue-700 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-bold text-sm text-slate-800 flex items-center gap-1.5 flex-wrap">
+                    <span>{activeBlock ? `第${activeBlock.order}段辅助面板` : '文稿辅助面板'}</span>
+                    {activeBlock && (
+                      <span className="text-xs bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-mono font-medium">
+                        仅修改第{activeBlock.order}段
+                      </span>
+                    )}
+                  </div>
+                  {activeBlock && (
+                    <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                      摘要：“{activeBlock.content.slice(0, 30)}...”
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                data-testid="btn-close-tablet-inspector"
+                onClick={() => {
+                  setShowTabletInspectorDrawer(false);
+                  if (selectedBlockId) {
+                    setTimeout(() => {
+                      const el = document.getElementById(`block-card-${selectedBlockId}`);
+                      if (el && typeof el.scrollIntoView === 'function') {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }
+                      lastTabletTriggerRef.current?.focus();
+                    }, 50);
+                  }
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
+                aria-label="关闭辅助面板"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="px-3 pt-2 pb-1 border-b border-slate-200 flex items-center justify-between bg-white">
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded text-xs font-medium w-full">
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('ai_suggestions')}
+                  className={`flex-1 py-1 rounded transition-colors text-center cursor-pointer ${
+                    inspectorTab === 'ai_suggestions'
+                      ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  AI建议
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('review_comments')}
+                  className={`flex-1 py-1 rounded transition-colors text-center cursor-pointer flex items-center justify-center gap-1 ${
+                    inspectorTab === 'review_comments'
+                      ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>意见</span>
+                  {activeReviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length > 0 && (
+                    <span className="bg-amber-100 text-amber-800 px-1 py-0.2 rounded-full text-[10px] font-bold">
+                      {activeReviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation').length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('material_evidence')}
+                  className={`flex-1 py-1 rounded transition-colors text-center cursor-pointer ${
+                    inspectorTab === 'material_evidence'
+                      ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  材料依据
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {inspectorTab === 'review_comments' ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                    <span className="font-bold text-xs text-slate-800">全部审阅意见 ({activeReviewComments.length})</span>
+                    {onSelectStage && !isCurrentDraftImmutable && (
+                      <button
+                        onClick={() => {
+                          setShowTabletInspectorDrawer(false);
+                          onSelectStage('review');
+                        }}
+                        className="text-[11px] text-blue-700 hover:underline flex items-center gap-0.5 cursor-pointer font-medium"
+                      >
+                        <span>全景视图</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {activeReviewComments.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-400 italic bg-slate-50 rounded border border-dashed border-slate-200">
+                        当前暂无审阅意见
+                      </div>
+                    ) : (
+                      activeReviewComments.map((cmt) => {
+                        const isSelected = selectedCommentId === cmt.id;
+                        const loc = getReviewCommentLocation(cmt, currentDraft);
+
+                        return (
+                          <div
+                            key={cmt.id}
+                            className={`p-3 rounded-lg border text-xs space-y-2 transition-all ${
+                              isSelected
+                                ? 'bg-blue-50/80 border-blue-400 ring-1 ring-blue-300 shadow-2xs'
+                                : 'bg-white border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-slate-800">{cmt.reviewer}</span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-100 text-slate-700">
+                                {cmt.type === 'overall' ? '全局意见' : `第${loc.targetBlock?.order || cmt.targetBlockOrder || '?'}段`}
+                              </span>
+                            </div>
+                            <p className="text-slate-700 leading-relaxed">{cmt.content}</p>
+
+                            <div className="flex justify-end gap-1 pt-1 border-t border-slate-100">
+                              {loc.targetBlock && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleJumpToTargetBlock(loc.targetBlock!.id);
+                                    setShowTabletInspectorDrawer(false);
+                                  }}
+                                  className="px-2.5 py-1 text-xs text-blue-700 bg-blue-50 hover:bg-blue-100 rounded font-medium cursor-pointer"
+                                >
+                                  定位正文段落
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              ) : activeBlock ? (
+                <div className="space-y-4">
+                  {inspectorTab === 'ai_suggestions' && (
+                    <div className="space-y-4">
+                      {/* Shortcut Revisions */}
+                      <div className="space-y-2">
+                        <span className="text-xs font-bold text-slate-700 block">快捷精修操作：</span>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <button
+                            onClick={() => handleRequestRevision('compress')}
+                            disabled={isRevisionGenerating}
+                            className="px-3 py-2 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 rounded text-center transition-colors cursor-pointer font-medium disabled:opacity-50"
+                          >
+                            压缩精炼
+                          </button>
+                          <button
+                            onClick={() => handleRequestRevision('expand')}
+                            disabled={isRevisionGenerating}
+                            className="px-3 py-2 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 rounded text-center transition-colors cursor-pointer font-medium disabled:opacity-50"
+                          >
+                            补充表达
+                          </button>
+                          <button
+                            onClick={() => handleRequestRevision('formal')}
+                            disabled={isRevisionGenerating}
+                            className="px-3 py-2 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 rounded text-center transition-colors cursor-pointer font-medium disabled:opacity-50"
+                          >
+                            正式文风
+                          </button>
+                          <button
+                            onClick={() => handleRequestRevision('highlight')}
+                            disabled={isRevisionGenerating}
+                            className="px-3 py-2 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 rounded text-center transition-colors cursor-pointer font-medium disabled:opacity-50"
+                          >
+                            突出重点
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Custom Prompt Box */}
+                      <form onSubmit={handleRequestCustomRevision} className="space-y-2 pt-2 border-t border-slate-100">
+                        <label className="text-xs font-bold text-slate-700 block">自定义改写要求：</label>
+                        <textarea
+                          rows={2}
+                          value={customPromptInput}
+                          onChange={(e) => setCustomPromptInput(e.target.value)}
+                          placeholder="例如：精简表达并保留数据、改成面向单位负责人的汇报口吻..."
+                          className="w-full p-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
+                        />
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={isRevisionGenerating || !customPromptInput.trim()}
+                            className="px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-2xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>生成建议</span>
+                          </button>
+                        </div>
+                      </form>
+
+                      {/* Revision editor if available */}
+                      {revisionSuggestion && (
+                        <ParagraphSuggestionEditor
+                          task={task}
+                          currentDraft={currentDraft}
+                          suggestion={revisionSuggestion}
+                          activeRole={activeRole}
+                          activeBlock={activeBlock}
+                          activeCompletedRunId={completedRevisionRunIdRef.current}
+                          isGenerating={isRevisionGenerating}
+                          onAdopt={(text) => {
+                            handleAdoptRevision(text);
+                            setShowTabletInspectorDrawer(false);
+                          }}
+                          onDiscard={handleDiscardRevision}
+                          onRegenerate={handleRegenerateRevision}
+                          onJumpToTargetBlock={handleJumpToTargetBlock}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {inspectorTab === 'material_evidence' && (
+                    <div className="space-y-3">
+                      <span className="text-xs font-bold text-slate-700 block">
+                        第 {activeBlock.order} 段关联事实与出处：
+                      </span>
+                      {activeBlock.referencedFactIds.length > 0 ? (
+                        activeBlock.referencedFactIds.map((factId) => {
+                          const fact = task.facts.find((f) => f.id === factId);
+                          if (!fact) return null;
+                          const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
+                          return (
+                            <div key={fact.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1.5">
+                              <div className="font-semibold text-slate-800">{fact.metric}: {fact.value}{fact.unit}</div>
+                              <div className="text-[11px] text-slate-500">统计期间：{resolved.effectivePeriod}</div>
+                              {resolved.effectiveSnippet && (
+                                <div className="pt-1.5 border-t border-slate-200/60 flex items-center justify-between">
+                                  <span className="text-[10px] text-slate-500 truncate pr-1">
+                                    出处：{resolved.effectiveDocName}
+                                  </span>
+                                  <button
+                                    onClick={() => onViewSnippet(resolved.effectiveSnippet!, fact)}
+                                    className="text-xs text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    <span>在抽屉中核验全文</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-400 text-center italic">
+                          本段尚未绑定量化事实依据
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="py-12 text-center text-xs text-slate-400">
+                  点击正文段落查看其依据与AI建议
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {showSaveVersionModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-slate-200 overflow-hidden">

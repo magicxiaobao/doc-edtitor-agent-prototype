@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Task,
   DraftVersion,
@@ -26,7 +26,10 @@ import {
   Sliders,
   Eye,
   CheckCircle2,
-  Info
+  Info,
+  Maximize2,
+  X,
+  Tag
 } from 'lucide-react';
 
 interface ParagraphSuggestionEditorProps {
@@ -64,6 +67,25 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
 
   // Copy feedback tooltip
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  // Wide modal review mode
+  const [isWideModalOpen, setIsWideModalOpen] = useState(false);
+  const openWideBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Keyboard Escape handler for wide review modal
+  useEffect(() => {
+    if (!isWideModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsWideModalOpen(false);
+        setTimeout(() => {
+          openWideBtnRef.current?.focus();
+        }, 30);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isWideModalOpen]);
 
   // Reset pendingText whenever suggestion changes (new runId or target block)
   useEffect(() => {
@@ -151,30 +173,34 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
       data-testid="paragraph-suggestion-editor"
       className="bg-blue-50/75 border-2 border-blue-200 rounded-lg flex flex-col shadow-xs overflow-hidden"
     >
-      {/* 1. Header with Metadata & Fine-tune Status */}
-      <div className="p-3 bg-white border-b border-blue-200 flex items-center justify-between">
+      {/* 1. Header with Metadata, Scope Label & Wide Review Trigger */}
+      <div className="p-3 bg-white border-b border-blue-200 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md bg-blue-100 flex items-center justify-center text-blue-700">
+          <div className="w-6 h-6 rounded-md bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
             <Sparkles className="w-3.5 h-3.5" />
           </div>
           <div>
-            <div className="font-bold text-xs text-blue-950 flex items-center gap-1.5">
-              <span>第 {targetOrderDisplay} 段建议</span>
+            <div className="font-bold text-sm text-blue-950 flex items-center gap-1.5 flex-wrap">
+              <span>{`仅修改第${targetOrderDisplay}段`}</span>
               {isFineTuned && (
                 <span
                   data-testid="badge-fine-tuned"
-                  className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                  className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5"
                 >
-                  <Sliders className="w-2.5 h-2.5 text-amber-700" />
+                  <Sliders className="w-3 h-3 text-amber-700" />
                   已人工微调
                 </span>
               )}
             </div>
+            <div className="text-xs text-slate-500 font-normal mt-0.5 flex items-center gap-1">
+              <Tag className="w-3 h-3 text-blue-600" />
+              <span>操作范围：仅限第{targetOrderDisplay}段（局部改写，不影响其他段落）</span>
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 text-[11px]">
-          <span className="bg-blue-100/80 text-blue-800 px-2 py-0.5 rounded font-medium">
+        <div className="flex items-center gap-2">
+          <span className="bg-blue-100/80 text-blue-800 px-2 py-0.5 rounded text-xs font-medium">
             {suggestion.action === 'custom'
               ? `指令：${suggestion.customPrompt?.slice(0, 10) || '改写'}...`
               : suggestion.action === 'compress'
@@ -187,6 +213,19 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
               ? '突出重点'
               : suggestion.action}
           </span>
+          <button
+            ref={openWideBtnRef}
+            type="button"
+            data-testid="btn-open-wide-modal"
+            onClick={() => setIsWideModalOpen(true)}
+            className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+            title="展开宽屏评审面板（差异对比与微调）"
+            aria-label="展开宽屏评审面板"
+            aria-expanded={isWideModalOpen}
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            <span>宽屏评审</span>
+          </button>
         </div>
       </div>
 
@@ -515,6 +554,331 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           </button>
         </div>
       </div>
+
+      {/* 5. Wide Review Modal Dialog (承接人工微调、差异展示及固定操作区，支持键盘Esc关闭与焦点恢复) */}
+      {isWideModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="wide-review-title"
+          data-testid="modal-wide-suggestion-review"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+        >
+          <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-300 overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 id="wide-review-title" className="font-bold text-base text-slate-900">
+                      局部AI建议宽屏评审 · 仅修改第 {targetOrderDisplay} 段
+                    </h3>
+                    {isFineTuned && (
+                      <span className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                        <Sliders className="w-3 h-3 text-amber-700" />
+                        已人工微调
+                      </span>
+                    )}
+                    <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded font-medium">
+                      {suggestion.action === 'custom'
+                        ? `指令：${suggestion.customPrompt || '改写'}`
+                        : suggestion.action === 'compress'
+                        ? '压缩精炼'
+                        : suggestion.action === 'expand'
+                        ? '补充表达'
+                        : suggestion.action === 'formal'
+                        ? '正式文风'
+                        : suggestion.action === 'highlight'
+                        ? '突出重点'
+                        : suggestion.action}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    操作范围：仅限第{targetOrderDisplay}段（局部改写，不影响整篇其他段落）· 支持键盘 Escape 关闭
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                data-testid="btn-close-wide-modal"
+                onClick={() => {
+                  setIsWideModalOpen(false);
+                  setTimeout(() => openWideBtnRef.current?.focus(), 30);
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+                aria-label="关闭宽屏评审"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Associated Comment Banner */}
+              {suggestion.sourceCommentId && (
+                <div className="p-3 bg-blue-50/80 rounded-lg border border-blue-200 text-xs text-blue-950 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold flex items-center gap-1 text-blue-900 text-sm">
+                      <MessageSquare className="w-4 h-4 text-blue-600 shrink-0" />
+                      关联审阅意见【{suggestion.sourceCommentReviewer || '审阅人'}】
+                    </span>
+                    <span className="text-xs font-mono text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">
+                      {suggestion.sourceCommentId}
+                    </span>
+                  </div>
+                  {suggestion.sourceCommentSummary && (
+                    <p className="text-xs text-slate-700 leading-relaxed bg-white/80 p-2 rounded border border-blue-100">
+                      “{suggestion.sourceCommentSummary}”
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Conflict Warning */}
+              {validation.isModifiedAfter && (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-rose-900 text-xs space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-rose-800 text-sm">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>建议已失效（正文基准已被人工编辑修改）</span>
+                  </div>
+                  <p className="text-xs text-rose-800 leading-relaxed">
+                    目标段落自建议生成后已被人工编辑修改，基准变动导致建议失效。为防止直接覆盖人工文本，请重新基于当前文本生成建议。
+                  </p>
+                </div>
+              )}
+
+              {/* View Mode Tabs in Modal */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('diff')}
+                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    viewMode === 'diff'
+                      ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                      : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>修改差异对比</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('editor')}
+                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    viewMode === 'editor'
+                      ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                      : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>待采纳正文编辑 {isFineTuned ? '(已微调)' : '(可微调)'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('baseline')}
+                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    viewMode === 'baseline'
+                      ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                      : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>生成时基准原文</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('ai_original')}
+                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    viewMode === 'ai_original'
+                      ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                      : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>AI原始建议</span>
+                </button>
+              </div>
+
+              {/* Wide View Panels */}
+              {viewMode === 'diff' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+                    <span>正文修改差异对比：</span>
+                    <span className="font-mono">
+                      原 {baseLength} 字 → 现 {currentLength} 字 ({lengthDelta >= 0 ? `+${lengthDelta}` : lengthDelta} 字)
+                    </span>
+                  </div>
+                  <div className="p-4 bg-slate-50/80 rounded-lg border border-slate-200 text-slate-900 text-base font-serif leading-relaxed select-text min-h-[160px]">
+                    {dynamicDiffSegments.map((seg, sIdx) => {
+                      if (seg.type === 'equal') {
+                        return <span key={sIdx} className="text-slate-800">{seg.text}</span>;
+                      }
+                      if (seg.type === 'removed') {
+                        return (
+                          <span
+                            key={sIdx}
+                            className="bg-rose-100 text-rose-800 line-through decoration-rose-500 px-0.5 rounded-xs"
+                            title="被删减文本"
+                          >
+                            {seg.text}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span
+                          key={sIdx}
+                          className="bg-emerald-100 text-emerald-900 font-medium underline decoration-emerald-500 px-0.5 rounded-xs"
+                          title="新增/替换文本"
+                        >
+                          {seg.text}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {viewMode === 'editor' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-700 font-semibold">
+                    <span>主笔人工微调编辑器（改写将直接写入当前草稿）：</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-slate-500">{currentLength} 字</span>
+                      {isFineTuned && (
+                        <button
+                          type="button"
+                          onClick={handleResetToAiOriginal}
+                          className="text-xs text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                        >
+                          重置为AI建议
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <textarea
+                    rows={8}
+                    value={pendingText}
+                    onChange={(e) => setPendingText(e.target.value)}
+                    className="w-full p-4 border border-blue-300 rounded-lg text-base font-serif leading-relaxed text-slate-900 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    placeholder="在此直接微调正文..."
+                  />
+                </div>
+              )}
+
+              {viewMode === 'baseline' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                    <span>建议生成时的基准正文（原始存证）：</span>
+                    <span className="font-mono">{suggestion.baseContent.length} 字</span>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-slate-700 text-base font-serif leading-relaxed select-text min-h-[140px]">
+                    {suggestion.baseContent}
+                  </div>
+                </div>
+              )}
+
+              {viewMode === 'ai_original' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-blue-900 font-semibold">
+                    <span>AI原始建议文本（微调不覆盖此原始记录）：</span>
+                    <span className="font-mono text-slate-500">{suggestion.suggestedText.length} 字</span>
+                  </div>
+                  <div className="p-4 bg-blue-50/50 rounded-lg border border-blue-200 text-slate-900 text-base font-serif leading-relaxed select-text min-h-[140px]">
+                    {suggestion.suggestedText}
+                  </div>
+                </div>
+              )}
+
+              {/* Explanations in Wide Modal */}
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-2">
+                <div>
+                  <strong className="text-slate-900">AI原始建议说明：</strong>
+                  <span className="text-slate-700 ml-1.5 leading-relaxed">{suggestion.diffExplanation}</span>
+                </div>
+                {isFineTuned && (
+                  <div className="p-2 bg-amber-50 rounded border border-amber-200 text-amber-900 text-xs flex items-start gap-1.5">
+                    <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>人工微调标识：</strong>待采纳文本已由主笔人工微调，实际采纳将严格写入微调后内容；上述AI说明针对原始建议，不冒充对人工修改的重新核验。
+                    </span>
+                  </div>
+                )}
+                {suggestion.needsVerificationNotes && suggestion.needsVerificationNotes.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200">
+                    <strong className="text-amber-800">需核对项：</strong>
+                    <ul className="list-disc list-inside mt-1 space-y-0.5 text-amber-900 text-xs">
+                      {suggestion.needsVerificationNotes.map((note, nIdx) => (
+                        <li key={nIdx}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Fixed Footer Actions */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyText}
+                  className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Copy className="w-4 h-4 text-slate-500" />
+                  <span>{copyFeedback || '复制文本'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onRegenerate}
+                  disabled={isGenerating}
+                  className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4 text-slate-500" />
+                  <span>重新生成</span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDiscard();
+                    setIsWideModalOpen(false);
+                  }}
+                  className="px-4 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-lg text-sm font-medium cursor-pointer transition-colors"
+                >
+                  放弃建议
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onAdopt(pendingText);
+                    setIsWideModalOpen(false);
+                  }}
+                  disabled={isAdoptDisabled}
+                  className={`px-5 py-2 rounded-lg text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all ${
+                    isAdoptDisabled
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer active:scale-98'
+                  }`}
+                  title={adoptDisabledReason || '采纳写入目标段落'}
+                >
+                  <Check className="w-4 h-4" />
+                  <span>
+                    {isFineTuned
+                      ? `采纳微调至第${targetOrderDisplay}段`
+                      : `采纳到第${targetOrderDisplay}段`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
