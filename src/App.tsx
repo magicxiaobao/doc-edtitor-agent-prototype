@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Task, 
   TaskStage, 
@@ -49,9 +49,14 @@ export function App() {
     setViewingFact(fact || null);
   };
 
-  // Requirement 8: Clear navigation intent when switching tasks to prevent cross-task leakage
+  // Requirement 8: Clear navigation intent ONLY when switching to a different task to prevent cross-task leakage
+  // Do NOT clear on initial mount or StrictMode re-mount!
+  const previousTaskIdRef = React.useRef<string>(currentTaskId);
   useEffect(() => {
-    setReviewNavIntent(null);
+    if (previousTaskIdRef.current !== currentTaskId) {
+      setReviewNavIntent(null);
+      previousTaskIdRef.current = currentTaskId;
+    }
   }, [currentTaskId]);
 
   // Sync state to localStorage whenever tasks, currentTaskId, or activeRole changes
@@ -172,7 +177,11 @@ export function App() {
     handleUpdateCurrentTask({ currentStage: nextStage });
   };
 
-  const handleNavigateToReviewComment = (commentId: string, targetDraftId?: string) => {
+  const handleClearNavIntent = useCallback(() => {
+    setReviewNavIntent(null);
+  }, []);
+
+  const handleNavigateToReviewComment = useCallback((commentId: string, targetDraftId?: string) => {
     setReviewNavIntent({
       taskId: currentTask.id,
       commentId,
@@ -180,7 +189,7 @@ export function App() {
       timestamp: Date.now(),
     });
     handleUpdateCurrentTask({ currentStage: 'drafting' });
-  };
+  }, [currentTask.id, currentTask.currentDraftId, handleUpdateCurrentTask]);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 text-sm">
@@ -321,7 +330,7 @@ export function App() {
             activeRole={activeRole}
             onSelectStage={handleSelectStage}
             navIntent={reviewNavIntent}
-            onClearNavIntent={() => setReviewNavIntent(null)}
+            onClearNavIntent={handleClearNavIntent}
           />
         )}
 

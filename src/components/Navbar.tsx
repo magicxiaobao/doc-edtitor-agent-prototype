@@ -33,7 +33,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLoadScenario,
   onResetData,
 }) => {
-  const [showSandboxBar, setShowSandboxBar] = useState(true);
+  const [showSandboxBar, setShowSandboxBar] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 shadow-sm border-b border-slate-800">

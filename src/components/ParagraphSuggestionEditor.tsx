@@ -44,6 +44,8 @@ interface ParagraphSuggestionEditorProps {
   onDiscard: () => void;
   onRegenerate: () => void;
   onJumpToTargetBlock?: (blockId: string) => void;
+  pendingText?: string;
+  onPendingTextChange?: (text: string) => void;
 }
 
 export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps> = ({
@@ -58,9 +60,21 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
   onDiscard,
   onRegenerate,
   onJumpToTargetBlock,
+  pendingText: controlledPendingText,
+  onPendingTextChange,
 }) => {
-  // Pending editable text (initialized to pristine AI suggestion, can be fine-tuned)
-  const [pendingText, setPendingText] = useState<string>(suggestion.suggestedText);
+  // Pending editable text (supports controlled from parent or internal state fallback)
+  const isControlled = controlledPendingText !== undefined;
+  const [internalPendingText, setInternalPendingText] = useState<string>(suggestion.suggestedText);
+  const pendingText = isControlled ? controlledPendingText : internalPendingText;
+
+  const setPendingText = (newVal: string) => {
+    if (isControlled) {
+      onPendingTextChange?.(newVal);
+    } else {
+      setInternalPendingText(newVal);
+    }
+  };
 
   // View modes: 'diff' (差异对比), 'editor' (微调编辑), 'baseline' (生成基准原文), 'ai_original' (AI原始建议)
   const [viewMode, setViewMode] = useState<'diff' | 'editor' | 'baseline' | 'ai_original'>('diff');
@@ -72,26 +86,31 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
   const [isWideModalOpen, setIsWideModalOpen] = useState(false);
   const openWideBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Keyboard Escape handler for wide review modal
+  // Keyboard Escape handler for wide review modal (uses capture phase to prevent bubbling to parent drawer)
   useEffect(() => {
     if (!isWideModalOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
         setIsWideModalOpen(false);
         setTimeout(() => {
           openWideBtnRef.current?.focus();
         }, 30);
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isWideModalOpen]);
 
-  // Reset pendingText whenever suggestion changes (new runId or target block)
+  // Reset internalPendingText whenever suggestion changes (if not controlled)
   useEffect(() => {
-    setPendingText(suggestion.suggestedText);
+    if (!isControlled) {
+      setInternalPendingText(suggestion.suggestedText);
+    }
     setViewMode('diff');
-  }, [suggestion.runId, suggestion.targetBlockId]);
+  }, [suggestion.runId, suggestion.targetBlockId, isControlled, suggestion.suggestedText]);
 
   // Target block in current draft
   const targetBlock = useMemo(() => {
@@ -242,12 +261,12 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <MessageSquare className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                 关联审阅意见【{suggestion.sourceCommentReviewer || '审阅人'}】
               </span>
-              <span className="text-[10px] font-mono text-blue-600 bg-blue-50 px-1 py-0.5 rounded">
+              <span className="text-xs font-mono text-blue-600 bg-blue-50 px-1 py-0.5 rounded">
                 {suggestion.sourceCommentId}
               </span>
             </div>
             {suggestion.sourceCommentSummary && (
-              <p className="text-[11px] text-slate-600 leading-relaxed bg-slate-50/80 p-1.5 rounded">
+              <p className="text-xs text-slate-600 leading-relaxed bg-slate-50/80 p-1.5 rounded">
                 “{suggestion.sourceCommentSummary}”
               </p>
             )}
@@ -258,7 +277,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         {isDifferentBlockSelected && targetBlock && (
           <div className="p-2 bg-amber-50 border border-amber-300 rounded text-amber-900 text-xs space-y-1">
             <div className="flex items-center justify-between">
-              <span className="font-bold flex items-center gap-1 text-[11px]">
+              <span className="font-bold flex items-center gap-1 text-xs">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                 当前光标在第 {activeBlock?.order} 段，建议绑定第 {targetBlock.order} 段
               </span>
@@ -266,7 +285,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <button
                   type="button"
                   onClick={() => onJumpToTargetBlock(targetBlock.id)}
-                  className="text-blue-700 hover:underline font-bold text-[11px] flex items-center gap-0.5 cursor-pointer"
+                  className="text-blue-700 hover:underline font-bold text-xs flex items-center gap-0.5 cursor-pointer"
                 >
                   <CornerDownRight className="w-3 h-3" />
                   定位目标段
@@ -286,7 +305,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>建议已失效（正文基准已被人工编辑修改）</span>
             </div>
-            <p className="text-[11px] text-rose-800 leading-relaxed">
+            <p className="text-xs text-rose-800 leading-relaxed">
               目标段落自建议生成后已被修改，基准变动导致建议失效。为防止直接覆盖人工文本，请重新基于当前文本生成建议。
             </p>
           </div>
@@ -351,7 +370,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         {/* View Mode 1: Diff View (差异对比) */}
         {viewMode === 'diff' && (
           <div data-testid="view-diff-content" className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
+            <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>基准原文 → 当前待采纳文本差异</span>
               <span data-testid="word-count-delta" className="font-mono text-blue-900 font-semibold">
                 字数：原 {baseLength} 字 → 现 {currentLength} 字 ({lengthDelta >= 0 ? `+${lengthDelta}` : `${lengthDelta}`}字)
@@ -370,7 +389,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                       className="bg-emerald-100 text-emerald-900 px-1 py-0.5 mx-0.5 rounded font-medium border-b-2 border-emerald-500 inline-flex items-center gap-0.5"
                       title="新增内容"
                     >
-                      <span className="text-[10px] font-bold bg-emerald-300 text-emerald-900 px-1 rounded font-sans">
+                      <span className="text-xs font-bold bg-emerald-300 text-emerald-900 px-1 rounded font-sans">
                         +新增
                       </span>
                       <span>{seg.text}</span>
@@ -385,7 +404,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                       className="bg-rose-100 text-rose-900 line-through px-1 py-0.5 mx-0.5 rounded opacity-75 border-b-2 border-rose-400 inline-flex items-center gap-0.5"
                       title="删减内容"
                     >
-                      <span className="text-[10px] font-bold bg-rose-300 text-rose-900 px-1 rounded no-underline font-sans">
+                      <span className="text-xs font-bold bg-rose-300 text-rose-900 px-1 rounded no-underline font-sans">
                         -删减
                       </span>
                       <span>{seg.text}</span>
@@ -401,7 +420,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         {/* View Mode 2: Fine-tune Editor (待采纳文本，可直接编辑微调) */}
         {viewMode === 'editor' && (
           <div data-testid="view-editor-content" className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px]">
+            <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-700">
                 可直接在下方微调修改待采纳正文：
               </span>
@@ -425,7 +444,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
               className="w-full p-2.5 bg-white border-2 border-blue-300 rounded text-slate-900 text-sm font-serif leading-relaxed focus:outline-none focus:border-blue-600 resize-y"
               placeholder="可在此微调正文，实际采纳将直接写入此处修改后的文本..."
             />
-            <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <div className="flex items-center justify-between text-xs text-slate-500">
               <span>修改后将动态重新计算正文差异及字数增减</span>
               <span className="font-mono">
                 当前字数：<strong className="text-blue-900">{pendingText.length}</strong> 字
@@ -437,7 +456,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         {/* View Mode 3: Baseline Text (生成时原文) */}
         {viewMode === 'baseline' && (
           <div data-testid="view-baseline-content" className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold">
+            <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
               <span>建议生成时的基准正文（原始存证）：</span>
               <span className="font-mono">{suggestion.baseContent.length} 字</span>
             </div>
@@ -450,7 +469,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         {/* View Mode 4: AI Original Suggestion (未覆盖的AI原始生成建议) */}
         {viewMode === 'ai_original' && (
           <div data-testid="view-ai-original-content" className="space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-blue-900 font-bold">
+            <div className="flex items-center justify-between text-xs text-blue-900 font-bold">
               <span>AI原始建议文本（微调不覆盖此原始记录）：</span>
               <span className="font-mono text-slate-500">{suggestion.suggestedText.length} 字</span>
             </div>
@@ -471,7 +490,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           {isFineTuned && (
             <div
               data-testid="notice-fine-tuned-disclaimer"
-              className="p-1.5 bg-amber-50 rounded border border-amber-200 text-amber-900 text-[11px] flex items-start gap-1"
+              className="p-1.5 bg-amber-50 rounded border border-amber-200 text-amber-900 text-xs flex items-start gap-1"
             >
               <Info className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
               <span>
@@ -483,7 +502,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           {suggestion.needsVerificationNotes && suggestion.needsVerificationNotes.length > 0 && (
             <div className="pt-1 border-t border-slate-100">
               <strong className="text-amber-800">需核对项：</strong>
-              <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-amber-900 text-[11px]">
+              <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-amber-900 text-xs">
                 {suggestion.needsVerificationNotes.map((note, nIdx) => (
                   <li key={nIdx}>{note}</li>
                 ))}
@@ -503,10 +522,10 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="btn-copy-suggestion"
             onClick={handleCopyText}
-            className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors"
+            className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-md text-sm font-medium flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
             title="复制当前文本至剪贴板"
           >
-            <Copy className="w-3.5 h-3.5 text-slate-500" />
+            <Copy className="w-4 h-4 text-slate-500" />
             <span>{copyFeedback || '复制文本'}</span>
           </button>
           <button
@@ -514,10 +533,10 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             data-testid="btn-regenerate-suggestion"
             onClick={onRegenerate}
             disabled={isGenerating}
-            className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-md text-sm font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shadow-2xs"
             title="以当前段落正文重新生成建议"
           >
-            <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+            <RefreshCw className="w-4 h-4 text-slate-500" />
             <span>重新生成</span>
           </button>
         </div>
@@ -527,7 +546,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="btn-discard-suggestion"
             onClick={onDiscard}
-            className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-600 rounded text-xs font-medium cursor-pointer transition-colors"
+            className="px-3.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-md text-sm font-medium cursor-pointer transition-colors shadow-2xs"
             title="放弃此建议（正文不改变）"
           >
             放弃
@@ -538,7 +557,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             data-testid="btn-adopt-suggestion"
             onClick={() => onAdopt(pendingText)}
             disabled={isAdoptDisabled}
-            className={`px-4 py-1.5 rounded text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all ${
+            className={`px-4 py-1.5 rounded-md text-sm font-bold shadow-xs flex items-center gap-1.5 transition-all ${
               isAdoptDisabled
                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer active:scale-98'
@@ -562,6 +581,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           aria-modal="true"
           aria-labelledby="wide-review-title"
           data-testid="modal-wide-suggestion-review"
+          data-nested-modal="true"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
         >
           <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-300 overflow-hidden animate-in fade-in zoom-in duration-150">

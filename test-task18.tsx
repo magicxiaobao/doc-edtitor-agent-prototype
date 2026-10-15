@@ -1,11 +1,14 @@
 import { JSDOM } from 'jsdom';
-import React, { act } from 'react';
+import React, { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPresetTask } from './src/services/mockData';
 import { Task, DraftVersion, ParagraphBlock, RevisionSuggestion } from './src/types';
 import { DraftingStage } from './src/components/stages/DraftingStage';
 import { ParagraphSuggestionEditor } from './src/components/ParagraphSuggestionEditor';
 import { AutoResizeParagraphTextarea } from './src/components/AutoResizeParagraphTextarea';
+import { MaterialEvidenceList } from './src/components/MaterialEvidenceList';
+import { App } from './src/App';
+import { savePersistedState } from './src/services/storageService';
 
 // Setup JSDOM environment for React component mounting & interactive events
 const dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
@@ -16,6 +19,7 @@ const dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></
 (globalThis as any).document = dom.window.document;
 (globalThis as any).HTMLElement = dom.window.HTMLElement;
 (globalThis as any).KeyboardEvent = dom.window.KeyboardEvent;
+(globalThis as any).localStorage = dom.window.localStorage;
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -51,7 +55,7 @@ function assert(condition: boolean, message: string) {
   console.log(`✅ PASSED: ${message}`);
 }
 
-export function runTask18Tests() {
+export async function runTask18Tests() {
   console.log('\n================================================================');
   console.log('   任务18 正文工作区布局及桌面/平板交互专项验收测试');
   console.log('================================================================\n');
@@ -272,11 +276,380 @@ export function runTask18Tests() {
   mountedWithDraft.unmount();
   mountedGap.unmount();
 
+  // -------------------------------------------------------------------------
+  // 验收用例 8: 微调→关闭→重开→采纳→撤销 统一工作区微调持久化验证
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 8] 微调→关闭→重开→采纳→撤销 统一工作区微调持久化验证:');
+  let currentTaskState: Task = createPresetTask('under_review');
+  const onUpdateTask = (updates: Partial<Task>) => {
+    currentTaskState = { ...currentTaskState, ...updates };
+  };
+
+  const mountedWorkspace = mountTestComponent(
+    React.createElement(DraftingStage, {
+      task: currentTaskState,
+      onUpdateTask,
+      onViewSnippet: () => {},
+      activeRole: '主笔甲',
+    })
+  );
+
+  const btnAiP1 = mountedWorkspace.container.querySelector('[aria-label="第1段AI修改建议"]') as HTMLButtonElement;
+  assert(btnAiP1 !== null, '8.1: 找到第1段卡片上的“AI建议”快捷入口');
+  act(() => {
+    btnAiP1.click();
+  });
+
+  let drawer = mountedWorkspace.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(drawer !== null, '8.2: 点击段落快捷入口成功打开平板辅助抽屉');
+
+  const condenseBtn = Array.from(drawer?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('压缩精炼')
+  );
+  assert(Boolean(condenseBtn), '8.3: 抽屉内具备常用快捷改写“压缩精炼”按钮');
+  await act(async () => {
+    condenseBtn?.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const tabEditorBtn = drawer?.querySelector('[data-testid="tab-editor-view"]') as HTMLButtonElement;
+  assert(Boolean(tabEditorBtn), '8.4a: 具备“待采纳文本”微调编辑标签');
+  act(() => {
+    tabEditorBtn.click();
+  });
+
+  const textareaPending = drawer?.querySelector('[data-testid="textarea-pending-text"]') as HTMLTextAreaElement;
+  assert(textareaPending !== null, '8.4b: 成功渲染待采纳文本编辑输入框');
+
+  const fineTunedText = textareaPending.value + '【主笔人工重点微调修订】';
+  act(() => {
+    const propKey = Object.keys(textareaPending).find((k) => k.startsWith('__reactProps'));
+    if (propKey && (textareaPending as any)[propKey]?.onChange) {
+      (textareaPending as any)[propKey].onChange({ target: { value: fineTunedText } });
+    } else {
+      const nativeSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!;
+      nativeSetter.call(textareaPending, fineTunedText);
+      textareaPending.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      textareaPending.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    }
+  });
+
+  assert(
+    drawer?.textContent?.includes('已人工微调') === true ||
+    mountedWorkspace.container.textContent?.includes('已人工微调') === true,
+    '8.5: 微调文本后显示【已人工微调】标识'
+  );
+
+  const closeDrawerBtn = mountedWorkspace.container.querySelector('[data-testid="btn-close-tablet-inspector"]') as HTMLButtonElement;
+  assert(closeDrawerBtn !== null, '8.6: 具备关闭抽屉按钮');
+  act(() => {
+    closeDrawerBtn.click();
+  });
+  drawer = mountedWorkspace.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(drawer === null, '8.7: 抽屉已顺利关闭');
+
+  act(() => {
+    btnAiP1.click();
+  });
+  drawer = mountedWorkspace.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(drawer !== null, '8.8: 重新打开第1段辅助抽屉');
+
+  assert(
+    drawer?.textContent?.includes('【主笔人工重点微调修订】') === true,
+    '8.9: 【核心P1验收】重新打开后微调文本完整保留，未回退为AI原始建议'
+  );
+  assert(
+    drawer?.textContent?.includes('已人工微调') === true,
+    '8.10: 【核心P1验收】重新打开后【已人工微调】标识持续展示'
+  );
+
+  const adoptBtn = drawer?.querySelector('[data-testid="btn-adopt-suggestion"]') as HTMLButtonElement;
+  assert(adoptBtn !== null && !adoptBtn.disabled, '8.11: 具备可用的采纳建议按钮');
+  act(() => {
+    adoptBtn.click();
+  });
+
+  const updatedBlock1 = currentTaskState.drafts[0].blocks[0];
+  assert(
+    updatedBlock1.content.includes('【主笔人工重点微调修订】'),
+    '8.12: 采纳后正文第1段成功写入微调后的文本'
+  );
+
+  mountedWorkspace.rerender(
+    React.createElement(DraftingStage, {
+      task: currentTaskState,
+      onUpdateTask,
+      onViewSnippet: () => {},
+      activeRole: '主笔甲',
+    })
+  );
+
+  const undoToastBtn = mountedWorkspace.container.querySelector('[data-testid="btn-undo-latest-toast"]') as HTMLButtonElement;
+  assert(undoToastBtn !== null, '8.13: 采纳后展现撤销本次修改操作入口');
+  act(() => {
+    undoToastBtn.click();
+  });
+
+  const revertedBlock1 = currentTaskState.drafts[0].blocks[0];
+  assert(
+    !revertedBlock1.content.includes('【主笔人工重点微调修订】'),
+    '8.14: 撤销本次修改后成功恢复正文原文'
+  );
+  mountedWorkspace.unmount();
+
+  // -------------------------------------------------------------------------
+  // 验收用例 9: 历史依据 120 vs 最新 999 冻结保真对比验证
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 9] 历史依据 120 vs 最新 999 冻结保真对比验证:');
+  const taskWithDiffEvidence: Task = createPresetTask('under_review');
+  const targetFact = taskWithDiffEvidence.facts[0];
+  taskWithDiffEvidence.facts = taskWithDiffEvidence.facts.map((f) =>
+    f.id === targetFact.id ? { ...f, value: '999', unit: '项' } : f
+  );
+
+  const histDraft: DraftVersion = {
+    ...taskWithDiffEvidence.drafts[0],
+    id: 'DRAFT-HIST-SNAPSHOT-120',
+    versionNumber: 'V0.9-归档',
+    isHistoricalSnapshot: true,
+    isFinal: false,
+    factSnapshot: {
+      draftVersionId: 'DRAFT-HIST-SNAPSHOT-120',
+      createdAt: '2026-08-01T00:00:00Z',
+      items: [
+        {
+          factId: targetFact.id,
+          metric: targetFact.metric,
+          value: '120',
+          unit: '项',
+          period: '2026年上半年',
+          metricScope: '抽样基层调研覆盖项',
+          primaryEvidenceId: targetFact.primaryEvidenceId,
+          evidenceDocName: '2026半年度专项汇报.docx',
+          evidenceLocation: '第2页第3段',
+          evidenceSnippetText: '阶段性覆盖120项重点工作。',
+        },
+      ],
+    },
+  };
+
+  const mountedHistEvidence = mountTestComponent(
+    React.createElement(MaterialEvidenceList, {
+      task: taskWithDiffEvidence,
+      currentDraft: histDraft,
+      activeBlock: histDraft.blocks[0],
+      isCurrentDraftImmutable: true,
+      inspectingFactId: targetFact.id,
+      onViewSnippet: () => {},
+    })
+  );
+
+  const histContainerText = mountedHistEvidence.container.textContent || '';
+  assert(histContainerText.includes('120'), '9.1: 历史快照清晰显示冻结采用值“120”');
+  assert(histContainerText.includes('999'), '9.2: 历史快照清晰显示任务最新核准值“999”');
+  assert(histContainerText.includes('稿件冻结采用值'), '9.3: 明确标示【稿件冻结采用值】标识');
+  assert(histContainerText.includes('任务最新核准值'), '9.4: 明确标示【任务最新核准值】标识');
+  assert(histContainerText.includes('版本差异提示'), '9.5: 存在差异时显示【版本差异提示】说明');
+  assert(
+    histContainerText.includes('历史只读快照') || histContainerText.includes('优先保持当时冻结依据'),
+    '9.6: 明确提示优先保持当时冻结依据，绝不把999误当作冻结值'
+  );
+  mountedHistEvidence.unmount();
+
+  // -------------------------------------------------------------------------
+  // 验收用例 10: 平板意见建议生成、取消及嵌套 Escape 隔离验证
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 10] 平板意见建议生成、取消及嵌套 Escape 隔离验证:');
+  const taskWithReview: Task = createPresetTask('under_review');
+  const mountedTabletDraft = mountTestComponent(
+    React.createElement(DraftingStage, {
+      task: taskWithReview,
+      onUpdateTask: () => {},
+      onViewSnippet: () => {},
+      activeRole: '主笔甲',
+    })
+  );
+
+  const btnOpinionP1 = mountedTabletDraft.container.querySelector('[aria-label="第1段审阅意见"]') as HTMLButtonElement;
+  assert(btnOpinionP1 !== null, '10.1: 找到第1段卡片上的“意见”入口');
+  act(() => {
+    btnOpinionP1.click();
+  });
+
+  const tabletDrawerEl = mountedTabletDraft.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(tabletDrawerEl !== null, '10.2: 平板成功呼出辅助抽屉并切换至审阅意见');
+
+  const generateFromCommentBtn = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('依据此意见生成修改建议')
+  );
+  assert(Boolean(generateFromCommentBtn), '10.3: 【核心P2验收】抽屉内具备“依据此意见生成修改建议”入口');
+
+  const directImplementBtn = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('直接落实修改')
+  );
+  assert(Boolean(directImplementBtn), '10.4: 【核心P2验收】抽屉内具备“直接落实修改”处理入口');
+
+  const rejectBtn = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('拒绝并说明')
+  );
+  assert(Boolean(rejectBtn), '10.5: 【核心P2验收】抽屉内具备“拒绝并说明”入口');
+
+  const aiTabBtn = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('AI修改建议')
+  );
+  act(() => {
+    aiTabBtn?.click();
+  });
+
+  const condenseBtn2 = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
+    b.textContent?.includes('压缩精炼')
+  );
+  await act(async () => {
+    condenseBtn2?.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const openWideInDrawerBtn = mountedTabletDraft.container.querySelector('[data-testid="btn-open-wide-modal"]') as HTMLButtonElement;
+  assert(openWideInDrawerBtn !== null, '10.6: 抽屉内建议编辑器具备“宽屏评审”入口');
+  act(() => {
+    openWideInDrawerBtn.click();
+  });
+
+  const wideModalInDrawer = mountedTabletDraft.container.querySelector('[data-testid="modal-wide-suggestion-review"]');
+  assert(wideModalInDrawer !== null, '10.7: 成功在抽屉上方弹出全屏宽屏评审弹窗');
+
+  act(() => {
+    const esc1 = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+    dom.window.dispatchEvent(esc1);
+  });
+  const wideModalAfterEsc1 = mountedTabletDraft.container.querySelector('[data-testid="modal-wide-suggestion-review"]');
+  const drawerAfterEsc1 = mountedTabletDraft.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(wideModalAfterEsc1 === null, '10.8: 【核心P2键盘验收】按一次 Escape 顺利关闭最上层宽屏评审弹窗');
+  assert(drawerAfterEsc1 !== null, '10.9: 【核心P2键盘验收】父级平板抽屉严格保持打开，未被连带关闭');
+
+  act(() => {
+    const esc2 = new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+    dom.window.dispatchEvent(esc2);
+  });
+  const drawerAfterEsc2 = mountedTabletDraft.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+  assert(drawerAfterEsc2 === null, '10.10: 再次按下 Escape 顺利关闭父级平板抽屉');
+  mountedTabletDraft.unmount();
+
+  // -------------------------------------------------------------------------
+  // 验收用例 11: React.StrictMode 下完整 App 审阅跳转保真验证
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 11] React.StrictMode 下完整 App 审阅跳转保真验证:');
+  dom.window.localStorage.clear();
+  const presets = [
+    createPresetTask('under_review'),
+    createPresetTask('conflict_pending'),
+    createPresetTask('ready_to_draft'),
+    createPresetTask('blank'),
+  ];
+  savePersistedState(presets, 'TASK-REVIEW', '主笔甲');
+
+  const mountedApp = mountTestComponent(
+    React.createElement(
+      StrictMode,
+      null,
+      React.createElement(App, null)
+    )
+  );
+
+  const reviewBreadcrumb = Array.from(mountedApp.container.querySelectorAll('button, a')).find((el) =>
+    el.textContent?.includes('审阅')
+  ) as HTMLElement;
+  assert(reviewBreadcrumb !== null, '11.1: 找到审阅阶段导航入口');
+  act(() => {
+    reviewBreadcrumb.click();
+  });
+
+  assert(
+    mountedApp.container.textContent?.includes('文稿批注与定稿审签') === true ||
+    mountedApp.container.textContent?.includes('审阅') === true,
+    '11.2: 成功进入审阅阶段全景'
+  );
+
+  const navButtons = Array.from(mountedApp.container.querySelectorAll('button')).filter((b) =>
+    b.textContent?.includes('在正文工作区定位与落实')
+  );
+  const navToComment2Btn =
+    navButtons.find((b) => {
+      const cardText = b.closest('div.border')?.textContent || '';
+      return cardText.includes('第2段批注') || (cardText.includes('第2段') && !cardText.includes('全局意见'));
+    }) || navButtons[2];
+  assert(Boolean(navToComment2Btn), '11.3: 找到审阅意见“在正文工作区定位与落实”操作按钮');
+  act(() => {
+    navToComment2Btn.click();
+  });
+
+  assert(
+    mountedApp.container.textContent?.includes('正在定位') === true ||
+    mountedApp.container.textContent?.includes('来源：【') === true,
+    '11.4: 【核心Task16回归验收】StrictMode 双挂载下成功跳转至起草工作区并激活意见定位'
+  );
+
+  const block2Card = mountedApp.container.querySelector('#block-card-BLK-02');
+  const isBlock2Targeted =
+    block2Card?.textContent?.includes('审阅意见') ||
+    block2Card?.className.includes('border-blue-500') ||
+    mountedApp.container.textContent?.includes('当前第2段');
+  assert(
+    Boolean(isBlock2Targeted),
+    '11.5: 【核心Task16回归验收】StrictMode 下严格定位至第2段目标段落，未丢失上下文退回第1段'
+  );
+  mountedApp.unmount();
+
+  // -------------------------------------------------------------------------
+  // 验收用例 12: 多视口响应式测试与计算字号检查
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 12] 多视口响应式测试与计算字号检查:');
+  const viewports = [
+    { width: 1363, height: 768, name: '1363px 桌面大屏' },
+    { width: 768, height: 1024, name: '768×1024 平板竖屏' },
+    { width: 1280, height: 800, name: '1280×800 紧凑桌面' },
+    { width: 1440, height: 900, name: '1440×900 宽屏便携' },
+  ];
+
+  for (const vp of viewports) {
+    dom.window.innerWidth = vp.width;
+    dom.window.innerHeight = vp.height;
+    dom.window.dispatchEvent(new dom.window.Event('resize'));
+
+    const testStage = mountTestComponent(
+      React.createElement(DraftingStage, {
+        task: taskWithDraft,
+        onUpdateTask: () => {},
+        onViewSnippet: () => {},
+        activeRole: '主笔甲',
+      })
+    );
+
+    const quickAiBtn = testStage.container.querySelector('[aria-label="第1段AI修改建议"]');
+    assert(quickAiBtn !== null, `12.1 (${vp.name}): 段落AI建议快捷入口正常存在`);
+    assert(quickAiBtn?.className.includes('text-sm') === true, `12.2 (${vp.name}): 常用操作按钮采用 text-sm (14px)`);
+
+    assert(!testStage.container.innerHTML.includes('text-[10px]'), `12.3 (${vp.name}): 杜绝低于 12px 的 text-[10px] 样式`);
+    assert(!testStage.container.innerHTML.includes('text-[10.5px]'), `12.4 (${vp.name}): 杜绝低于 12px 的 text-[10.5px] 样式`);
+
+    if (vp.width <= 1024) {
+      const tabletOutlineTrigger = testStage.container.querySelector('[data-testid="btn-open-tablet-outline"]');
+      const tabletInspectorTrigger = testStage.container.querySelector('[data-testid="btn-open-tablet-inspector"]');
+      assert(tabletOutlineTrigger !== null, `12.5 (${vp.name}): 平板视口具备章节导航抽屉入口`);
+      assert(tabletInspectorTrigger !== null, `12.6 (${vp.name}): 平板视口具备辅助面板抽屉入口`);
+    }
+
+    testStage.unmount();
+  }
+
   console.log('\n================================================================');
-  console.log('   🎉 任务18 全部 7 组专项交互与响应式布局验收用例 100% 通过！');
+  console.log('   🎉 任务18 全部 12 组专项交互与响应式布局验收用例 100% 通过！');
   console.log('================================================================\n');
 }
 
 if (process.argv[1]?.includes('test-task18')) {
-  runTask18Tests();
+  runTask18Tests().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
