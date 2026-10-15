@@ -84,7 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-3 text-sm">
             <button
               onClick={() => setShowSandboxBar(!showSandboxBar)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold border transition-colors cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-colors cursor-pointer ${
                 showSandboxBar
                   ? 'bg-purple-900/60 text-purple-200 border-purple-700 hover:bg-purple-900/80'
                   : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'

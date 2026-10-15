@@ -85,10 +85,29 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
   // Wide modal review mode
   const [isWideModalOpen, setIsWideModalOpen] = useState(false);
   const openWideBtnRef = useRef<HTMLButtonElement>(null);
+  const modalContainerRef = useRef<HTMLDivElement>(null);
+  const modalCloseBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Keyboard Escape handler for wide review modal (uses capture phase to prevent bubbling to parent drawer)
+  // Focus management, Tab trapping, and Escape handling for wide review modal
   useEffect(() => {
     if (!isWideModalOpen) return;
+
+    // 1. Initial focus: transfer focus inside modal immediately so background buttons lose focus
+    const transferInitialFocus = () => {
+      if (modalCloseBtnRef.current) {
+        modalCloseBtnRef.current.focus();
+      } else if (modalContainerRef.current) {
+        modalContainerRef.current.focus();
+      }
+    };
+    transferInitialFocus();
+    const focusTimer = setTimeout(transferInitialFocus, 25);
+
+    // Prevent background scrolling while modal is open
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    // 2. Keyboard handler (Capture phase): Esc closes & restores focus; Tab loops inside modal
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -98,10 +117,46 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         setTimeout(() => {
           openWideBtnRef.current?.focus();
         }, 30);
+        return;
+      }
+
+      if (e.key === 'Tab') {
+        if (!modalContainerRef.current) return;
+        const focusableElements = Array.from(
+          modalContainerRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        );
+        if (focusableElements.length === 0) {
+          e.preventDefault();
+          return;
+        }
+
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          // Backward tab: Shift + Tab
+          if (document.activeElement === firstElement || !modalContainerRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          // Forward tab: Tab
+          if (document.activeElement === lastElement || !modalContainerRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            firstElement.focus();
+          }
+        }
       }
     };
+
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
   }, [isWideModalOpen]);
 
   // Reset internalPendingText whenever suggestion changes (if not controlled)
@@ -237,12 +292,12 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="btn-open-wide-modal"
             onClick={() => setIsWideModalOpen(true)}
-            className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+            className="px-3 py-1.5 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded-md text-sm font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
             title="展开宽屏评审面板（差异对比与微调）"
             aria-label="展开宽屏评审面板"
             aria-expanded={isWideModalOpen}
           >
-            <Maximize2 className="w-3.5 h-3.5" />
+            <Maximize2 className="w-4 h-4" />
             <span>宽屏评审</span>
           </button>
         </div>
@@ -317,52 +372,52 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="tab-diff-view"
             onClick={() => setViewMode('diff')}
-            className={`flex-1 py-1 px-2 rounded text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`flex-1 py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'diff'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <Eye className="w-3 h-3" />
+            <Eye className="w-3.5 h-3.5" />
             <span>修改差异</span>
           </button>
           <button
             type="button"
             data-testid="tab-editor-view"
             onClick={() => setViewMode('editor')}
-            className={`flex-1 py-1 px-2 rounded text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`flex-1 py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'editor'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <Sliders className="w-3 h-3" />
+            <Sliders className="w-3.5 h-3.5" />
             <span>待采纳文本{isFineTuned ? ' (已微调)' : ' (可微调)'}</span>
           </button>
           <button
             type="button"
             data-testid="tab-baseline-view"
             onClick={() => setViewMode('baseline')}
-            className={`flex-1 py-1 px-1.5 rounded text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`flex-1 py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'baseline'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <FileText className="w-3 h-3" />
+            <FileText className="w-3.5 h-3.5" />
             <span>生成时原文</span>
           </button>
           <button
             type="button"
             data-testid="tab-ai-original-view"
             onClick={() => setViewMode('ai_original')}
-            className={`flex-1 py-1 px-1.5 rounded text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`flex-1 py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'ai_original'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <Sparkles className="w-3 h-3" />
+            <Sparkles className="w-3.5 h-3.5" />
             <span>AI原始建议</span>
           </button>
         </div>
@@ -429,9 +484,9 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                   type="button"
                   data-testid="btn-reset-ai-original"
                   onClick={handleResetToAiOriginal}
-                  className="text-blue-700 hover:text-blue-900 hover:underline flex items-center gap-0.5 font-bold cursor-pointer"
+                  className="text-blue-700 hover:text-blue-900 hover:underline flex items-center gap-0.5 text-sm font-bold cursor-pointer"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                   还原为AI原始建议
                 </button>
               )}
@@ -577,14 +632,25 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
       {/* 5. Wide Review Modal Dialog (承接人工微调、差异展示及固定操作区，支持键盘Esc关闭与焦点恢复) */}
       {isWideModalOpen && (
         <div
+          ref={modalContainerRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="wide-review-title"
           data-testid="modal-wide-suggestion-review"
           data-nested-modal="true"
+          tabIndex={-1}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsWideModalOpen(false);
+              setTimeout(() => openWideBtnRef.current?.focus(), 30);
+            }
+          }}
         >
-          <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-300 overflow-hidden animate-in fade-in zoom-in duration-150">
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col border border-slate-300 overflow-hidden animate-in fade-in zoom-in duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2.5">
@@ -617,12 +683,13 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    操作范围：仅限第{targetOrderDisplay}段（局部改写，不影响整篇其他段落）· 支持键盘 Escape 关闭
+                    操作范围：仅限第{targetOrderDisplay}段（局部改写，不影响整篇其他段落）· 支持键盘 Escape 关闭与焦点锁入
                   </p>
                 </div>
               </div>
 
               <button
+                ref={modalCloseBtnRef}
                 type="button"
                 data-testid="btn-close-wide-modal"
                 onClick={() => {
@@ -672,7 +739,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
               )}
 
               {/* View Mode Tabs in Modal */}
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-sm">
                 <button
                   type="button"
                   onClick={() => setViewMode('diff')}

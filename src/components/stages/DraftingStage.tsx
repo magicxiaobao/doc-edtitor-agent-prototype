@@ -1656,7 +1656,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           <button
             onClick={() => setShowSaveVersionModal(true)}
             disabled={!canUserEdit || isCurrentDraftImmutable}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-sm font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
             title={
               !canUserEdit
                 ? `权限受限：当前身份为【${activeRole}】，仅主笔甲可保存版本`
@@ -1671,7 +1671,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
           <button
             onClick={() => setShowVersionHistory(true)}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-sm font-medium flex items-center gap-1 cursor-pointer"
             title="查看与恢复历史版本快照"
           >
             <History className="w-3.5 h-3.5 text-slate-500" />
@@ -1682,7 +1682,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             type="button"
             data-testid="btn-open-recent-modifications"
             onClick={() => setShowRecentModificationsModal(true)}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-sm font-medium flex items-center gap-1 cursor-pointer"
             title="查看当前文稿的局部AI建议采纳与微调操作存证记录，支持安全撤销"
           >
             <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
@@ -1692,7 +1692,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           <button
             onClick={handleSubmitDraftForReviewClick}
             disabled={!canUserEdit || isCurrentDraftImmutable}
-            className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
+            className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
             title="将当前工作稿提交进入新一轮审阅，自动冻结只读基准快照并递增审阅轮次"
           >
             <Send className="w-3.5 h-3.5" />
@@ -1701,7 +1701,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
           <button
             onClick={onProceedToNextStage}
-            className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-xs font-medium flex items-center gap-1 cursor-pointer"
+            className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded text-sm font-medium flex items-center gap-1 cursor-pointer"
             title="仅切换至审阅修改阶段界面查看已有审阅意见"
           >
             <span>进入审阅页面</span>
@@ -2427,6 +2427,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
         {/* Center: White Document Editor Canvas */}
         <div
+          data-testid="document-editor-canvas"
           className={`${
             showLeftNav && showRightInspector
               ? 'col-span-12 lg:col-span-6 xl:col-span-7'
