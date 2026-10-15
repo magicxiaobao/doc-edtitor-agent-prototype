@@ -60,11 +60,11 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
             <div>
               <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
                 <span>最近修改记录</span>
-                <span className="text-[11px] font-normal text-slate-500 bg-slate-200 px-2 py-0.5 rounded">
+                <span className="text-xs font-normal text-slate-500 bg-slate-200 px-2 py-0.5 rounded">
                   保留最近 {currentDraftLogs.length} 条
                 </span>
               </h3>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-xs text-slate-500">
                 记录局部段落建议采纳、人工微调与审阅落实；支持安全局部撤销（与版本历史独立保存）
               </p>
             </div>
@@ -95,7 +95,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
             <div className="text-center py-12 text-slate-400 text-xs">
               <History className="w-8 h-8 mx-auto mb-2 text-slate-300" />
               <p>当前稿件暂无局部采纳或修改记录</p>
-              <p className="text-[11px] text-slate-400 mt-1">
+              <p className="text-xs text-slate-400 mt-1">
                 当您采纳AI修改建议或微调段落后，此处将如实记录操作存证
               </p>
             </div>
@@ -128,17 +128,17 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                         第 {log.blockOrder} 段
                       </span>
                       {log.isFineTuned ? (
-                        <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
+                        <span className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
                           <Sliders className="w-2.5 h-2.5 text-amber-700" />
                           人工微调采纳
                         </span>
                       ) : (
-                        <span className="bg-blue-100 text-blue-800 text-[10px] px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
+                        <span className="bg-blue-100 text-blue-800 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
                           <Sparkles className="w-2.5 h-2.5 text-blue-600" />
                           AI建议采纳
                         </span>
                       )}
-                      <span className="text-slate-400 text-[10px] flex items-center gap-0.5">
+                      <span className="text-slate-400 text-xs flex items-center gap-0.5">
                         <Clock className="w-3 h-3 text-slate-300" />
                         {timeStr}
                       </span>
@@ -146,12 +146,12 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
 
                     <div className="flex items-center gap-2">
                       {log.status === 'applied' ? (
-                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                           已应用
                         </span>
                       ) : (
-                        <span className="bg-slate-100 text-slate-600 border border-slate-300 text-[10px] px-2 py-0.5 rounded-full font-medium flex items-center gap-0.5">
+                        <span className="bg-slate-100 text-slate-600 border border-slate-300 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-0.5">
                           <RotateCcw className="w-3 h-3 text-slate-500" />
                           已撤销
                         </span>
@@ -161,17 +161,17 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
 
                   {/* Associated comment context */}
                   {log.associatedCommentId && (
-                    <div className="mt-2 text-[11px] text-blue-900 bg-blue-50/70 p-2 rounded border border-blue-100 flex items-center justify-between">
+                    <div className="mt-2 text-xs text-blue-900 bg-blue-50/70 p-2 rounded border border-blue-100 flex items-center justify-between">
                       <span className="flex items-center gap-1">
                         <MessageSquare className="w-3 h-3 text-blue-600" />
                         关联【{log.associatedCommentReviewer || '审阅人'}】意见：{log.associatedCommentId}
                       </span>
-                      <span className="text-[10px] text-blue-700">落实闭环</span>
+                      <span className="text-xs text-blue-700">落实闭环</span>
                     </div>
                   )}
 
                   {/* Snippet Before and After */}
-                  <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                  <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                     <div className="p-2 bg-slate-50 rounded border border-slate-200 text-slate-600">
                       <span className="font-bold text-slate-500 block mb-0.5">修改前：</span>
                       <p className="line-clamp-2 font-serif">{log.beforeContent}</p>
@@ -186,9 +186,9 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
 
                   {/* Undone note if undone */}
                   {log.status === 'undone' && (
-                    <div className="mt-2 p-1.5 bg-slate-100 rounded text-[11px] text-slate-600 flex items-center justify-between">
+                    <div className="mt-2 p-1.5 bg-slate-100 rounded text-xs text-slate-600 flex items-center justify-between">
                       <span>撤销记录：{log.undoReason || '主笔已撤销本次修改'}</span>
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-xs text-slate-400">
                         {log.undoneAt ? new Date(log.undoneAt).toLocaleTimeString('zh-CN') : ''}
                       </span>
                     </div>
@@ -197,14 +197,14 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   {/* Action row */}
                   {log.status === 'applied' && !isCurrentDraftImmutable && (
                     <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
-                      <span className="text-[10px] text-slate-400 font-mono">
+                      <span className="text-xs text-slate-400 font-mono">
                         操作ID: {log.id}
                       </span>
                       <div className="flex items-center gap-2">
                         {!canUndo && (
                           <span
                             data-testid={`undo-disabled-reason-${log.id}`}
-                            className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200"
+                            className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200"
                           >
                             {disabledReason}
                           </span>

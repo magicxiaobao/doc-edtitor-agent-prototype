@@ -385,6 +385,7 @@ npm run build
 # 结果: tsc --noEmit 与 vite build 打包成功 (dist/assets/index-*.js)
 ```
 
-- **建议提交信息**：`feat: improve drafting workspace layout and tablet responsive interaction`
+- **建议提交信息**：`fix(task18): resolve tablet drawer fine-tune persistence, evidence comparison fidelity, nested escape, and sub-12px styles`
+- **验收结论**：已完成全部 P1（关闭抽屉微调持久化、历史依据 120 vs 999 冻结对比失真）与 P2（平板完整审阅与生成取消、嵌套 Escape 与键盘焦点控制、字号规范与演示区默认收起、StrictMode 下 App 级跳转保真）问题的修复与双向回归，12 组专项测试套件 100% 通过。
 
 

@@ -113,7 +113,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
                   }`}
                 >
                   <span
-                    className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                    className={`w-4 h-4 rounded-full flex items-center justify-center text-xs font-bold ${
                       isActive ? 'bg-blue-700 text-white' : 'bg-slate-200 text-slate-600'
                     }`}
                   >
@@ -124,7 +124,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
 
                   {st.badgeText && (
                     <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded font-normal ${
+                      className={`text-xs px-1.5 py-0.2 rounded font-normal ${
                         st.badgeType === 'warning'
                           ? 'bg-amber-100 text-amber-800 border border-amber-200'
                           : st.badgeType === 'success'
@@ -144,7 +144,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
         {/* Stage Status Summary & Warning Pills */}
         <div className="hidden xl:flex items-center gap-2 text-xs">
           {hasConflictPending && (
-            <div className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px]">
+            <div className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
               <span>发现1项口径冲突需裁决 (120 vs 128)</span>
             </div>

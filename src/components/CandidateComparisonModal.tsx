@@ -296,7 +296,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                   ({totalModified}处修改 · {totalAdded}处新增 · {totalRemoved}处删除)
                 </span>
               </h2>
-              <div className="text-[11px] text-slate-500 flex items-center gap-2">
+              <div className="text-xs text-slate-500 flex items-center gap-2">
                 <span>生成时刻：{generatedTimeStr}</span>
                 <span aria-hidden="true">·</span>
                 <span>写作要求：<strong className="text-slate-700 font-medium">{candidate.instructionPrompt || '标准公文规范起草'}</strong></span>
@@ -381,17 +381,17 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
           {/* Current draft specs */}
           <div className="flex items-center justify-between bg-white px-3 py-2 rounded border border-slate-200">
             <div className="space-y-0.5">
-              <div className="text-[11px] text-slate-500">基准对照稿（当前文稿）</div>
+              <div className="text-xs text-slate-500">基准对照稿（当前文稿）</div>
               <div className="font-bold text-slate-800 flex items-center gap-1.5">
                 <span>{currentDraft?.versionNumber || '初始空白草稿'}</span>
-                <span className="text-[10px] font-normal text-slate-500">
+                <span className="text-xs font-normal text-slate-500">
                   ({currentDraft?.isFinal ? '已定稿' : currentDraft?.isHistoricalSnapshot ? '历史快照' : '可编辑工作稿'})
                 </span>
               </div>
             </div>
             <div className="text-right">
               <div className="text-slate-700 font-mono font-medium">{currentWordCount} 字</div>
-              <div className="text-[10px] text-slate-400">
+              <div className="text-xs text-slate-400">
                 {currentDraft?.snapshotMetadata?.factSnapshot ? '含冻结依据快照' : '暂无冻结快照'}
               </div>
             </div>
@@ -400,17 +400,17 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
           {/* Candidate draft specs */}
           <div className="flex items-center justify-between bg-white px-3 py-2 rounded border border-blue-200 shadow-2xs">
             <div className="space-y-0.5">
-              <div className="text-[11px] text-blue-700 font-medium">起草候选稿（待主笔整体采纳）</div>
+              <div className="text-xs text-blue-700 font-medium">起草候选稿（待主笔整体采纳）</div>
               <div className="font-bold text-blue-900 flex items-center gap-1.5">
                 <span>新起草候选</span>
-                <span className="text-[10px] font-normal text-blue-600 font-mono">
+                <span className="text-xs font-normal text-blue-600 font-mono">
                   {wordCountDiff >= 0 ? `+${wordCountDiff}字` : `${wordCountDiff}字`}
                 </span>
               </div>
             </div>
             <div className="text-right">
               <div className="text-blue-900 font-mono font-bold">{candidateWordCount} 字</div>
-              <div className="text-[10px] text-emerald-700 font-medium">基于最新已核准事实与大纲</div>
+              <div className="text-xs text-emerald-700 font-medium">基于最新已核准事实与大纲</div>
             </div>
           </div>
         </div>
@@ -447,7 +447,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
             </div>
             <button
               onClick={onRegenerate}
-              className="px-2.5 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer shrink-0 self-start sm:self-auto"
+              className="px-2.5 py-0.5 bg-amber-700 hover:bg-amber-800 text-white rounded text-xs font-medium flex items-center gap-1 cursor-pointer shrink-0 self-start sm:self-auto"
             >
               <RefreshCw className="w-3 h-3" />
               <span>按新要求重新生成</span>
@@ -457,7 +457,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
 
         {/* 5. Chapter/Section Jump Selector */}
         <div className="px-5 py-2 border-b border-slate-200 bg-white flex items-center gap-2 overflow-x-auto text-xs shrink-0">
-          <span className="text-[11px] text-slate-400 font-medium shrink-0">章节导航：</span>
+          <span className="text-xs text-slate-400 font-medium shrink-0">章节导航：</span>
           <button
             onClick={() => setSelectedSectionId('all')}
             className={`px-2.5 py-1 rounded text-xs transition-colors shrink-0 cursor-pointer ${
@@ -480,12 +480,12 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
             >
               <span>{idx + 1}. {sec.title}</span>
               {sec.isDeletedFromOutline && (
-                <span className="text-[10px] bg-rose-100 text-rose-800 border border-rose-300 px-1 py-0.2 rounded font-bold">
+                <span className="text-xs bg-rose-100 text-rose-800 border border-rose-300 px-1 py-0.2 rounded font-bold">
                   已删章节
                 </span>
               )}
               {sec.isAddedInOutline && (
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-1 py-0.2 rounded font-bold">
+                <span className="text-xs bg-emerald-100 text-emerald-800 border border-emerald-300 px-1 py-0.2 rounded font-bold">
                   候选新增
                 </span>
               )}
@@ -517,23 +517,23 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                     <span className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
                       <span>第 {sIdx + 1} 章节：{sec.title}</span>
                       {sec.isDeletedFromOutline && (
-                        <span className="text-[10px] bg-rose-200 text-rose-900 border border-rose-400 px-1.5 py-0.2 rounded font-bold">
+                        <span className="text-xs bg-rose-200 text-rose-900 border border-rose-400 px-1.5 py-0.2 rounded font-bold">
                           [大纲已删除章节 · 旧稿正文保留对照]
                         </span>
                       )}
                       {sec.isAddedInOutline && (
-                        <span className="text-[10px] bg-emerald-200 text-emerald-900 border border-emerald-400 px-1.5 py-0.2 rounded font-bold">
+                        <span className="text-xs bg-emerald-200 text-emerald-900 border border-emerald-400 px-1.5 py-0.2 rounded font-bold">
                           [候选新增章节]
                         </span>
                       )}
                     </span>
                     {sec.suggestedWordCount ? (
-                      <span className="text-[11px] text-slate-500">
+                      <span className="text-xs text-slate-500">
                         (建议字数：{sec.suggestedWordCount}字)
                       </span>
                     ) : null}
                   </div>
-                  <div className="text-[11px] text-slate-500">
+                  <div className="text-xs text-slate-500">
                     {sec.assignedFactIds ? `分配事实：${sec.assignedFactIds.length} 项` : ''}
                   </div>
                 </div>
@@ -560,20 +560,20 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                                 第 {row.candidateBlock?.order || row.currentBlock?.order || rIdx + 1} 段
                               </span>
                               {isIdentical && (
-                                <span className="text-[10px] text-slate-400">内容无变动</span>
+                                <span className="text-xs text-slate-400">内容无变动</span>
                               )}
                               {isModified && (
-                                <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-medium">
+                                <span className="text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-medium">
                                   文本已修改
                                 </span>
                               )}
                               {isAdded && (
-                                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-medium">
+                                <span className="text-xs bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-medium">
                                   新增段落
                                 </span>
                               )}
                               {isRemoved && (
-                                <span className="text-[10px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-medium">
+                                <span className="text-xs bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-medium">
                                   已删除段落
                                 </span>
                               )}
@@ -588,7 +588,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                                     <button
                                       key={factId}
                                       onClick={() => onInspectFact && onInspectFact(factId)}
-                                      className="text-[10px] bg-blue-50 text-blue-700 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200 flex items-center gap-1 cursor-pointer transition-colors"
+                                      className="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200 flex items-center gap-1 cursor-pointer transition-colors"
                                       title={`核对事实依据：${fact?.metric || factId}`}
                                     >
                                       <Tag className="w-2.5 h-2.5" />
@@ -621,7 +621,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                                     : 'bg-white border-slate-200 text-slate-800'
                                 }`}
                               >
-                                <div className="text-[10px] text-slate-400 mb-1 font-mono uppercase">
+                                <div className="text-xs text-slate-400 mb-1 font-mono uppercase">
                                   当前稿内容
                                 </div>
                                 {row.currentBlock ? (
@@ -643,7 +643,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
                                     : 'bg-white border-slate-200 text-slate-800'
                                 }`}
                               >
-                                <div className="text-[10px] text-blue-700 mb-1 font-mono uppercase">
+                                <div className="text-xs text-blue-700 mb-1 font-mono uppercase">
                                   候选稿建议
                                 </div>
                                 {row.candidateBlock ? (
@@ -757,7 +757,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
             </button>
 
             {showDiagnostics && (
-              <div className="mt-2 p-3 bg-slate-100 rounded-lg border border-slate-200 text-[11px] font-mono text-slate-600 space-y-1">
+              <div className="mt-2 p-3 bg-slate-100 rounded-lg border border-slate-200 text-xs font-mono text-slate-600 space-y-1">
                 <div>RunId: {candidate.runId}</div>
                 <div>TaskId: {candidate.taskId}</div>
                 <div>BaseDraftId: {candidate.baseDraftId || 'none'}</div>

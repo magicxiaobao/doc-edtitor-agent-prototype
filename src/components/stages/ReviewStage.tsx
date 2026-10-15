@@ -383,7 +383,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             {isReviewer ? '（审阅者权限：可查阅文稿并新增批注，不可直接修改正文或批准定稿）' : activeRole === '供稿丙' ? '（供稿人权限：可查阅材料，不可直接批注正文或定稿）' : '（主笔权限：可逐条研判意见、落实修改正文并保存新版本）'}
           </span>
         </div>
-        <span className="text-[11px] text-blue-700">可在顶部导航随时切换演示角色验证权限</span>
+        <span className="text-xs text-blue-700">可在顶部导航随时切换演示角色验证权限</span>
       </div>
 
       {/* Review Round & Base Draft Reference Banner */}
@@ -395,18 +395,18 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           <div>
             <div className="font-bold text-slate-800 flex items-center gap-2">
               <span>第 {currentReviewRound} 轮审阅周期</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium">
+              <span className="text-xs px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium">
                 进行中
               </span>
             </div>
-            <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+            <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
               <span>本轮审阅基准版本：<strong className="text-slate-700 font-medium">{reviewBaseDraft?.versionNumber || '初始版本'}</strong></span>
               <span aria-hidden="true">·</span>
               <span>当前最新工作稿：<strong className="text-slate-700 font-medium">{currentDraft?.versionNumber || '无'}</strong></span>
             </div>
           </div>
         </div>
-        <div className="text-right text-[11px] text-slate-400">
+        <div className="text-right text-xs text-slate-400">
           <div>意见总数：{totalComments} 条（待处理 {pendingCommentsCount} 条）</div>
           <div>意见针对基准版本提出，落实后记录落实版本与段落</div>
         </div>
@@ -440,7 +440,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <span className="font-bold text-xs text-slate-800">全部审阅意见</span>
-              <span className="text-[11px] bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono">
+              <span className="text-xs bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono">
                 {task.reviewComments.length}
               </span>
             </div>
@@ -495,22 +495,22 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-xs text-slate-800">{cmt.reviewer}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700">
+                        <span className="font-bold text-sm text-slate-800">{cmt.reviewer}</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-medium">
                           {cmt.type === 'overall'
                             ? '整体全局意见'
                             : cmt.rebindRecord
                             ? `第${cmt.currentBlockOrder || targetBlock?.order || '?'}段批注（重定位）`
                             : `第${cmt.targetBlockOrder || '指定'}段批注`}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
+                        <span className="text-xs text-slate-400 font-mono">
                           基准版本: {cmt.targetVersionNumber || cmt.targetVersionId}
                         </span>
                       </div>
 
                       {/* Requirement 5: Clear distinct status pills. Only decision -> NOT "已采纳修改" */}
                       <span
-                        className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                        className={`text-xs px-2.5 py-0.5 rounded font-medium ${
                           cmt.status === 'implemented'
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                             : cmt.status === 'accepted_pending_implementation'
@@ -534,18 +534,18 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                       </span>
                     </div>
 
-                    <p className="text-xs text-slate-800 leading-relaxed font-medium">{cmt.content}</p>
+                    <p className="text-sm text-slate-800 leading-relaxed font-medium">{cmt.content}</p>
 
                     {cmt.suggestedChange && (
-                      <div className="p-2 bg-white rounded border border-blue-200 text-[11px] text-blue-900 space-y-0.5">
-                        <span className="text-blue-500 font-semibold block">【修改建议方向】：</span>
+                      <div className="p-2.5 bg-white rounded border border-blue-200 text-xs text-blue-900 space-y-0.5">
+                        <span className="text-blue-600 font-semibold block">【修改建议方向】：</span>
                         <p>{cmt.suggestedChange}</p>
                       </div>
                     )}
 
                     {/* Version discrepancy notice shown separately when location is valid and text is unchanged */}
                     {isDifferentVersion && !isLocationOutdated && (
-                      <div className="flex items-center gap-1.5 text-[10px] text-blue-700 bg-blue-50/70 px-2.5 py-1 rounded border border-blue-200">
+                      <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50/70 px-2.5 py-1 rounded border border-blue-200">
                         <Info className="w-3.5 h-3.5 shrink-0 text-blue-600" />
                         <span>
                           {cmt.rebindRecord
@@ -557,7 +557,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
                     {/* Rebind audit trail record */}
                     {cmt.rebindRecord && (
-                      <div className="flex items-center justify-between text-[10px] text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded border border-purple-200">
+                      <div className="flex items-center justify-between text-xs text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded border border-purple-200">
                         <span className="flex items-center gap-1">
                           <CornerDownRight className="w-3 h-3 text-purple-600 shrink-0" />
                           <span>
@@ -570,7 +570,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                               setRebindingComment(cmt);
                               setRebindTargetBlockId(targetBlock?.id || currentDraft?.blocks[0]?.id || '');
                             }}
-                            className="text-[10px] text-purple-800 hover:underline font-semibold cursor-pointer shrink-0"
+                            className="text-xs text-purple-800 hover:underline font-semibold cursor-pointer shrink-0"
                           >
                             更改指定段落
                           </button>
@@ -580,7 +580,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
                     {/* Requirement 6: Show accurate location outdated notice; never silently attach */}
                     {isLocationOutdated && (
-                      <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900 space-y-1.5">
+                      <div className="p-2.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1.5">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1 font-bold text-amber-800">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -598,14 +598,14 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                                 setRebindingComment(cmt);
                                 setRebindTargetBlockId(currentDraft?.blocks[0]?.id || '');
                               }}
-                              className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shrink-0"
                             >
-                              <CornerDownRight className="w-3 h-3" />
+                              <CornerDownRight className="w-3.5 h-3.5" />
                               <span>重新指定目标段落</span>
                             </button>
                           )}
                         </div>
-                        <p className="text-[10px] text-amber-700">
+                        <p className="text-xs text-amber-700">
                           {isTargetBlockMissing
                             ? `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。原目标段落已在正文中删除或合并，为防止错挂，系统已隔离定位。`
                             : cmt.rebindRecord
@@ -615,7 +615,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                             : `该意见针对草稿【${cmt.targetVersionNumber || cmt.targetVersionId}】第${cmt.targetBlockOrder || '?'}段提出。提出时基准原句：“${(cmt.baseParagraphText || '').slice(0, 45)}...”，当前段落正文已有修改，请复核。`}
                         </p>
                         {cmt.baseParagraphText && (
-                          <div className="mt-1 p-1 bg-white/80 rounded border border-amber-200 text-[10px] font-mono text-slate-600 italic">
+                          <div className="mt-1 p-1 bg-white/80 rounded border border-amber-200 text-xs font-mono text-slate-600 italic">
                             提出时基准原句：“{cmt.baseParagraphText.slice(0, 80)}...”
                           </div>
                         )}
@@ -624,13 +624,13 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
                     {/* Target block context snippet if still valid */}
                     {!isLocationOutdated && targetBlock && (
-                      <div className="p-2 bg-slate-100/70 rounded border border-slate-200 text-[11px] text-slate-600 italic space-y-0.5">
-                        <div className="text-[10px] text-slate-400 not-italic">
+                      <div className="p-2 bg-slate-100/70 rounded border border-slate-200 text-xs text-slate-600 italic space-y-0.5">
+                        <div className="text-xs text-slate-400 not-italic">
                           {cmt.rebindRecord ? `当前重定位段落（第${targetBlock.order}段）：` : `当前目标段落（第${targetBlock.order}段）：`}
                         </div>
                         <div>{targetBlock.content.slice(0, 80)}...</div>
                         {cmt.rebindRecord && cmt.baseParagraphText && (
-                          <div className="text-[10px] text-slate-400 not-italic border-t border-slate-200/60 pt-0.5 mt-0.5">
+                          <div className="text-xs text-slate-400 not-italic border-t border-slate-200/60 pt-0.5 mt-0.5">
                             提出时原第{cmt.targetBlockOrder}段原句：“{cmt.baseParagraphText.slice(0, 50)}...”
                           </div>
                         )}
@@ -640,13 +640,13 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     {/* Author Reply Section */}
                     {cmt.authorReply && (
                       <div className="p-2.5 bg-emerald-50/70 border border-emerald-200 rounded text-xs text-emerald-900 space-y-1">
-                        <div className="font-semibold text-[11px] flex items-center justify-between">
+                        <div className="font-semibold text-xs flex items-center justify-between">
                           <span className="flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                             主笔处理答复记录：
                           </span>
                           {cmt.implementationDraftId && (
-                            <span className="text-[10px] text-emerald-700 font-mono">
+                            <span className="text-xs text-emerald-700 font-mono">
                               落实版本：{cmt.implementationDraftId}
                             </span>
                           )}
@@ -667,10 +667,10 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                                 onSelectStage('drafting');
                               }
                             }}
-                            className="px-2.5 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs flex items-center gap-1 cursor-pointer font-medium"
+                            className="px-3 py-1.5 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded-md text-sm font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
                             title="在正文工作区定位原段落、查阅事实依据并生成AI建议或对比采纳"
                           >
-                            <FileText className="w-3.5 h-3.5 text-blue-600" />
+                            <FileText className="w-4 h-4 text-blue-600" />
                             <span>在正文工作区定位与落实</span>
                           </button>
                         )}
@@ -678,7 +678,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                         {cmt.suggestedChange && (
                           <button
                             onClick={() => handleOpenImplementModal(cmt)}
-                            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
+                            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-sm font-semibold shadow-xs flex items-center gap-1 cursor-pointer"
                             title="对比原文与建议，确认后直接写入正文并创建新版本"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -692,7 +692,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                             setReplyAction('need_discussion');
                             setReplyText(cmt.authorReply || '');
                           }}
-                          className="px-2.5 py-1 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded text-xs cursor-pointer"
+                          className="px-3 py-1.5 text-blue-700 hover:bg-blue-50 border border-blue-200 rounded-md text-sm cursor-pointer"
                         >
                           标记待沟通
                         </button>
@@ -703,7 +703,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                             setReplyAction('rejected');
                             setReplyText(cmt.authorReply || '');
                           }}
-                          className="px-2.5 py-1 text-slate-600 hover:bg-slate-100 border border-slate-300 rounded text-xs cursor-pointer"
+                          className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 border border-slate-300 rounded-md text-sm cursor-pointer"
                         >
                           拒绝并说明理由
                         </button>
@@ -714,7 +714,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                             setReplyAction('accepted_pending_implementation');
                             setReplyText(cmt.authorReply || '主笔研判决定采纳此方向，待后续统筹落实篇幅');
                           }}
-                          className="px-2.5 py-1 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded text-xs font-medium cursor-pointer"
+                          className="px-3 py-1.5 bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200 rounded-md text-sm font-medium cursor-pointer"
                         >
                           决定采纳 (待落实)
                         </button>
@@ -730,18 +730,18 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         <div className="col-span-12 lg:col-span-5 bg-white rounded-lg border border-slate-200 shadow-2xs p-5 space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100">
             <div>
-              <span className="font-bold text-xs text-slate-800">当前审阅基准稿件预览</span>
-              <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 ml-2 font-normal">
+              <span className="font-bold text-sm text-slate-800">当前审阅基准稿件预览</span>
+              <span className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 ml-2 font-normal">
                 基准对照
               </span>
             </div>
-            <span className="text-[11px] text-slate-500 font-mono">{reviewBaseDraft?.versionNumber}</span>
+            <span className="text-xs text-slate-500 font-mono">{reviewBaseDraft?.versionNumber}</span>
           </div>
 
           <div className="space-y-4 max-h-[600px] overflow-y-auto pr-1">
             {reviewBaseDraft?.blocks.map((block) => (
               <div key={block.id} className="p-3 rounded bg-slate-50 border border-slate-200/80 text-xs space-y-1">
-                <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                <div className="flex justify-between text-xs text-slate-400 font-mono">
                   <span>第{block.order}段 (ID: {block.id})</span>
                   <span>{block.referencedFactIds.length}项事实关联</span>
                 </div>
@@ -964,7 +964,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
               <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
                 <div className="font-bold text-slate-800 flex justify-between">
                   <span>来自【{implementingComment.reviewer}】的审阅建议</span>
-                  <span className="text-[11px] text-slate-400 font-mono">基准版本: {implementingComment.targetVersionId}</span>
+                  <span className="text-xs text-slate-400 font-mono">基准版本: {implementingComment.targetVersionId}</span>
                 </div>
                 <p className="text-slate-700">“{implementingComment.content}”</p>
                 {implementingComment.suggestedChange && (
@@ -1085,7 +1085,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     }`}
                   >
                     <div className="font-bold text-slate-800">折中平衡策略（推荐）</div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5">
                       精炼铺垫修饰语，以紧凑提炼短句融入调研成效案例，控制在2500字左右。
                     </p>
                   </label>
@@ -1099,7 +1099,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     }`}
                   >
                     <div className="font-bold text-slate-800">优先遵循压缩要求</div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5">
                       严格压减字数至2000字内，将案例置于附件或口头汇报，不入主稿。
                     </p>
                   </label>
@@ -1113,7 +1113,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                     }`}
                   >
                     <div className="font-bold text-slate-800">优先充实典型案例</div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5">
                       完整展开两个工作推进典型案例，篇幅适度放宽至3200字。
                     </p>
                   </label>
@@ -1135,34 +1135,34 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-800">协调效果差异预览（基于当前稿计算）：</span>
-                    <span className="text-[11px] text-slate-500 font-mono">
+                    <span className="text-xs text-slate-500 font-mono">
                       篇幅变动：{currentCoordinationDiff.originalWordCount}字 → {currentCoordinationDiff.targetWordCount}字
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-600">{currentCoordinationDiff.strategyExplanation}</p>
+                  <p className="text-xs text-slate-600">{currentCoordinationDiff.strategyExplanation}</p>
                   
                   {currentCoordinationDiff.diffPreview.length > 0 ? (
                     <div className="space-y-2 pt-2 border-t border-slate-200 max-h-40 overflow-y-auto">
                       {currentCoordinationDiff.diffPreview.map((diff, idx) => (
                         <div key={idx} className="p-2 bg-white rounded border border-slate-200 space-y-1">
-                          <div className="text-[10px] text-slate-500 font-semibold">变更段落：{diff.blockId}</div>
-                          <div className="text-rose-700 bg-rose-50/50 p-1 rounded text-[11px] line-through">
+                          <div className="text-xs text-slate-500 font-semibold">变更段落：{diff.blockId}</div>
+                          <div className="text-rose-700 bg-rose-50/50 p-1 rounded text-xs line-through">
                             {diff.originalText}
                           </div>
-                          <div className="text-emerald-700 bg-emerald-50/50 p-1 rounded text-[11px] font-medium">
+                          <div className="text-emerald-700 bg-emerald-50/50 p-1 rounded text-xs font-medium">
                             {diff.proposedText}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className="text-amber-700 bg-amber-50 p-2 rounded text-[11px]">
+                    <div className="text-amber-700 bg-amber-50 p-2 rounded text-xs">
                       当前策略未对正文产生实质文本差异（无差异不能标已落实）。
                     </div>
                   )}
 
                   {!currentCoordinationDiff.hasRealCaseMaterial && selectedStrategy !== 'compress_priority' && (
-                    <div className="text-amber-800 bg-amber-50/80 p-2 rounded border border-amber-200 text-[11px] flex items-start gap-1">
+                    <div className="text-amber-800 bg-amber-50/80 p-2 rounded border border-amber-200 text-xs flex items-start gap-1">
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
                       <span>资料库中尚无已登记的本期典型案例，正文已插入待补材料占位符，严禁虚构案例。</span>
                     </div>
@@ -1227,13 +1227,13 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
               <div className="p-2.5 bg-amber-50 rounded border border-amber-200 space-y-1">
                 <div className="font-bold text-amber-900 flex items-center justify-between">
                   <span>【{rebindingComment.reviewer}】提出的意见：</span>
-                  <span className="text-[10px] text-amber-700 font-mono">
+                  <span className="text-xs text-amber-700 font-mono">
                     针对 {rebindingComment.targetVersionNumber || rebindingComment.targetVersionId} 第{rebindingComment.targetBlockOrder || '?'}段
                   </span>
                 </div>
                 <p className="text-slate-700">{rebindingComment.content}</p>
                 {rebindingComment.baseParagraphText && (
-                  <p className="text-[10px] text-slate-500 italic pt-1 border-t border-amber-200/60 mt-1">
+                  <p className="text-xs text-slate-500 italic pt-1 border-t border-amber-200/60 mt-1">
                     提出时原句：“{rebindingComment.baseParagraphText.slice(0, 60)}...”
                   </p>
                 )}
