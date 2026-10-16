@@ -409,8 +409,18 @@ export function generateParagraphRevision(
   // Case 1: Reviewer explicitly provided a replacement draft
   if (interpretation.isReplacement && interpretation.replacementText) {
     suggestedText = interpretation.replacementText;
-    diffExplanation = `采纳【${sourceComment?.reviewer || '审阅人'}】审阅人提供的替换稿；严格保留量化台账数据与单位。`;
-    needsVerificationNotes.push('核对审阅人替换稿是否契合段落前后行文脉络', '核对关键台账指标无遗漏与口径一致');
+    const origNumbers = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    const replNumbers = interpretation.replacementText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    const hasDataDiff = origNumbers.join(',') !== replNumbers.join(',');
+
+    if (hasDataDiff) {
+      diffExplanation = `采纳【${sourceComment?.reviewer || '审阅人'}】审阅人提供的替换稿。注意：检测到替换稿与原文数据指标存在差异（原文：${origNumbers.join('、') || '无'}；替换稿：${replNumbers.join('、') || '无'}），未作自动指标保留强制锁定，请主笔重点核验数据真实性与出处台账。`;
+      needsVerificationNotes.push(`审阅人替换稿包含数据变动（原文：${origNumbers.join('、') || '无'} → 替换稿：${replNumbers.join('、') || '无'}），请核对是否具有正式台账支撑`);
+      needsVerificationNotes.push('审阅替换稿直接以审阅人意见正文为准，已跳过自动化指标保留强制检查，须由主笔人工核实出处台账');
+    } else {
+      diffExplanation = `采纳【${sourceComment?.reviewer || '审阅人'}】审阅人提供的替换稿，直接以审阅人修改正文为准。`;
+      needsVerificationNotes.push('审阅人替换稿非AI自动生成，请核验是否契合段落前后行文脉络');
+    }
   } else {
     // Case 2: Instruction-driven rewrite or custom/preset action
     if (hasCustomPrompt || action === 'custom') {
@@ -452,19 +462,21 @@ export function generateParagraphRevision(
           .replace(/深入推进各项管理服务机制创新，/g, '')
           .replace(/^[，、\s]+/, '').replace(/，+/g, '，');
 
+        const trimmedPruned = highlighted.trim();
+        const hasPrunedModifiers = trimmedPruned !== originalText.trim();
+
         if (!highlighted.startsWith('【重点成效】')) {
           highlighted = `【重点成效】${highlighted}`;
         }
-        if (!highlighted.includes('突破') && !highlighted.includes('显著')) {
-          highlighted = highlighted.replace(/。$/, '，工作质效取得突破性进展。');
-        }
 
+        // 删除无依据的成效兜底模板，严禁自动添加“工作质效取得突破性进展”
         suggestedText = highlighted;
-        if (highlighted.trim() === originalText.trim()) {
-          diffExplanation = '未找到可安全改写的内容，本次正文未变化。已严格保护原始事实与段落内容。';
-          needsVerificationNotes.push('本次改写未产生正文变化，无法直接采纳零差异建议');
+        if (!hasPrunedModifiers) {
+          suggestedText = originalText;
+          diffExplanation = '未检测到可删减的泛泛修饰语，且材料库中暂无本期核准的成效佐证材料。为避免无据添加成效定性结论，本次改写严格保留原文。建议先在材料库补充并核准成效材料。';
+          needsVerificationNotes.push('当前缺少核准的成效材料依据，请先在材料库补充并核准成效材料', '缺少依据时已严格保留原文，未添加无依据的突破性进展文案');
         } else {
-          diffExplanation = `执行自定义指令【${prompt}】：删减背景性泛化修饰语，强化突出阶段性工作实效与核心突破，全部数据指标严格保留。`;
+          diffExplanation = `执行自定义指令【${prompt}】：删减背景性泛化修饰语，强化突出阶段性工作实效，全部数据指标严格保留，未捏造未核准的突破性进展定性结论。`;
           needsVerificationNotes.push('核对成效定性表述是否严谨客观', '核对量化指标与出处依据一致');
         }
       } else if (isCompressPrompt || prompt.includes('精简') || prompt.includes('压缩')) {
@@ -511,9 +523,9 @@ export function generateParagraphRevision(
         const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
 
         if (!hasAuthenticCase) {
-          suggestedText = `${originalText.replace(/。$/, '')}。同时健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
-          diffExplanation = `执行扩写指令：在段落尾部扩充制度跟踪与日常调度闭环举措，增强逻辑严密性；【材料依据提示】材料库中暂无本期核准的真实典型案例材料，已避免虚构具体案例或捏造数据指标。`;
-          needsVerificationNotes.push('当前未录入真实案例材料，如需典型个案请先在材料库补充核准', '核对制度调度举措与科室工作实际一致');
+          suggestedText = originalText;
+          diffExplanation = `材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与佐证依据后再行扩写。`;
+          needsVerificationNotes.push('当前未录入真实案例材料，如需典型个案请先在材料库补充核准', '缺少依据时已严格保留原文，未添加无材料依据的成效或举措');
         } else {
           suggestedText = `${originalText.replace(/。$/, '')}。同时深入总结典型实践做法，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
           diffExplanation = `执行扩写指令：结合材料库中核准案例做法，扩充闭环举措并严格保留所有量化指标。`;
@@ -553,9 +565,9 @@ export function generateParagraphRevision(
           const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
 
           if (!hasAuthenticCase) {
-            suggestedText = `${originalText.replace(/。$/, '')}。同时健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
-            diffExplanation = `在段落尾部扩充制度跟踪与日常调度闭环举措，增强逻辑严密性；【材料依据提示】材料库中暂无本期核准的真实典型案例材料，已避免虚构具体案例或捏造数据指标。`;
-            needsVerificationNotes.push('当前材料库未录入本期核准真实案例材料，已提示补充材料并避免编造虚构案例', '核对制度调度举措与科室工作实际一致');
+            suggestedText = originalText;
+            diffExplanation = `材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与事实材料后再行扩写。`;
+            needsVerificationNotes.push('当前材料库未录入本期核准真实案例材料，已提示补充材料并避免编造虚构案例', '缺少依据时已严格保留原文，未添加无材料依据的成效或举措');
           } else {
             suggestedText = `${originalText.replace(/。$/, '')}。同时总结提炼典型推进经验，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
             diffExplanation = `在段落尾部扩充举措闭环机制，关联材料库中真实案例材料，未捏造额外业务指标。`;

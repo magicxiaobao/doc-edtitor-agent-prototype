@@ -190,6 +190,20 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
     );
   }, [suggestion.isReviewerReplacement, suggestion.sourceCommentType, suggestion.sourceCommentId, suggestion.diffExplanation]);
 
+  // Check whether reviewer replacement modified numbers/metrics relative to original baseline
+  const replacementDataDiff = useMemo(() => {
+    if (!isReviewerReplacement) return null;
+    const origNums = suggestion.baseContent.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    const replNums = suggestion.suggestedText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    if (origNums.join(',') !== replNums.join(',')) {
+      return {
+        origNums,
+        replNums,
+      };
+    }
+    return null;
+  }, [isReviewerReplacement, suggestion.baseContent, suggestion.suggestedText]);
+
   // Character count delta: baseline -> current pending text
   const baseLength = suggestion.baseContent.length;
   const currentLength = pendingText.length;
@@ -553,6 +567,23 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           </div>
         )}
 
+        {/* Reviewer replacement data alteration warning */}
+        {replacementDataDiff && (
+          <div
+            data-testid="reviewer-replacement-data-notice"
+            className="p-2.5 bg-amber-50 rounded border border-amber-300 text-amber-900 text-xs flex items-start gap-1.5"
+          >
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <strong>审阅替换稿包含数据指标调整：</strong>
+              <span>
+                原文【{replacementDataDiff.origNums.join('、') || '无量化数据'}】与替换稿【{replacementDataDiff.replNums.join('、') || '无量化数据'}】存在差异。
+                该分支已跳过自动化指标保留强制锁定，请主笔务必核验台账依据后再行采纳。
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* 3. Explanations & Verification Notes */}
         <div className="p-2.5 bg-white/90 rounded border border-blue-100 text-xs space-y-1.5">
           <div>
@@ -901,6 +932,23 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                   </div>
                   <div className="p-4 bg-blue-50/50 rounded-lg border border-blue-200 text-slate-900 text-base font-serif leading-relaxed select-text min-h-[140px]">
                     {suggestion.suggestedText}
+                  </div>
+                </div>
+              )}
+
+              {/* Reviewer replacement data alteration warning in Wide Modal */}
+              {replacementDataDiff && (
+                <div
+                  data-testid="reviewer-replacement-data-notice-modal"
+                  className="p-3 bg-amber-50 rounded-lg border border-amber-300 text-amber-900 text-xs flex items-start gap-2"
+                >
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong>审阅替换稿包含数据指标调整：</strong>
+                    <span>
+                      原文【{replacementDataDiff.origNums.join('、') || '无量化数据'}】与替换稿【{replacementDataDiff.replNums.join('、') || '无量化数据'}】存在差异。
+                      该分支已跳过自动化指标保留强制锁定，请主笔务必核验台账依据后再行采纳。
+                    </span>
                   </div>
                 </div>
               )}

@@ -127,13 +127,35 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                       <span className="font-bold text-slate-900 flex items-center gap-1">
                         第 {log.blockOrder} 段
                       </span>
-                      {log.isFineTuned ? (
-                        <span className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
+                      {log.source === 'reviewer_replacement' || (log.isReviewerReplacement && !log.isFineTuned) ? (
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-purple-100 text-purple-900 border border-purple-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
+                          <CheckCircle2 className="w-2.5 h-2.5 text-purple-700" />
+                          审阅替换稿采纳
+                        </span>
+                      ) : log.source === 'reviewer_replacement_fine_tuned' || (log.isReviewerReplacement && log.isFineTuned) ? (
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-indigo-100 text-indigo-900 border border-indigo-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
+                          <Sliders className="w-2.5 h-2.5 text-indigo-700" />
+                          审阅替换稿微调采纳
+                        </span>
+                      ) : log.isFineTuned ? (
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
                           <Sliders className="w-2.5 h-2.5 text-amber-700" />
                           人工微调采纳
                         </span>
                       ) : (
-                        <span className="bg-blue-100 text-blue-800 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5">
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-blue-100 text-blue-800 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
                           <Sparkles className="w-2.5 h-2.5 text-blue-600" />
                           AI建议采纳
                         </span>
@@ -178,11 +200,25 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                     </div>
                     <div className="p-2 bg-blue-50/50 rounded border border-blue-200 text-slate-900">
                       <span className="font-bold text-blue-900 block mb-0.5">
-                        {log.isFineTuned ? '实际采纳（人工微调）：' : '实际采纳：'}
+                        {log.isReviewerReplacement
+                          ? log.isFineTuned
+                            ? '实际采纳（审阅替换稿微调）：'
+                            : '实际采纳（审阅替换稿）：'
+                          : log.isFineTuned
+                          ? '实际采纳（人工微调）：'
+                          : '实际采纳：'}
                       </span>
                       <p className="line-clamp-2 font-serif">{log.afterContent}</p>
                     </div>
                   </div>
+
+                  {/* If reviewer replacement was fine-tuned, also preserve the reviewer's original replacement text */}
+                  {log.isReviewerReplacement && log.isFineTuned && log.reviewerOriginalReplacementText && (
+                    <div className="mt-1.5 p-2 bg-purple-50/60 rounded border border-purple-200 text-purple-950 text-xs">
+                      <span className="font-bold text-purple-900 block mb-0.5">审阅人原始替换正文（已妥善存证）：</span>
+                      <p className="line-clamp-2 font-serif text-slate-700">{log.reviewerOriginalReplacementText}</p>
+                    </div>
+                  )}
 
                   {/* Undone note if undone */}
                   {log.status === 'undone' && (

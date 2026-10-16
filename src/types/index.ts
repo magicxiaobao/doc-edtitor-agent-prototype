@@ -205,7 +205,9 @@ export type ModificationSource =
   | 'ai_suggestion'
   | 'ai_suggestion_fine_tuned'
   | 'manual_edit'
-  | 'review_implementation';
+  | 'review_implementation'
+  | 'reviewer_replacement'
+  | 'reviewer_replacement_fine_tuned';
 
 export interface ReviewCommentSnapshotBeforeChange {
   status: ReviewCommentStatus;
@@ -244,6 +246,8 @@ export interface ParagraphModificationLog {
   beforeContent: string;               // 修改前正文
   afterContent: string;                // 实际写入的正文
   aiOriginalSuggestedText?: string;    // AI生成原始建议（人工微调时不被覆盖）
+  reviewerOriginalReplacementText?: string; // 审阅人原始替换正文（人工微调时不被覆盖）
+  isReviewerReplacement?: boolean;     // 来源是否为审阅人替换稿
   isFineTuned?: boolean;               // 是否经人工微调
   associatedCommentId?: string;        // 关联审阅意见ID
   associatedCommentReviewer?: string;  // 关联审阅人

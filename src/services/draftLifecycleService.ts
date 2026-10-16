@@ -9,6 +9,7 @@ import {
   DraftCandidate,
   RevisionSuggestion,
   ParagraphModificationLog,
+  ModificationSource,
   ReviewCommentSnapshotBeforeChange,
   ReviewCommentSnapshotAfterChange,
   ReviewComment
@@ -1011,7 +1012,17 @@ export function adoptParagraphSuggestion(
   const isFineTuned = validation.isFineTuned;
   const finalContent = pendingTextToAdopt; // 原样写入最终待采纳文本，不进行 trim()
 
-  const actionDescription = isFineTuned
+  const isReviewerReplacement = Boolean(
+    suggestion.isReviewerReplacement ||
+    suggestion.sourceCommentType === 'replacement' ||
+    (suggestion.diffExplanation && suggestion.diffExplanation.includes('替换稿'))
+  );
+
+  const actionDescription = isReviewerReplacement
+    ? isFineTuned
+      ? `采纳第${targetBlock.order}段【${suggestion.sourceCommentReviewer || '审阅人'}】审阅替换稿（人工微调）`
+      : `采纳第${targetBlock.order}段【${suggestion.sourceCommentReviewer || '审阅人'}】审阅替换稿`
+    : isFineTuned
     ? `采纳第${targetBlock.order}段微调建议`
     : suggestion.action === 'custom'
     ? `执行第${targetBlock.order}段自定义改写【${suggestion.customPrompt?.slice(0, 16) || ''}】`
@@ -1057,10 +1068,18 @@ export function adoptParagraphSuggestion(
         implementedAt: existingCmt.implementedAt,
       };
 
-      const adoptedReply = isFineTuned
+      const adoptedReply = isReviewerReplacement
+        ? isFineTuned
+          ? `主笔已采纳微调后的审阅替换稿并更新第${targetBlock.order}段正文。`
+          : `主笔已采纳审阅替换稿并更新第${targetBlock.order}段正文。`
+        : isFineTuned
         ? `主笔已采纳微调后的建议并更新第${targetBlock.order}段正文。`
         : `主笔已采纳修改建议并更新第${targetBlock.order}段正文。`;
-      const adoptedDecisionReason = isFineTuned
+      const adoptedDecisionReason = isReviewerReplacement
+        ? isFineTuned
+          ? `审阅替换稿微调采纳（原建议：${suggestion.diffExplanation}）`
+          : `审阅替换稿采纳（${suggestion.diffExplanation}）`
+        : isFineTuned
         ? `人工微调采纳（原建议：${suggestion.diffExplanation}）`
         : suggestion.diffExplanation;
       const implementedAt = new Date().toISOString();
@@ -1100,6 +1119,15 @@ export function adoptParagraphSuggestion(
     }
   }
 
+  // Determine modification source with clear reviewer replacement distinction
+  const logSource: ModificationSource = isReviewerReplacement
+    ? isFineTuned
+      ? 'reviewer_replacement_fine_tuned'
+      : 'reviewer_replacement'
+    : isFineTuned
+    ? 'ai_suggestion_fine_tuned'
+    : 'ai_suggestion';
+
   // Create modification log entry
   const logEntry: ParagraphModificationLog = {
     id: `MOD-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
@@ -1108,11 +1136,13 @@ export function adoptParagraphSuggestion(
     blockId: targetBlock.id,
     blockOrder: targetBlock.order,
     timestamp: new Date().toISOString(),
-    source: isFineTuned ? 'ai_suggestion_fine_tuned' : 'ai_suggestion',
+    source: logSource,
     sourceDescription: actionDescription,
     beforeContent: targetBlock.content,
     afterContent: finalContent,
     aiOriginalSuggestedText: suggestion.suggestedText,
+    reviewerOriginalReplacementText: isReviewerReplacement ? suggestion.suggestedText : undefined,
+    isReviewerReplacement,
     isFineTuned,
     associatedCommentId: suggestion.sourceCommentId,
     associatedCommentReviewer: suggestion.sourceCommentReviewer,
