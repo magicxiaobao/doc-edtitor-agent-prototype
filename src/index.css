@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    font-size: 16px; /* Standard rem baseline: 1rem = 16px so text-sm (0.875rem) = 14px, text-xs (0.75rem) = 12px */
+  }
+  body {
+    font-size: 14px; /* Default UI body text 14px (minimum standard) */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    color: #1e293b;
+    background-color: #f1f5f9;
+    line-height: 1.5;
+  }
+
+  /* Explicit standard enforcement:
+     Guarantees computed font size >= 14px for common operations/text-sm,
+     and >= 12px for metadata tags/text-xs */
+  .text-sm {
+    font-size: 14px !important;
+    line-height: 1.25rem;
+  }
+  .text-xs {
+    font-size: 12px !important;
+    line-height: 1rem;
+  }
+  .text-base {
+    font-size: 16px !important;
+    line-height: 1.5rem;
+  }
+
+  button, input, select, textarea {
+    font-family: inherit;
+    font-size: inherit;
+  }
+}
+
+/* Custom scrollbars for desktop document workbench */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

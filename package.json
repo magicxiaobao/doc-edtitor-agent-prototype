@@ -1,0 +1,34 @@
+{
+  "name": "doc-editor-agent-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts && tsx test-task10.ts && tsx test-task11.ts && tsx test-task12.ts && tsx test-task13.ts && tsx test-task14.ts && tsx test-task15.ts && tsx test-task16.ts && tsx test-task17.ts && tsx test-task18.tsx && tsx test-task19.tsx"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "docx": "^8.5.0",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^30.1.2",
+    "tailwindcss": "^4.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.7"
+  }
+}
