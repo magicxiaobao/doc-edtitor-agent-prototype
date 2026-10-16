@@ -181,14 +181,16 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
   }, [pendingText, suggestion.suggestedText]);
 
   // Detect whether suggestion originated from reviewer-provided replacement draft
+  // 统一使用明确的来源枚举，删除说明文字关键词推断；明确标为 instruction 时必须保持该语义
   const isReviewerReplacement = useMemo(() => {
+    if (suggestion.sourceCommentType === 'instruction') {
+      return false;
+    }
     return Boolean(
       suggestion.isReviewerReplacement ||
-      suggestion.sourceCommentType === 'replacement' ||
-      (suggestion.sourceCommentId &&
-        (suggestion.diffExplanation.includes('审阅人提供的替换稿') || suggestion.diffExplanation.includes('替换稿')))
+      suggestion.sourceCommentType === 'replacement'
     );
-  }, [suggestion.isReviewerReplacement, suggestion.sourceCommentType, suggestion.sourceCommentId, suggestion.diffExplanation]);
+  }, [suggestion.isReviewerReplacement, suggestion.sourceCommentType]);
 
   // Check whether reviewer replacement modified numbers/metrics relative to original baseline
   const replacementDataDiff = useMemo(() => {

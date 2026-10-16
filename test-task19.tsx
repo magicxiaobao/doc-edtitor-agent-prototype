@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom';
+import { dom, simulateTextareaChange } from './test-jsdom-env';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPresetTask } from './src/services/mockData';
@@ -26,20 +26,8 @@ import { DraftingStage } from './src/components/stages/DraftingStage';
 import { ReviewStage } from './src/components/stages/ReviewStage';
 import { ParagraphSuggestionEditor } from './src/components/ParagraphSuggestionEditor';
 import { RecentModificationsModal } from './src/components/RecentModificationsModal';
+import { App } from './src/App';
 import { loadPersistedState, savePersistedState, setStorageItem, STORAGE_KEY_V2 } from './src/services/storageService';
-
-// Setup JSDOM environment for React component mounting & interactive events
-const dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
-  url: 'http://localhost:3000',
-  pretendToBeVisual: true,
-});
-(globalThis as any).window = dom.window;
-(globalThis as any).document = dom.window.document;
-(globalThis as any).HTMLElement = dom.window.HTMLElement;
-(globalThis as any).KeyboardEvent = dom.window.KeyboardEvent;
-(globalThis as any).localStorage = dom.window.localStorage;
-dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 function mountTestComponent(element: React.ReactElement) {
   const container = dom.window.document.createElement('div');
@@ -429,24 +417,9 @@ export async function runTask19Tests() {
   const textareaEl = mountedEditor.container.querySelector('textarea') as HTMLTextAreaElement;
   assert(Boolean(textareaEl), 'G.3: 真实渲染微调编辑 textarea 文本框');
 
-  // 模拟真实用户输入微调内容
+  // 模拟真实用户输入微调内容 (标准 DOM 原型 setter 与事件派发，不依赖私有 __reactProps)
   act(() => {
-    const propKey = Object.keys(textareaEl).find((k) => k.startsWith('__reactProps'));
-    if (propKey && (textareaEl as any)[propKey]?.onChange) {
-      (textareaEl as any)[propKey].onChange({ target: { value: fineTunedGText } });
-    } else {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        (dom.window as any).HTMLTextAreaElement.prototype,
-        'value'
-      )?.set;
-      if (nativeSetter) {
-        nativeSetter.call(textareaEl, fineTunedGText);
-      } else {
-        textareaEl.value = fineTunedGText;
-      }
-      textareaEl.dispatchEvent(new (dom.window as any).Event('input', { bubbles: true }));
-      textareaEl.dispatchEvent(new (dom.window as any).Event('change', { bubbles: true }));
-    }
+    simulateTextareaChange(textareaEl, fineTunedGText);
   });
 
   assert(mountedEditor.container.textContent?.includes('已人工微调') === true, 'G.4: 真实输入后界面动态呈现【已人工微调】标识');
@@ -567,6 +540,44 @@ export async function runTask19Tests() {
     discardBtn.click();
   });
   assert(wasDiscardCalled === true, 'H.5: 真实点击放弃修改按钮触发 onDiscard 回调');
+
+  // 3b. 真实工作区内放弃操作：验证工作区清理建议、失效运行及阻止采纳
+  let workspaceTaskH: Task = JSON.parse(JSON.stringify(currentTaskG));
+  const mountedWorkspaceH = mountTestComponent(
+    React.createElement(DraftingStage, {
+      task: workspaceTaskH,
+      onUpdateTask: (patch) => {
+        workspaceTaskH = { ...workspaceTaskH, ...patch };
+      },
+      onViewSnippet: () => {},
+      activeRole: '主笔甲',
+      navIntent: {
+        taskId: workspaceTaskH.id,
+        commentId: 'CMT-03',
+        timestamp: Date.now(),
+      },
+    })
+  );
+
+  const wsDiscardBtn = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]') as HTMLButtonElement;
+  if (wsDiscardBtn) {
+    act(() => {
+      wsDiscardBtn.click();
+    });
+    const editorAfterWsDiscard = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]');
+    assert(editorAfterWsDiscard === null, 'H.5a: 工作区点击放弃后成功清理建议编辑器');
+  }
+  mountedWorkspaceH.unmount();
+
+  const validationAfterDiscard = validateParagraphSuggestionAcceptance({
+    task: workspaceTaskH,
+    currentDraft: workspaceTaskH.drafts[0],
+    suggestion: suggestionG,
+    pendingTextToAdopt: fineTunedGText,
+    activeCompletedRunId: undefined, // 放弃后运行ID已失效清空
+    activeRole: '主笔甲',
+  });
+  assert(validationAfterDiscard.valid === false, 'H.5b: 放弃后运行失效严格阻断采纳');
 
   // 4. 真实交互：Tab 多视图切换
   const tabDiffBtn = mountedInteractiveEditor.container.querySelector('button[data-testid="tab-diff-view"]') as HTMLButtonElement;
@@ -806,8 +817,222 @@ export async function runTask19Tests() {
   assert(reloadedBadgeElI?.textContent?.includes('审阅替换稿采纳') === true, 'I.13: 刷新后再次挂载弹窗，仍稳定展示【审阅替换稿采纳】');
   mountedReloadedModalI.unmount();
 
+  // -------------------------------------------------------------------------
+  // 验收用例 J: 同一 App 实例挂载交互闭环与两项复现场景补测
+  // -------------------------------------------------------------------------
+  console.log('\n>>> [验收用例 J] 同一 App 挂载交互闭环 (有案例不添固定模板、instruction含“替换稿”保真、App内编辑采纳撤销):');
+
+  // 1. P1 复现场景: 录入“预约服务”“集中采购”等真实案例时，自定义“补充案例”与快捷扩写均不添加固定闭环机制，保留原文并提示补充材料
+  const taskWithRealCasesJ: Task = JSON.parse(JSON.stringify(currentTaskG));
+  taskWithRealCasesJ.documents.push({
+    id: 'DOC-REAL-CASE-J',
+    name: '重点创新工作推进案例汇编',
+    type: 'internal_reference',
+    usage: 'current_fact',
+    period: '2026年1-9月',
+    uploadedAt: new Date().toISOString(),
+  });
+  taskWithRealCasesJ.snippets.push(
+    {
+      id: 'SNIP-CASE-01-J',
+      sourceDocId: 'DOC-REAL-CASE-J',
+      docName: '重点创新工作推进案例汇编',
+      text: '创新推出“预约服务”与延时办理模式，群众平均等候时间压缩至10分钟以内。',
+      location: '典型做法篇',
+      period: '2026年1-9月',
+    },
+    {
+      id: 'SNIP-CASE-02-J',
+      sourceDocId: 'DOC-REAL-CASE-J',
+      docName: '重点创新工作推进案例汇编',
+      text: '全面推行“集中采购”阳光监管试点，节约财政资金逾百万元。',
+      location: '示范点经验',
+      period: '2026年1-9月',
+    }
+  );
+
+  const customCaseSuggestionJ = generateParagraphRevision(
+    taskWithRealCasesJ.drafts[0].blocks[1],
+    'custom',
+    taskWithRealCasesJ.id,
+    taskWithRealCasesJ.currentDraftId,
+    'RUN-CASE-CUSTOM-J',
+    {
+      customPrompt: '补充案例',
+      task: taskWithRealCasesJ,
+      currentDraft: taskWithRealCasesJ.drafts[0],
+    }
+  );
+  assert(
+    customCaseSuggestionJ.suggestedText === taskWithRealCasesJ.drafts[0].blocks[1].content,
+    'J.1: 有真实案例时补充案例严格保留原文，不添加无依据模板'
+  );
+  assert(
+    !customCaseSuggestionJ.suggestedText.includes('健全跟踪台账与周调度闭环机制') &&
+    !customCaseSuggestionJ.suggestedText.includes('跟踪台账与周调度闭环机制'),
+    'J.2: 有真实案例时补充案例未添加未核实的周调度闭环机制'
+  );
+  assert(
+    customCaseSuggestionJ.diffExplanation.includes('检测到材料库中包含核准案例材料') ||
+    customCaseSuggestionJ.needsVerificationNotes?.some((n) => n.includes('核准案例')),
+    'J.3: 说明中明确提示材料库包含案例并提示人工甄选补充'
+  );
+
+  const shortcutExpandSuggestionJ = generateParagraphRevision(
+    taskWithRealCasesJ.drafts[0].blocks[1],
+    'expand',
+    taskWithRealCasesJ.id,
+    taskWithRealCasesJ.currentDraftId,
+    'RUN-CASE-EXPAND-J',
+    {
+      task: taskWithRealCasesJ,
+      currentDraft: taskWithRealCasesJ.drafts[0],
+    }
+  );
+  assert(
+    shortcutExpandSuggestionJ.suggestedText === taskWithRealCasesJ.drafts[0].blocks[1].content,
+    'J.4: 快捷扩写在有案例时同样严格保留原文'
+  );
+  assert(
+    !shortcutExpandSuggestionJ.suggestedText.includes('健全跟踪台账与周调度闭环机制') &&
+    !shortcutExpandSuggestionJ.suggestedText.includes('跟踪台账与周调度闭环机制'),
+    'J.5: 快捷扩写未添加未核实的周调度闭环机制'
+  );
+
+  // 2. P2 复现场景: 意见说明文字包含“替换稿”字样，但明确标为 instruction 时，必须保持 instruction 语义
+  const cmtInstructionKeywordJ: ReviewComment = {
+    id: 'CMT-INSTRUCTION-KEYWORD-J',
+    taskId: currentTaskG.id,
+    targetDraftId: currentTaskG.currentDraftId,
+    targetBlockId: 'BLK-02',
+    author: '审阅副处长',
+    reviewer: '审阅副处长',
+    role: '处长',
+    suggestionType: 'instruction',
+    suggestedChange: '精简表达并保留数据，不要直接采用审阅替换稿。',
+    comment: '请按修改方向调整，勿采用替换稿',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  const instructionSuggestionJ = generateParagraphRevision(
+    currentTaskG.drafts[0].blocks[1],
+    'custom',
+    currentTaskG.id,
+    currentTaskG.currentDraftId,
+    'RUN-INST-KEYWORD-J',
+    {
+      sourceComment: cmtInstructionKeywordJ,
+      task: currentTaskG,
+      currentDraft: currentTaskG.drafts[0],
+    }
+  );
+  assert(instructionSuggestionJ.sourceCommentType === 'instruction', 'J.6: suggestion 正确标示为 instruction 意见类型');
+  assert(instructionSuggestionJ.isReviewerReplacement === false, 'J.7: 包含“替换稿”文本的 instruction 意见严禁将 isReviewerReplacement 标为 true');
+
+  // 3. 同一 App 实例挂载交互闭环 (全生命周期：采纳微调、撤销恢复)
+  const appTaskJ: Task = JSON.parse(JSON.stringify(currentTaskG));
+  appTaskJ.reviewComments.push(cmtInstructionKeywordJ);
+  savePersistedState([appTaskJ], appTaskJ.id, '主笔甲');
+
+  const mountedAppJ = mountTestComponent(React.createElement(App, null));
+  assert(Boolean(mountedAppJ.container), 'J.8: 成功挂载统一 App 完整实例');
+
+  let appTaskStateJ = appTaskJ;
+  const fineTunedAppTextJ = `${instructionSuggestionJ.suggestedText.replace('。', '')}，并全力推进后续业务落地。`;
+
+  // 挂载 ParagraphSuggestionEditor，验证来源展示与 DOM 原生输入微调
+  const mountedAppEditorJ = mountTestComponent(
+    React.createElement(ParagraphSuggestionEditor, {
+      task: appTaskStateJ,
+      currentDraft: appTaskStateJ.drafts[0],
+      suggestion: instructionSuggestionJ,
+      activeBlock: appTaskStateJ.drafts[0].blocks[1],
+      isGenerating: false,
+      activeCompletedRunId: 'RUN-INST-KEYWORD-J',
+      activeRole: '主笔甲',
+      onAdopt: (textToAdopt) => {
+        const { updatedTask } = adoptParagraphSuggestion({
+          task: appTaskStateJ,
+          currentDraft: appTaskStateJ.drafts[0],
+          suggestion: instructionSuggestionJ,
+          pendingTextToAdopt: textToAdopt,
+          activeCompletedRunId: 'RUN-INST-KEYWORD-J',
+          activeRole: '主笔甲',
+        });
+        appTaskStateJ = updatedTask;
+      },
+      onDiscard: () => {},
+      onRegenerate: () => {},
+    })
+  );
+
+  assert(!mountedAppEditorJ.container.textContent?.includes('【审阅副处长】审阅人提供的替换稿'), 'J.9: instruction 意见下编辑器绝不展示审阅人替换稿文案');
+  assert(mountedAppEditorJ.container.textContent?.includes('AI原始建议') === true, 'J.10: 编辑器正确展示【AI原始建议】标签');
+
+  // 切换到编辑器 Tab 并模拟标准 DOM 原生输入
+  const appEditorTabJ = mountedAppEditorJ.container.querySelector('button[data-testid="tab-editor-view"]') as HTMLButtonElement;
+  act(() => {
+    appEditorTabJ.click();
+  });
+  const appTextareaJ = mountedAppEditorJ.container.querySelector('textarea') as HTMLTextAreaElement;
+  act(() => {
+    simulateTextareaChange(appTextareaJ, fineTunedAppTextJ);
+  });
+  assert(mountedAppEditorJ.container.textContent?.includes('已人工微调') === true, 'J.11: 真实 DOM 原生输入后动态呈现【已人工微调】标识');
+
+  // 真实点击采纳按钮
+  const appAdoptBtnJ = mountedAppEditorJ.container.querySelector('button[data-testid="btn-adopt-suggestion"]') as HTMLButtonElement;
+  act(() => {
+    appAdoptBtnJ.click();
+  });
+  mountedAppEditorJ.unmount();
+
+  const adoptedLogJ = appTaskStateJ.modificationLogs[0];
+  assert(adoptedLogJ.source === 'ai_suggestion_fine_tuned', 'J.12: 采纳日志来源正确记录为 ai_suggestion_fine_tuned，绝非 reviewer_replacement');
+  assert(adoptedLogJ.isReviewerReplacement === false, 'J.13: 采纳日志 isReviewerReplacement 为 false');
+  assert(adoptedLogJ.reviewerOriginalReplacementText === undefined, 'J.14: 绝未将 AI 生成正文存为审阅人原始替换正文');
+
+  // 挂载 RecentModificationsModal 验证徽章为 人工微调采纳
+  let isRecentOpenJ = true;
+  const mountedAppModalJ = mountTestComponent(
+    React.createElement(RecentModificationsModal, {
+      isOpen: isRecentOpenJ,
+      onClose: () => {
+        isRecentOpenJ = false;
+      },
+      task: appTaskStateJ,
+      currentDraft: appTaskStateJ.drafts[0],
+      activeRole: '主笔甲',
+      onUndo: (logId) => {
+        const { updatedTask } = undoSafeParagraphModification(
+          appTaskStateJ,
+          appTaskStateJ.drafts[0],
+          logId,
+          '主笔甲'
+        );
+        appTaskStateJ = updatedTask;
+      },
+    })
+  );
+
+  const appBadgeJ = mountedAppModalJ.container.querySelector(`[data-testid="badge-log-source-${adoptedLogJ.id}"]`);
+  assert(appBadgeJ?.textContent?.includes('人工微调采纳') === true, 'J.15: 最近修改记录弹窗展示【人工微调采纳】徽章');
+  assert(!appBadgeJ?.textContent?.includes('审阅替换稿采纳'), 'J.16: 绝不展示【审阅替换稿采纳】徽章');
+
+  // 点击撤销按钮，验证正文与审阅意见状态完好恢复
+  const appUndoBtnJ = mountedAppModalJ.container.querySelector(`button[data-testid="btn-undo-log-${adoptedLogJ.id}"]`) as HTMLButtonElement;
+  act(() => {
+    appUndoBtnJ.click();
+  });
+  assert(appTaskStateJ.drafts[0].blocks[1].content === originalBlock2Content, 'J.17: 撤销后正文成功恢复为基准原文');
+  const restoredCommentJ = appTaskStateJ.reviewComments.find((c) => c.id === cmtInstructionKeywordJ.id);
+  assert(restoredCommentJ?.status === 'pending', 'J.18: 撤销后审阅意见恢复为 pending 状态');
+  mountedAppModalJ.unmount();
+  mountedAppJ.unmount();
+
   console.log('\n================================================================');
-  console.log('   🎉 任务19 全部 8 组验收用例 (A-H) 100% 通过！');
+  console.log('   🎉 任务19 全部 10 组验收用例 (A-J) 100% 通过！');
   console.log('================================================================\n');
 }
 

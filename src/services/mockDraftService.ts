@@ -522,14 +522,14 @@ export function generateParagraphRevision(
         const taskObj = options?.task;
         const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
 
+        // 两个分支均移除“健全跟踪台账与周调度闭环机制”固定模板；若尚不能根据所选材料可靠扩写，保留原文并提示人工选择、补充案例
+        suggestedText = originalText;
         if (!hasAuthenticCase) {
-          suggestedText = originalText;
-          diffExplanation = `材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与佐证依据后再行扩写。`;
+          diffExplanation = '材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与佐证依据后再行扩写。';
           needsVerificationNotes.push('当前未录入真实案例材料，如需典型个案请先在材料库补充核准', '缺少依据时已严格保留原文，未添加无材料依据的成效或举措');
         } else {
-          suggestedText = `${originalText.replace(/。$/, '')}。同时深入总结典型实践做法，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
-          diffExplanation = `执行扩写指令：结合材料库中核准案例做法，扩充闭环举措并严格保留所有量化指标。`;
-          needsVerificationNotes.push('核对扩写举措与材料出处一致');
+          diffExplanation = '检测到材料库中包含核准案例材料，但为防止拼接无依据的固定举措模板，系统已严格保留段落原文。建议结合具体业务场景由人工甄选案例材料并定向补充。';
+          needsVerificationNotes.push('材料库已有核准案例，已保留原文并提示人工根据具体材料按需补充', '已移除无依据的固定举措模板，避免引入未经核验的台账机制');
         }
       } else {
         // Unsupported prompt handling
@@ -564,14 +564,14 @@ export function generateParagraphRevision(
           const taskObj = options?.task;
           const hasAuthenticCase = taskObj ? taskObj.snippets.some((s) => isValidAuthenticCase(taskObj, s)) : false;
 
+          // 两个分支均移除“健全跟踪台账与周调度闭环机制”固定模板；若尚不能根据所选材料可靠扩写，保留原文并提示人工选择、补充案例
+          suggestedText = originalText;
           if (!hasAuthenticCase) {
-            suggestedText = originalText;
-            diffExplanation = `材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与事实材料后再行扩写。`;
+            diffExplanation = '材料库中暂无本期核准的真实典型案例材料依据。为杜绝无据虚构或盲目添加未核实举措，本次改写严格保留原文未作修改。建议在材料库中补充并核准相关案例与事实材料后再行扩写。';
             needsVerificationNotes.push('当前材料库未录入本期核准真实案例材料，已提示补充材料并避免编造虚构案例', '缺少依据时已严格保留原文，未添加无材料依据的成效或举措');
           } else {
-            suggestedText = `${originalText.replace(/。$/, '')}。同时总结提炼典型推进经验，健全跟踪台账与周调度闭环机制，确保各项举措落细落实。`;
-            diffExplanation = `在段落尾部扩充举措闭环机制，关联材料库中真实案例材料，未捏造额外业务指标。`;
-            needsVerificationNotes.push('核对案例细节与原始材料登记表吻合');
+            diffExplanation = '检测到材料库中包含核准案例材料，但为防止拼接无依据的固定举措模板，系统已严格保留段落原文。建议结合具体业务场景由人工甄选案例材料并定向补充。';
+            needsVerificationNotes.push('材料库已有核准案例，已保留原文并提示人工根据具体材料按需补充', '已移除无依据的固定举措模板，避免引入未经核验的台账机制');
           }
           break;
         }

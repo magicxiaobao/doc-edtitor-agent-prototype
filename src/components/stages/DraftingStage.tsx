@@ -1104,6 +1104,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         return next;
       });
     }
+    completedRevisionRunIdRef.current = null;
+    activeRevisionRunIdRef.current = null;
+    setActiveRevisionRunId(null);
     setRevisionSuggestion(null);
   };
 

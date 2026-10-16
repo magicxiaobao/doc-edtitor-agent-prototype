@@ -1012,10 +1012,10 @@ export function adoptParagraphSuggestion(
   const isFineTuned = validation.isFineTuned;
   const finalContent = pendingTextToAdopt; // 原样写入最终待采纳文本，不进行 trim()
 
+  // 统一使用明确的来源枚举，删除说明文字关键词推断；明确标为 instruction 时必须保持该语义
   const isReviewerReplacement = Boolean(
-    suggestion.isReviewerReplacement ||
-    suggestion.sourceCommentType === 'replacement' ||
-    (suggestion.diffExplanation && suggestion.diffExplanation.includes('替换稿'))
+    suggestion.sourceCommentType !== 'instruction' &&
+    (suggestion.isReviewerReplacement || suggestion.sourceCommentType === 'replacement')
   );
 
   const actionDescription = isReviewerReplacement
