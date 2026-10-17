@@ -28,6 +28,7 @@ import { RecentModificationsModal } from '../RecentModificationsModal';
 import { AutoResizeParagraphTextarea } from '../AutoResizeParagraphTextarea';
 import { DraftingInspectorContent } from '../DraftingInspectorContent';
 import { MaterialEvidenceList } from '../MaterialEvidenceList';
+import { MaterialSupplementModal } from '../MaterialSupplementModal';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -356,6 +357,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [activeRevisionRunId, setActiveRevisionRunId] = useState<string | null>(null);
   const activeRevisionRunIdRef = useRef<string | null>(null);
   const completedRevisionRunIdRef = useRef<string | null>(null);
+
+  // Task 20: Material Supplementation Modal state & handler
+  const [showMaterialSupplementModal, setShowMaterialSupplementModal] = useState<boolean>(false);
+  const handleOpenMaterialSupplement = () => {
+    setShowMaterialSupplementModal(true);
+  };
+  const handleSupplementSuccess = (suggestion: RevisionSuggestion) => {
+    setRevisionSuggestion(suggestion);
+    setInspectorTab('ai_suggestions');
+    if (suggestion.runId) {
+      completedRevisionRunIdRef.current = suggestion.runId;
+    }
+  };
 
   // Key and fine-tuned text for current suggestion
   const fineTuneKey = revisionSuggestion && currentDraft
@@ -1069,7 +1083,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         logId: result.logEntry.id,
         blockOrder: result.targetBlock.order,
         blockId: result.targetBlock.id,
-        message: result.logEntry.isFineTuned ? '已微调写入' : 'AI建议采纳写入',
+        message: result.logEntry.isFineTuned
+          ? (result.logEntry.isMaterialSupplementation ? '已微调材料补写写入' : '已微调写入')
+          : (result.logEntry.isMaterialSupplementation ? '材料补写建议采纳写入' : 'AI建议采纳写入'),
       });
     } catch (err: any) {
       alert(err.message || '采纳建议失败');
@@ -2619,7 +2635,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   const isSectionFirstBlock = idx === 0 || currentDraft.blocks[idx - 1]?.sectionId !== block.sectionId;
 
                   return (
-                    <div key={block.id} id={`block-card-${block.id}`} className="space-y-2">
+                    <div 
+                      key={block.id} 
+                      id={`block-card-${block.id}`} 
+                      data-testid={`block-card-${block.id}`} 
+                      onClick={() => setSelectedBlockId(block.id)}
+                      className="space-y-2"
+                    >
                       {/* Section Title if First Block */}
                       {isSectionFirstBlock && section && (
                         <h2 className="text-base font-bold text-slate-800 pt-3 pb-1 border-b border-slate-100 flex items-center justify-between">
@@ -2905,6 +2927,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               }}
               isDrawer={false}
               onClose={() => setShowRightInspector(false)}
+              onOpenMaterialSupplement={handleOpenMaterialSupplement}
             />
           </div>
         ) : (
@@ -3077,6 +3100,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   }, 50);
                 }
               }}
+              onOpenMaterialSupplement={handleOpenMaterialSupplement}
             />
           </div>
         </div>
@@ -3708,6 +3732,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         currentDraft={currentDraft}
         activeRole={activeRole}
         onUndo={handleUndoModification}
+      />
+
+      {/* Task 20: Material-Driven Paragraph Supplementation Modal */}
+      <MaterialSupplementModal
+        isOpen={showMaterialSupplementModal}
+        onClose={() => setShowMaterialSupplementModal(false)}
+        task={task}
+        currentDraft={currentDraft}
+        activeBlock={activeBlock}
+        activeRole={activeRole}
+        onViewSnippet={onViewSnippet}
+        onSelectStage={onSelectStage}
+        onSupplementSuccess={handleSupplementSuccess}
       />
     </div>
   );

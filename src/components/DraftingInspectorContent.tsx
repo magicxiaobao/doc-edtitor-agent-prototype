@@ -10,6 +10,7 @@ import {
   Lock,
   Tag,
   MessageSquare,
+  BookOpen,
 } from 'lucide-react';
 import {
   Task,
@@ -79,6 +80,8 @@ export interface DraftingInspectorContentProps {
   // Drawer mode & close handler
   isDrawer?: boolean;
   onClose: () => void;
+  // Material Supplementation
+  onOpenMaterialSupplement?: () => void;
 }
 
 export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> = ({
@@ -129,6 +132,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
   onPendingFineTuneTextChange,
   isDrawer = false,
   onClose,
+  onOpenMaterialSupplement,
 }) => {
   return (
     <div className="flex flex-col h-full space-y-4">
@@ -694,6 +698,32 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
             {/* TAB 1: AI 修改建议 */}
             {inspectorTab === 'ai_suggestions' && (
               <div className="space-y-4">
+                {/* Task 20: 依据材料补写专属入口 */}
+                <div className="p-3 bg-teal-50/80 rounded-lg border border-teal-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-900 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-teal-700" />
+                      <span>指定材料驱动的段落补写</span>
+                    </span>
+                    <span className="text-xs text-teal-700 font-mono">
+                      仅限第{activeBlock.order}段
+                    </span>
+                  </div>
+                  <p className="text-xs text-teal-800 leading-normal">
+                    明确勾选本期有效材料原文与核准事实，由主笔设定要求生成真实可溯源的段落补写候选。
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="btn-open-material-supplement"
+                    onClick={onOpenMaterialSupplement}
+                    disabled={isRevisionGenerating || isCurrentDraftImmutable}
+                    className="w-full py-2 px-3 bg-teal-700 hover:bg-teal-800 disabled:bg-slate-300 text-white rounded-md text-sm font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-2xs transition-colors"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>依据材料补写第 {activeBlock.order} 段</span>
+                  </button>
+                </div>
+
                 {/* Shortcut Revision Operations */}
                 <div className="space-y-2">
                   <span className="text-xs font-bold text-slate-700 block">快捷精修操作：</span>
@@ -861,15 +891,29 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
 
             {/* TAB 2: 材料依据 */}
             {inspectorTab === 'material_evidence' && (
-              <MaterialEvidenceList
-                task={task}
-                currentDraft={currentDraft}
-                activeBlock={activeBlock}
-                isCurrentDraftImmutable={isCurrentDraftImmutable}
-                inspectingFactId={inspectingFactId}
-                onClearInspectingFactId={onClearInspectingFactId}
-                onViewSnippet={onViewSnippet}
-              />
+              <div className="space-y-3">
+                <div className="pb-2 border-b border-slate-200 flex justify-end">
+                  <button
+                    type="button"
+                    data-testid="btn-open-material-supplement-from-evidence"
+                    onClick={onOpenMaterialSupplement}
+                    disabled={isRevisionGenerating || isCurrentDraftImmutable}
+                    className="w-full py-2 px-3 bg-teal-700 hover:bg-teal-800 disabled:bg-slate-300 text-white rounded-md text-sm font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-2xs transition-colors"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>依据材料补写第 {activeBlock.order} 段</span>
+                  </button>
+                </div>
+                <MaterialEvidenceList
+                  task={task}
+                  currentDraft={currentDraft}
+                  activeBlock={activeBlock}
+                  isCurrentDraftImmutable={isCurrentDraftImmutable}
+                  inspectingFactId={inspectingFactId}
+                  onClearInspectingFactId={onClearInspectingFactId}
+                  onViewSnippet={onViewSnippet}
+                />
+              </div>
             )}
           </div>
         ) : (

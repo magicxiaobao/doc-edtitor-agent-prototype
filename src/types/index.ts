@@ -152,11 +152,27 @@ export interface ParagraphBlock {
   order: number;
   content: string;
   referencedFactIds: string[];
+  adoptedEvidences?: AdoptedEvidenceRecord[];
   hasFactConflict?: boolean;
   hasUnverifiedData?: boolean;
   hasPendingReviewComment?: boolean;
   updatedAt: string;
   revisionSeq?: number;
+}
+
+export interface AdoptedEvidenceRecord {
+  evidenceId: string;
+  sourceDocId: string;
+  sourceDocName: string;
+  snippetLocation?: string;
+  snippetText: string;
+  period: string;
+  usage: MaterialUsage;
+  associatedFactId?: string;
+  metric?: string;
+  metricScope?: string;
+  contentFingerprint: string;
+  capturedAt: string;
 }
 
 export type RevisionAction = 'compress' | 'expand' | 'formal' | 'highlight' | 'custom';
@@ -192,6 +208,12 @@ export interface RevisionSuggestion {
   sourceCommentSummary?: string;
   sourceCommentType?: ReviewSuggestionType;
   isReviewerReplacement?: boolean;
+  isMaterialSupplementation?: boolean;
+  selectedSnippetIds?: string[];
+  selectedFactIds?: string[];
+  adoptedEvidences?: AdoptedEvidenceRecord[];
+  materialFingerprint?: string;
+  materialPrompt?: string;
 }
 
 export interface AuditRecord {
@@ -207,7 +229,9 @@ export type ModificationSource =
   | 'manual_edit'
   | 'review_implementation'
   | 'reviewer_replacement'
-  | 'reviewer_replacement_fine_tuned';
+  | 'reviewer_replacement_fine_tuned'
+  | 'material_supplementation'
+  | 'material_supplementation_fine_tuned';
 
 export interface ReviewCommentSnapshotBeforeChange {
   status: ReviewCommentStatus;
@@ -249,6 +273,10 @@ export interface ParagraphModificationLog {
   reviewerOriginalReplacementText?: string; // 审阅人原始替换正文（人工微调时不被覆盖）
   isReviewerReplacement?: boolean;     // 来源是否为审阅人替换稿
   isFineTuned?: boolean;               // 是否经人工微调
+  isMaterialSupplementation?: boolean; // 来源是否为材料补写
+  adoptedEvidences?: AdoptedEvidenceRecord[]; // 采纳时实际采用的材料依据存证快照
+  previousAdoptedEvidences?: AdoptedEvidenceRecord[]; // 采纳前的材料依据存证快照（用于安全撤销精准恢复）
+  previousReferencedFactIds?: string[]; // 采纳前的事实引用列表（用于安全撤销精准恢复）
   associatedCommentId?: string;        // 关联审阅意见ID
   associatedCommentReviewer?: string;  // 关联审阅人
   previousCommentState?: ReviewCommentSnapshotBeforeChange; // 采纳前意见状态存证（用于安全撤销时精准恢复）

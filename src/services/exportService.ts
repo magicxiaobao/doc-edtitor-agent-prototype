@@ -104,6 +104,15 @@ export function exportDocumentAsTxt(
           content += `    >>> 依据出处：${referencedFacts}\n\n`;
         }
       }
+
+      if (opts.includeEvidence && block.adoptedEvidences && block.adoptedEvidences.length > 0) {
+        const adoptedMaterials = block.adoptedEvidences
+          .map((ev) => `[材料补写出处: ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) “${ev.snippetText}” (期间: ${ev.period})]`)
+          .join(' ');
+        if (adoptedMaterials) {
+          content += `    >>> 材料补写依据：${adoptedMaterials}\n\n`;
+        }
+      }
     });
   }
 
@@ -120,6 +129,17 @@ export function exportDocumentAsTxt(
       });
     } else {
       content += `暂无已核准的事实依据。\n`;
+    }
+
+    // Include adopted material supplementation evidence if present
+    const allAdoptedEvidences = draft.blocks.flatMap((b) =>
+      (b.adoptedEvidences || []).map((ev) => ({ ...ev, blockOrder: b.order }))
+    );
+    if (allAdoptedEvidences.length > 0) {
+      content += `\n【段落补写采纳材料依据清单】\n----------------------------------------------------\n`;
+      allAdoptedEvidences.forEach((ev, idx) => {
+        content += `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”\n`;
+      });
     }
     content += `\n`;
   }
@@ -385,6 +405,29 @@ export async function exportDocumentAsDocx(
                   size: 20,
                   italics: true,
                   color: '1E40AF',
+                  font: 'FangSong',
+                }),
+              ],
+            })
+          );
+        }
+      }
+
+      if (opts.includeEvidence && block.adoptedEvidences && block.adoptedEvidences.length > 0) {
+        const adoptedMaterials = block.adoptedEvidences
+          .map((ev) => `【材料补写】${ev.sourceDocName} “${ev.snippetText}” (${ev.period})`)
+          .join('；');
+        if (adoptedMaterials) {
+          docParagraphs.push(
+            new Paragraph({
+              spacing: { after: 150 },
+              indent: { left: 480 },
+              children: [
+                new TextRun({
+                  text: `📄 材料依据：${adoptedMaterials}`,
+                  size: 20,
+                  italics: true,
+                  color: '047857',
                   font: 'FangSong',
                 }),
               ],

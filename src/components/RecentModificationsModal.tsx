@@ -15,7 +15,8 @@ import {
   MessageSquare,
   AlertCircle,
   Clock,
-  ArrowRight
+  ArrowRight,
+  FileText
 } from 'lucide-react';
 
 interface RecentModificationsModalProps {
@@ -127,7 +128,23 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                       <span className="font-bold text-slate-900 flex items-center gap-1">
                         第 {log.blockOrder} 段
                       </span>
-                      {log.source === 'reviewer_replacement' || (log.isReviewerReplacement && !log.isFineTuned) ? (
+                      {log.source === 'material_supplementation_fine_tuned' || (log.isMaterialSupplementation && log.isFineTuned) ? (
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-teal-100 text-teal-900 border border-teal-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
+                          <Sliders className="w-2.5 h-2.5 text-teal-700" />
+                          材料补写微调采纳
+                        </span>
+                      ) : log.source === 'material_supplementation' || (log.isMaterialSupplementation && !log.isFineTuned) ? (
+                        <span
+                          data-testid={`badge-log-source-${log.id}`}
+                          className="bg-teal-100 text-teal-900 border border-teal-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
+                        >
+                          <FileText className="w-2.5 h-2.5 text-teal-700" />
+                          材料补写采纳
+                        </span>
+                      ) : log.source === 'reviewer_replacement' || (log.isReviewerReplacement && !log.isFineTuned) ? (
                         <span
                           data-testid={`badge-log-source-${log.id}`}
                           className="bg-purple-100 text-purple-900 border border-purple-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
@@ -200,7 +217,11 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                     </div>
                     <div className="p-2 bg-blue-50/50 rounded border border-blue-200 text-slate-900">
                       <span className="font-bold text-blue-900 block mb-0.5">
-                        {log.isReviewerReplacement
+                        {log.isMaterialSupplementation
+                          ? log.isFineTuned
+                            ? '实际采纳（材料补写微调）：'
+                            : '实际采纳（材料补写）：'
+                          : log.isReviewerReplacement
                           ? log.isFineTuned
                             ? '实际采纳（审阅替换稿微调）：'
                             : '实际采纳（审阅替换稿）：'
@@ -217,6 +238,19 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                     <div className="mt-1.5 p-2 bg-purple-50/60 rounded border border-purple-200 text-purple-950 text-xs">
                       <span className="font-bold text-purple-900 block mb-0.5">审阅人原始替换正文（已妥善存证）：</span>
                       <p className="line-clamp-2 font-serif text-slate-700">{log.reviewerOriginalReplacementText}</p>
+                    </div>
+                  )}
+
+                  {/* If material supplementation, display adopted evidences record */}
+                  {log.isMaterialSupplementation && log.adoptedEvidences && log.adoptedEvidences.length > 0 && (
+                    <div className="mt-1.5 p-2 bg-teal-50/60 rounded border border-teal-200 text-teal-950 text-xs space-y-1">
+                      <span className="font-bold text-teal-900 block mb-0.5">本次采纳采用的材料依据存证：</span>
+                      {log.adoptedEvidences.map((ev, evIdx) => (
+                        <div key={evIdx} className="text-xs text-teal-800 flex items-center justify-between gap-1">
+                          <span className="truncate">【{ev.sourceDocName}】“{ev.snippetText}”</span>
+                          <span className="text-teal-600 shrink-0 font-mono text-xs">{ev.period}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
 

@@ -79,8 +79,8 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
     }
   };
 
-  // View modes: 'diff' (差异对比), 'editor' (微调编辑), 'baseline' (生成基准原文), 'ai_original' (AI原始建议)
-  const [viewMode, setViewMode] = useState<'diff' | 'editor' | 'baseline' | 'ai_original'>('diff');
+  // View modes: 'diff' (差异对比), 'editor' (微调编辑), 'baseline' (生成基准原文), 'ai_original' (AI原始建议), 'material_text' (材料原文), 'adopted_evidence' (涉及的依据)
+  const [viewMode, setViewMode] = useState<'diff' | 'editor' | 'baseline' | 'ai_original' | 'material_text' | 'adopted_evidence'>('diff');
 
   // Copy feedback tooltip
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
@@ -303,8 +303,13 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="bg-blue-100/80 text-blue-800 px-2 py-0.5 rounded text-xs font-medium">
-            {isReviewerReplacement
+          <span
+            data-testid="badge-suggestion-source"
+            className="bg-blue-100/80 text-blue-800 px-2 py-0.5 rounded text-xs font-medium"
+          >
+            {suggestion.isMaterialSupplementation
+              ? '材料补写建议（本地模拟）'
+              : isReviewerReplacement
               ? `审阅替换稿（${suggestion.sourceCommentReviewer || '审阅人'}）`
               : suggestion.action === 'custom'
               ? `指令：${suggestion.customPrompt?.slice(0, 10) || '改写'}...`
@@ -398,12 +403,12 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
         )}
 
         {/* View Mode Switcher Tabs */}
-        <div className="flex items-center gap-1 bg-white p-1 rounded-md border border-slate-200">
+        <div className="flex items-center gap-1 bg-white p-1 rounded-md border border-slate-200 flex-wrap">
           <button
             type="button"
             data-testid="tab-diff-view"
             onClick={() => setViewMode('diff')}
-            className={`flex-1 py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'diff'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -416,7 +421,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="tab-editor-view"
             onClick={() => setViewMode('editor')}
-            className={`flex-1 py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'editor'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -425,11 +430,41 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             <Sliders className="w-3.5 h-3.5" />
             <span>待采纳文本{isFineTuned ? ' (已微调)' : ' (可微调)'}</span>
           </button>
+          {suggestion.isMaterialSupplementation && (
+            <>
+              <button
+                type="button"
+                data-testid="tab-material-text-view"
+                onClick={() => setViewMode('material_text')}
+                className={`py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+                  viewMode === 'material_text'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>材料原文</span>
+              </button>
+              <button
+                type="button"
+                data-testid="tab-adopted-evidence-view"
+                onClick={() => setViewMode('adopted_evidence')}
+                className={`py-1.5 px-2.5 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+                  viewMode === 'adopted_evidence'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5" />
+                <span>涉及的依据</span>
+              </button>
+            </>
+          )}
           <button
             type="button"
             data-testid="tab-baseline-view"
             onClick={() => setViewMode('baseline')}
-            className={`flex-1 py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'baseline'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -442,14 +477,14 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
             type="button"
             data-testid="tab-ai-original-view"
             onClick={() => setViewMode('ai_original')}
-            className={`flex-1 py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+            className={`py-1.5 px-2 rounded text-sm font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors ${
               viewMode === 'ai_original'
                 ? 'bg-blue-600 text-white shadow-2xs font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>{isReviewerReplacement ? '审阅替换稿' : 'AI原始建议'}</span>
+            <span>{suggestion.isMaterialSupplementation ? '原始补写建议' : isReviewerReplacement ? '审阅替换稿' : 'AI原始建议'}</span>
           </button>
         </div>
 
@@ -518,7 +553,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                   className="text-blue-700 hover:text-blue-900 hover:underline flex items-center gap-0.5 text-sm font-bold cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  {isReviewerReplacement ? '还原为审阅替换稿' : '还原为AI原始建议'}
+                  {suggestion.isMaterialSupplementation ? '还原为原始补写建议' : isReviewerReplacement ? '还原为审阅替换稿' : '还原为AI原始建议'}
                 </button>
               )}
             </div>
@@ -539,6 +574,81 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           </div>
         )}
 
+        {/* View Mode: Material Original Text (材料原文) */}
+        {viewMode === 'material_text' && (
+          <div data-testid="view-material-text-content" className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-blue-900 font-bold">
+              <span>本次补写所选材料原文片段：</span>
+              <span className="font-mono text-slate-500">
+                共 {suggestion.adoptedEvidences?.length || suggestion.selectedSnippetIds?.length || 0} 项材料
+              </span>
+            </div>
+            <div className="space-y-2 max-h-[240px] overflow-y-auto">
+              {suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0 ? (
+                suggestion.adoptedEvidences.map((ev, eIdx) => (
+                  <div key={eIdx} className="p-3 bg-white rounded border border-blue-200 space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between font-bold text-slate-800">
+                      <span className="text-blue-900">{ev.sourceDocName} ({ev.snippetLocation || '片段'})</span>
+                      <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs">{ev.period}</span>
+                    </div>
+                    <p className="text-slate-800 text-sm font-serif bg-slate-50 p-2 rounded border border-slate-100 leading-relaxed">
+                      “{ev.snippetText}”
+                    </p>
+                    {ev.metric && (
+                      <div className="text-xs text-slate-500">
+                        关联事实：<strong className="text-slate-700">{ev.metric}</strong> (口径：{ev.metricScope || '未注明'})
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="p-3 bg-white rounded border border-slate-200 text-slate-500 italic">
+                  未记录材料原文片段
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* View Mode: Adopted Evidence (涉及的依据) */}
+        {viewMode === 'adopted_evidence' && (
+          <div data-testid="view-adopted-evidence-content" className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-blue-900 font-bold">
+              <span>涉及的依据与存证出处：</span>
+              <span className="font-mono text-slate-500">
+                共 {suggestion.adoptedEvidences?.length || 0} 项依据
+              </span>
+            </div>
+            <div className="space-y-2 max-h-[240px] overflow-y-auto">
+              {suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0 ? (
+                suggestion.adoptedEvidences.map((ev, eIdx) => (
+                  <div key={eIdx} className="p-3 bg-white rounded border border-blue-200 space-y-1 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900 text-sm">{ev.sourceDocName}</span>
+                      <span className="text-xs font-mono text-slate-400">指纹: {ev.contentFingerprint?.slice(0, 10)}</span>
+                    </div>
+                    <div className="text-slate-600 text-xs">
+                      <span>出处位置：{ev.snippetLocation || '未标注'}</span> | <span>期间：{ev.period}</span> | <span>用途：{ev.usage}</span>
+                    </div>
+                    <div className="bg-slate-50 p-2 rounded text-slate-700 text-xs font-serif leading-relaxed">
+                      “{ev.snippetText}”
+                    </div>
+                    {ev.associatedFactId && (
+                      <div className="text-xs text-emerald-800 font-medium">
+                        关联已核准事实：{ev.associatedFactId} {ev.metric ? `(${ev.metric})` : ''}
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="p-3 bg-white rounded border border-slate-200 text-slate-500 italic">
+                  暂无涉及依据记录
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* View Mode 3: Baseline Text (生成时原文) */}
         {viewMode === 'baseline' && (
           <div data-testid="view-baseline-content" className="space-y-1.5">
@@ -552,12 +662,14 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
           </div>
         )}
 
-        {/* View Mode 4: AI Original Suggestion or Reviewer Replacement */}
+        {/* View Mode 4: AI Original Suggestion or Reviewer Replacement or Material Original */}
         {viewMode === 'ai_original' && (
           <div data-testid="view-ai-original-content" className="space-y-1.5">
             <div className="flex items-center justify-between text-xs text-blue-900 font-bold">
               <span>
-                {isReviewerReplacement
+                {suggestion.isMaterialSupplementation
+                  ? '原始补写建议正文（微调不覆盖此原始记录）：'
+                  : isReviewerReplacement
                   ? `【${suggestion.sourceCommentReviewer || '审阅人'}】审阅人提供的替换稿：`
                   : 'AI原始建议文本（微调不覆盖此原始记录）：'}
               </span>
@@ -793,11 +905,11 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
               )}
 
               {/* View Mode Tabs in Modal */}
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-sm">
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-sm flex-wrap">
                 <button
                   type="button"
                   onClick={() => setViewMode('diff')}
-                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                  className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                     viewMode === 'diff'
                       ? 'bg-blue-600 text-white shadow-2xs font-bold'
                       : 'text-slate-700 hover:bg-slate-200'
@@ -809,7 +921,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <button
                   type="button"
                   onClick={() => setViewMode('editor')}
-                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                  className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                     viewMode === 'editor'
                       ? 'bg-blue-600 text-white shadow-2xs font-bold'
                       : 'text-slate-700 hover:bg-slate-200'
@@ -818,10 +930,38 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                   <Sliders className="w-3.5 h-3.5" />
                   <span>待采纳正文编辑 {isFineTuned ? '(已微调)' : '(可微调)'}</span>
                 </button>
+                {suggestion.isMaterialSupplementation && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('material_text')}
+                      className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                        viewMode === 'material_text'
+                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                          : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>材料原文</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('adopted_evidence')}
+                      className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                        viewMode === 'adopted_evidence'
+                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                          : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      <Tag className="w-3.5 h-3.5" />
+                      <span>涉及的依据</span>
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => setViewMode('baseline')}
-                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                  className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                     viewMode === 'baseline'
                       ? 'bg-blue-600 text-white shadow-2xs font-bold'
                       : 'text-slate-700 hover:bg-slate-200'
@@ -833,14 +973,14 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <button
                   type="button"
                   onClick={() => setViewMode('ai_original')}
-                  className={`flex-1 py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                  className={`py-1.5 px-3 rounded-md font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                     viewMode === 'ai_original'
                       ? 'bg-blue-600 text-white shadow-2xs font-bold'
                       : 'text-slate-700 hover:bg-slate-200'
                   }`}
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>{isReviewerReplacement ? '审阅替换稿' : 'AI原始建议'}</span>
+                  <span>{suggestion.isMaterialSupplementation ? '原始补写建议' : isReviewerReplacement ? '审阅替换稿' : 'AI原始建议'}</span>
                 </button>
               </div>
 
@@ -895,7 +1035,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                           onClick={handleResetToAiOriginal}
                           className="text-xs text-blue-700 hover:text-blue-900 underline cursor-pointer"
                         >
-                          {isReviewerReplacement ? '重置为审阅替换稿' : '重置为AI建议'}
+                          {suggestion.isMaterialSupplementation ? '重置为原始补写建议' : isReviewerReplacement ? '重置为审阅替换稿' : '重置为AI建议'}
                         </button>
                       )}
                     </div>
@@ -907,6 +1047,81 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                     className="w-full p-4 border border-blue-300 rounded-lg text-base font-serif leading-relaxed text-slate-900 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                     placeholder="在此直接微调正文..."
                   />
+                </div>
+              )}
+
+              {/* Wide View: Material Original Text */}
+              {viewMode === 'material_text' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-blue-900 font-semibold">
+                    <span>本次补写所选材料原文片段：</span>
+                    <span className="font-mono text-slate-500">
+                      共 {suggestion.adoptedEvidences?.length || suggestion.selectedSnippetIds?.length || 0} 项材料
+                    </span>
+                  </div>
+                  <div className="space-y-3 min-h-[160px] max-h-[300px] overflow-y-auto">
+                    {suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0 ? (
+                      suggestion.adoptedEvidences.map((ev, eIdx) => (
+                        <div key={eIdx} className="p-3 bg-white rounded-lg border border-blue-200 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between font-bold text-slate-800">
+                            <span className="text-blue-900 text-sm">{ev.sourceDocName} ({ev.snippetLocation || '片段'})</span>
+                            <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs">{ev.period}</span>
+                          </div>
+                          <p className="text-slate-800 text-base font-serif bg-slate-50 p-3 rounded-lg border border-slate-100 leading-relaxed">
+                            “{ev.snippetText}”
+                          </p>
+                          {ev.metric && (
+                            <div className="text-xs text-slate-500">
+                              关联事实：<strong className="text-slate-700">{ev.metric}</strong> (口径：{ev.metricScope || '未注明'})
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-4 bg-slate-50 rounded-lg text-slate-500 italic text-sm">
+                        未记录材料原文片段
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Wide View: Adopted Evidence */}
+              {viewMode === 'adopted_evidence' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-blue-900 font-semibold">
+                    <span>涉及的依据与存证出处：</span>
+                    <span className="font-mono text-slate-500">
+                      共 {suggestion.adoptedEvidences?.length || 0} 项依据
+                    </span>
+                  </div>
+                  <div className="space-y-3 min-h-[160px] max-h-[300px] overflow-y-auto">
+                    {suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0 ? (
+                      suggestion.adoptedEvidences.map((ev, eIdx) => (
+                        <div key={eIdx} className="p-3 bg-white rounded-lg border border-blue-200 space-y-1 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 text-sm">{ev.sourceDocName}</span>
+                            <span className="text-xs font-mono text-slate-400">指纹: {ev.contentFingerprint?.slice(0, 10)}</span>
+                          </div>
+                          <div className="text-slate-600 text-xs">
+                            <span>出处位置：{ev.snippetLocation || '未标注'}</span> | <span>期间：{ev.period}</span> | <span>用途：{ev.usage}</span>
+                          </div>
+                          <div className="bg-slate-50 p-2.5 rounded text-slate-700 text-sm font-serif leading-relaxed">
+                            “{ev.snippetText}”
+                          </div>
+                          {ev.associatedFactId && (
+                            <div className="text-xs text-emerald-800 font-medium">
+                              关联已核准事实：{ev.associatedFactId} {ev.metric ? `(${ev.metric})` : ''}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="p-4 bg-slate-50 rounded-lg text-slate-500 italic text-sm">
+                        暂无涉及依据记录
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -926,7 +1141,9 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs text-blue-900 font-semibold">
                     <span>
-                      {isReviewerReplacement
+                      {suggestion.isMaterialSupplementation
+                        ? '原始补写建议文本（微调不覆盖此原始记录）：'
+                        : isReviewerReplacement
                         ? `【${suggestion.sourceCommentReviewer || '审阅人'}】审阅人提供的替换稿：`
                         : 'AI原始建议文本（微调不覆盖此原始记录）：'}
                     </span>

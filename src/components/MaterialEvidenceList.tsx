@@ -220,6 +220,131 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
           本段尚未绑定量化事实依据
         </div>
       )}
+
+      {/* Task 20: Adopted Material Supplementation Evidences */}
+      <div className="pt-3 border-t border-slate-200 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-slate-800 block">
+            本段已采纳材料依据（补写存证）：
+          </span>
+          <span className="text-xs text-slate-500 font-mono">
+            {activeBlock.adoptedEvidences?.length || 0} 项
+          </span>
+        </div>
+
+        {activeBlock.adoptedEvidences && activeBlock.adoptedEvidences.length > 0 ? (
+          activeBlock.adoptedEvidences.map((ev, eIdx) => {
+            const currentDoc = task.documents.find((d) => d.id === ev.sourceDocId);
+            const currentSnip = task.snippets.find((s) => s.id === ev.evidenceId);
+
+            let statusBadge = (
+              <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded font-medium">
+                材料库当前有效
+              </span>
+            );
+            let statusNotice: string | null = null;
+
+            if (!currentDoc) {
+              statusBadge = (
+                <span className="bg-rose-100 text-rose-800 text-xs px-2 py-0.5 rounded font-medium">
+                  来源文档已删除
+                </span>
+              );
+              statusNotice = '材料库中来源文档已被删除，本段仍保留采纳时冻结依据。';
+            } else if (currentDoc.excluded) {
+              statusBadge = (
+                <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded font-medium">
+                  来源文档已排除
+                </span>
+              );
+              statusNotice = '来源文档在当前材料库中已被排除，本段仍保留采纳时冻结依据。';
+            } else if (!currentSnip) {
+              statusBadge = (
+                <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded font-medium">
+                  材料片段已清理
+                </span>
+              );
+              statusNotice = '材料库中对应片段已被清理，本段仍保留采纳时冻结依据。';
+            } else if (currentSnip.text.trim() !== ev.snippetText.trim()) {
+              statusBadge = (
+                <span className="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded font-medium">
+                  材料库原文已更新
+                </span>
+              );
+              statusNotice = '材料库中该片段原文后来已发生修改，本段完整保留采纳时冻结原文。';
+            }
+
+            return (
+              <div
+                key={eIdx}
+                data-testid={`block-adopted-evidence-${ev.evidenceId}`}
+                className="p-3 bg-blue-50/50 rounded-lg border border-blue-200 text-xs space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <span>{ev.sourceDocName}</span>
+                    <span className="text-xs text-slate-500 font-normal">({ev.snippetLocation || '片段'})</span>
+                  </div>
+                  {statusBadge}
+                </div>
+
+                <div className="bg-white p-2.5 rounded border border-blue-100 space-y-1">
+                  <div className="text-xs text-slate-400 font-medium">采纳时冻结原文：</div>
+                  <p className="text-slate-800 text-sm font-serif leading-relaxed">
+                    “{ev.snippetText}”
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 bg-white/70 p-2 rounded">
+                  <div>
+                    <span className="text-slate-400 block">统计期间</span>
+                    <strong className="text-slate-700">{ev.period}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">用途属性</span>
+                    <strong className="text-slate-700">{ev.usage}</strong>
+                  </div>
+                </div>
+
+                {statusNotice && (
+                  <div className="p-2 bg-amber-50 rounded border border-amber-200 text-amber-900 text-xs">
+                    {statusNotice}
+                  </div>
+                )}
+
+                <div className="pt-1.5 border-t border-blue-200/60 flex items-center justify-between gap-2">
+                  <span className="text-xs font-mono text-slate-400">
+                    证据指纹: {ev.contentFingerprint?.slice(0, 12)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onViewSnippet(
+                        currentSnip || {
+                          id: ev.evidenceId,
+                          docName: ev.sourceDocName,
+                          sourceDocId: ev.sourceDocId,
+                          location: ev.snippetLocation || '采纳冻结片段',
+                          period: ev.period,
+                          text: ev.snippetText,
+                        }
+                      )
+                    }
+                    className="text-sm text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>在抽屉中核验全文</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-400 italic text-center">
+            本段尚未采纳材料补写依据
+          </div>
+        )}
+      </div>
     </div>
   );
 };

@@ -12,7 +12,8 @@ import {
   ModificationSource,
   ReviewCommentSnapshotBeforeChange,
   ReviewCommentSnapshotAfterChange,
-  ReviewComment
+  ReviewComment,
+  AdoptedEvidenceRecord
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
 import { checkPermission } from './permissionService';
@@ -957,6 +958,88 @@ export function validateParagraphSuggestionAcceptance(
     };
   }
 
+  if (suggestion.isMaterialSupplementation) {
+    if (suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0) {
+      for (const ev of suggestion.adoptedEvidences) {
+        const doc = task.documents.find((d) => d.id === ev.sourceDocId);
+        if (!doc) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据来源文档【${ev.sourceDocName}】已被删除，无法继续采纳旧建议！请重新选择材料并生成。`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+        if (doc.excluded) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据来源文档【${doc.name}】已被排除，旧建议依据已失效！请重新选择材料并生成。`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+        const snip = task.snippets.find((s) => s.id === ev.evidenceId);
+        if (!snip) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据材料片段【${ev.evidenceId}】已从材料库中删除，旧建议已失效！请重新选择材料并生成。`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+        if (snip.text.trim() !== ev.snippetText.trim()) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据材料原文已被编辑修改，与生成候选时的依据不一致！旧建议已失效，请重新生成。`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+      }
+    }
+
+    if (currentDraft?.snapshotMetadata?.factSnapshot && task.factSnapshot) {
+      if (currentDraft.snapshotMetadata.factSnapshot.hash !== task.factSnapshot.hash) {
+        return {
+          valid: false,
+          reason: '建议已失效：任务最新核准事实快照已更新，与草稿生成冻结依据存在版本差异，旧候选已失效，请重新生成！',
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+    }
+  }
+
   if (isZeroDiff) {
     return {
       valid: false,
@@ -1013,12 +1096,18 @@ export function adoptParagraphSuggestion(
   const finalContent = pendingTextToAdopt; // 原样写入最终待采纳文本，不进行 trim()
 
   // 统一使用明确的来源枚举，删除说明文字关键词推断；明确标为 instruction 时必须保持该语义
+  const isMaterialSupplementation = Boolean(suggestion.isMaterialSupplementation);
   const isReviewerReplacement = Boolean(
+    !isMaterialSupplementation &&
     suggestion.sourceCommentType !== 'instruction' &&
     (suggestion.isReviewerReplacement || suggestion.sourceCommentType === 'replacement')
   );
 
-  const actionDescription = isReviewerReplacement
+  const actionDescription = isMaterialSupplementation
+    ? isFineTuned
+      ? `依据所选材料补写第${targetBlock.order}段（人工微调）`
+      : `依据所选材料补写第${targetBlock.order}段`
+    : isReviewerReplacement
     ? isFineTuned
       ? `采纳第${targetBlock.order}段【${suggestion.sourceCommentReviewer || '审阅人'}】审阅替换稿（人工微调）`
       : `采纳第${targetBlock.order}段【${suggestion.sourceCommentReviewer || '审阅人'}】审阅替换稿`
@@ -1033,11 +1122,30 @@ export function adoptParagraphSuggestion(
     task,
     draftIdToUse,
     (blocks) =>
-      blocks.map((b) =>
-        b.id === targetBlock.id
-          ? { ...b, content: finalContent }
-          : b
-      ),
+      blocks.map((b) => {
+        if (b.id === targetBlock.id) {
+          if (isMaterialSupplementation) {
+            const existingEvidences = b.adoptedEvidences || [];
+            const newEvidences = suggestion.adoptedEvidences || [];
+            const mergedMap = new Map<string, AdoptedEvidenceRecord>();
+            existingEvidences.forEach((e) => mergedMap.set(e.evidenceId, e));
+            newEvidences.forEach((e) => mergedMap.set(e.evidenceId, e));
+
+            const mergedFactIds = Array.from(
+              new Set([...b.referencedFactIds, ...(suggestion.selectedFactIds || [])])
+            );
+
+            return {
+              ...b,
+              content: finalContent,
+              referencedFactIds: mergedFactIds,
+              adoptedEvidences: Array.from(mergedMap.values()),
+            };
+          }
+          return { ...b, content: finalContent };
+        }
+        return b;
+      }),
     actionDescription,
     activeRole
   );
@@ -1120,7 +1228,11 @@ export function adoptParagraphSuggestion(
   }
 
   // Determine modification source with clear reviewer replacement distinction
-  const logSource: ModificationSource = isReviewerReplacement
+  const logSource: ModificationSource = isMaterialSupplementation
+    ? isFineTuned
+      ? 'material_supplementation_fine_tuned'
+      : 'material_supplementation'
+    : isReviewerReplacement
     ? isFineTuned
       ? 'reviewer_replacement_fine_tuned'
       : 'reviewer_replacement'
@@ -1144,6 +1256,10 @@ export function adoptParagraphSuggestion(
     reviewerOriginalReplacementText: isReviewerReplacement ? suggestion.suggestedText : undefined,
     isReviewerReplacement,
     isFineTuned,
+    isMaterialSupplementation,
+    adoptedEvidences: isMaterialSupplementation ? (suggestion.adoptedEvidences || []) : undefined,
+    previousAdoptedEvidences: isMaterialSupplementation ? (targetBlock.adoptedEvidences ? JSON.parse(JSON.stringify(targetBlock.adoptedEvidences)) : []) : undefined,
+    previousReferencedFactIds: isMaterialSupplementation ? [...(targetBlock.referencedFactIds || [])] : undefined,
     associatedCommentId: suggestion.sourceCommentId,
     associatedCommentReviewer: suggestion.sourceCommentReviewer,
     previousCommentState,
@@ -1330,7 +1446,7 @@ export function undoSafeParagraphModification(
   const targetBlock = validation.targetBlock;
   const draftIdToUse = currentDraft?.id || task.currentDraftId;
 
-  // Restore target block content back to beforeContent
+  // Restore target block content back to beforeContent and restore previousAdoptedEvidences
   const { updatedTask: taskWithRevertedDraft, workingDraft } = applyDraftContentChange(
     task,
     draftIdToUse,
@@ -1340,12 +1456,18 @@ export function undoSafeParagraphModification(
           ? {
               ...b,
               content: log.beforeContent,
+              adoptedEvidences: log.isMaterialSupplementation
+                ? (log.previousAdoptedEvidences ? JSON.parse(JSON.stringify(log.previousAdoptedEvidences)) : undefined)
+                : b.adoptedEvidences,
+              referencedFactIds: log.isMaterialSupplementation && log.previousReferencedFactIds
+                ? [...log.previousReferencedFactIds]
+                : b.referencedFactIds,
               updatedAt: new Date().toISOString(),
               revisionSeq: (b.revisionSeq || 0) + 1,
             }
           : b
       ),
-    `撤销第${log.blockOrder || targetBlock.order}段采纳修改（恢复原正文）`,
+    `撤销第${log.blockOrder || targetBlock.order}段采纳修改（恢复原正文${log.isMaterialSupplementation ? '及依据' : ''}）`,
     activeRole
   );
 
@@ -1394,12 +1516,13 @@ export function undoSafeParagraphModification(
   };
 
   const undoneLog = updatedLogs.find((l) => l.id === log.id)!;
+  const revertedBlock = workingDraft.blocks.find((b) => b.id === targetBlock.id) || targetBlock;
 
   return {
     updatedTask: finalUpdatedTask,
     workingDraft,
     undoneLog,
-    targetBlock,
+    targetBlock: revertedBlock,
   };
 }
 
