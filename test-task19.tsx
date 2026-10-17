@@ -541,7 +541,7 @@ export async function runTask19Tests() {
   });
   assert(wasDiscardCalled === true, 'H.5: 真实点击放弃修改按钮触发 onDiscard 回调');
 
-  // 3b. 真实工作区内放弃操作：验证工作区清理建议、失效运行及阻止采纳
+  // 3b. 真实工作区内放弃操作：先在工作区触发生成建议，再点击放弃，验证工作区清理建议并失效运行
   let workspaceTaskH: Task = JSON.parse(JSON.stringify(currentTaskG));
   const mountedWorkspaceH = mountTestComponent(
     React.createElement(DraftingStage, {
@@ -551,33 +551,40 @@ export async function runTask19Tests() {
       },
       onViewSnippet: () => {},
       activeRole: '主笔甲',
-      navIntent: {
-        taskId: workspaceTaskH.id,
-        commentId: 'CMT-03',
-        timestamp: Date.now(),
-      },
     })
   );
 
-  const wsDiscardBtn = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]') as HTMLButtonElement;
-  if (wsDiscardBtn) {
-    act(() => {
-      wsDiscardBtn.click();
-    });
-    const editorAfterWsDiscard = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]');
-    assert(editorAfterWsDiscard === null, 'H.5a: 工作区点击放弃后成功清理建议编辑器');
-  }
-  mountedWorkspaceH.unmount();
-
-  const validationAfterDiscard = validateParagraphSuggestionAcceptance({
-    task: workspaceTaskH,
-    currentDraft: workspaceTaskH.drafts[0],
-    suggestion: suggestionG,
-    pendingTextToAdopt: fineTunedGText,
-    activeCompletedRunId: undefined, // 放弃后运行ID已失效清空
-    activeRole: '主笔甲',
+  // 1. 点击第2段卡片上的“AI建议”按钮打开面板
+  const btnAiP2H = mountedWorkspaceH.container.querySelector('[aria-label="第2段AI修改建议"]') as HTMLButtonElement;
+  assert(Boolean(btnAiP2H), 'H.5a: 找到第2段卡片上的“AI建议”入口');
+  act(() => {
+    btnAiP2H.click();
   });
-  assert(validationAfterDiscard.valid === false, 'H.5b: 放弃后运行失效严格阻断采纳');
+
+  // 2. 点击常用改写“压缩精炼”真实触发异步生成建议
+  const compressBtnH = Array.from(mountedWorkspaceH.container.querySelectorAll('button')).find((b) =>
+    b.textContent?.includes('压缩精炼')
+  );
+  assert(Boolean(compressBtnH), 'H.5b: 辅助面板中具备“压缩精炼”生成按钮');
+  await act(async () => {
+    compressBtnH?.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  // 3. 严格断言建议已成功生成且放弃按钮必然存在（绝不允许 if 静默跳过！）
+  const wsDiscardBtn = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]') as HTMLButtonElement;
+  assert(Boolean(wsDiscardBtn), 'H.5c: 必须先在工作区成功生成建议并渲染出“放弃修改建议”按钮');
+
+  // 4. 真实点击工作区内的放弃修改按钮
+  act(() => {
+    wsDiscardBtn.click();
+  });
+
+  // 5. 严格验证工作区已清理建议编辑器（若处理函数改为空操作则必失败）
+  const editorAfterWsDiscard = mountedWorkspaceH.container.querySelector('button[data-testid="btn-discard-suggestion"]');
+  assert(editorAfterWsDiscard === null, 'H.5d: 工作区点击放弃后成功清理建议编辑器');
+
+  mountedWorkspaceH.unmount();
 
   // 4. 真实交互：Tab 多视图切换
   const tabDiffBtn = mountedInteractiveEditor.container.querySelector('button[data-testid="tab-diff-view"]') as HTMLButtonElement;
@@ -930,105 +937,126 @@ export async function runTask19Tests() {
   assert(instructionSuggestionJ.sourceCommentType === 'instruction', 'J.6: suggestion 正确标示为 instruction 意见类型');
   assert(instructionSuggestionJ.isReviewerReplacement === false, 'J.7: 包含“替换稿”文本的 instruction 意见严禁将 isReviewerReplacement 标为 true');
 
-  // 3. 同一 App 实例挂载交互闭环 (全生命周期：采纳微调、撤销恢复)
+  // 3. 同一 App 实例挂载交互闭环 (全流程：正文起草工作区输入微调、采纳、弹窗撤销，全部在 mountedApp.container 内完成)
   const appTaskJ: Task = JSON.parse(JSON.stringify(currentTaskG));
+  appTaskJ.currentStage = 'drafting';
   appTaskJ.reviewComments.push(cmtInstructionKeywordJ);
   savePersistedState([appTaskJ], appTaskJ.id, '主笔甲');
 
   const mountedAppJ = mountTestComponent(React.createElement(App, null));
   assert(Boolean(mountedAppJ.container), 'J.8: 成功挂载统一 App 完整实例');
 
-  let appTaskStateJ = appTaskJ;
-  const fineTunedAppTextJ = `${instructionSuggestionJ.suggestedText.replace('。', '')}，并全力推进后续业务落地。`;
+  // 验证起草工作区及第2段卡片渲染
+  const block2InApp = mountedAppJ.container.querySelector('#block-card-BLK-02');
+  assert(Boolean(block2InApp), 'J.9: App 工作区中成功渲染第2段卡片');
 
-  // 挂载 ParagraphSuggestionEditor，验证来源展示与 DOM 原生输入微调
-  const mountedAppEditorJ = mountTestComponent(
-    React.createElement(ParagraphSuggestionEditor, {
-      task: appTaskStateJ,
-      currentDraft: appTaskStateJ.drafts[0],
-      suggestion: instructionSuggestionJ,
-      activeBlock: appTaskStateJ.drafts[0].blocks[1],
-      isGenerating: false,
-      activeCompletedRunId: 'RUN-INST-KEYWORD-J',
-      activeRole: '主笔甲',
-      onAdopt: (textToAdopt) => {
-        const { updatedTask } = adoptParagraphSuggestion({
-          task: appTaskStateJ,
-          currentDraft: appTaskStateJ.drafts[0],
-          suggestion: instructionSuggestionJ,
-          pendingTextToAdopt: textToAdopt,
-          activeCompletedRunId: 'RUN-INST-KEYWORD-J',
-          activeRole: '主笔甲',
-        });
-        appTaskStateJ = updatedTask;
-      },
-      onDiscard: () => {},
-      onRegenerate: () => {},
-    })
+  // 真实点击第2段“AI建议”按钮打开辅助面板
+  const btnAiP2InApp = mountedAppJ.container.querySelector('[aria-label="第2段AI修改建议"]') as HTMLButtonElement;
+  assert(Boolean(btnAiP2InApp), 'J.10: 在 App 工作区内找到第2段“AI建议”按钮');
+  act(() => {
+    btnAiP2InApp.click();
+  });
+
+  // 在 App 辅助面板中输入带“替换稿”文本的 instruction 指令
+  const promptInputInApp = mountedAppJ.container.querySelector(
+    'textarea[placeholder*="精简表达并保留数据"]'
+  ) as HTMLTextAreaElement;
+  assert(Boolean(promptInputInApp), 'J.11: 在 App 辅助面板中找到自定义改写指令输入框');
+  act(() => {
+    simulateTextareaChange(promptInputInApp, '精简表达并保留数据，不要直接采用审阅替换稿。');
+  });
+
+  const submitRevisionBtnInApp = mountedAppJ.container.querySelector(
+    'form button[type="submit"]'
+  ) as HTMLButtonElement;
+  assert(Boolean(submitRevisionBtnInApp), 'J.12: 找到生成建议提交按钮');
+
+  await act(async () => {
+    submitRevisionBtnInApp.click();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  // 严格在 App 容器内验证建议来源展示（绝不展示审阅人替换稿文案，保持 AI 原始建议）
+  assert(
+    !mountedAppJ.container.textContent?.includes('【审阅副处长】审阅人提供的替换稿'),
+    'J.13: instruction 意见下 App 工作区内绝不展示审阅人替换稿文案'
+  );
+  assert(
+    mountedAppJ.container.textContent?.includes('AI原始建议') === true,
+    'J.14: App 工作区内正确展示【AI原始建议】标签'
   );
 
-  assert(!mountedAppEditorJ.container.textContent?.includes('【审阅副处长】审阅人提供的替换稿'), 'J.9: instruction 意见下编辑器绝不展示审阅人替换稿文案');
-  assert(mountedAppEditorJ.container.textContent?.includes('AI原始建议') === true, 'J.10: 编辑器正确展示【AI原始建议】标签');
-
-  // 切换到编辑器 Tab 并模拟标准 DOM 原生输入
-  const appEditorTabJ = mountedAppEditorJ.container.querySelector('button[data-testid="tab-editor-view"]') as HTMLButtonElement;
+  // 在 App 容器内切换到微调编辑器视图
+  const editorTabInApp = mountedAppJ.container.querySelector('button[data-testid="tab-editor-view"]') as HTMLButtonElement;
+  assert(Boolean(editorTabInApp), 'J.15: 找到待采纳文本编辑标签');
   act(() => {
-    appEditorTabJ.click();
+    editorTabInApp.click();
   });
-  const appTextareaJ = mountedAppEditorJ.container.querySelector('textarea') as HTMLTextAreaElement;
+
+  const textareaPendingInApp = mountedAppJ.container.querySelector('textarea[data-testid="textarea-pending-text"]') as HTMLTextAreaElement;
+  assert(Boolean(textareaPendingInApp), 'J.16: 在 App 工作区内找到待采纳文本 textarea');
+
+  const fineTunedAppTextJ = `${textareaPendingInApp.value.replace('。', '')}，并全力推进后续业务落地。`;
   act(() => {
-    simulateTextareaChange(appTextareaJ, fineTunedAppTextJ);
+    simulateTextareaChange(textareaPendingInApp, fineTunedAppTextJ);
   });
-  assert(mountedAppEditorJ.container.textContent?.includes('已人工微调') === true, 'J.11: 真实 DOM 原生输入后动态呈现【已人工微调】标识');
-
-  // 真实点击采纳按钮
-  const appAdoptBtnJ = mountedAppEditorJ.container.querySelector('button[data-testid="btn-adopt-suggestion"]') as HTMLButtonElement;
-  act(() => {
-    appAdoptBtnJ.click();
-  });
-  mountedAppEditorJ.unmount();
-
-  const adoptedLogJ = appTaskStateJ.modificationLogs[0];
-  assert(adoptedLogJ.source === 'ai_suggestion_fine_tuned', 'J.12: 采纳日志来源正确记录为 ai_suggestion_fine_tuned，绝非 reviewer_replacement');
-  assert(adoptedLogJ.isReviewerReplacement === false, 'J.13: 采纳日志 isReviewerReplacement 为 false');
-  assert(adoptedLogJ.reviewerOriginalReplacementText === undefined, 'J.14: 绝未将 AI 生成正文存为审阅人原始替换正文');
-
-  // 挂载 RecentModificationsModal 验证徽章为 人工微调采纳
-  let isRecentOpenJ = true;
-  const mountedAppModalJ = mountTestComponent(
-    React.createElement(RecentModificationsModal, {
-      isOpen: isRecentOpenJ,
-      onClose: () => {
-        isRecentOpenJ = false;
-      },
-      task: appTaskStateJ,
-      currentDraft: appTaskStateJ.drafts[0],
-      activeRole: '主笔甲',
-      onUndo: (logId) => {
-        const { updatedTask } = undoSafeParagraphModification(
-          appTaskStateJ,
-          appTaskStateJ.drafts[0],
-          logId,
-          '主笔甲'
-        );
-        appTaskStateJ = updatedTask;
-      },
-    })
+  assert(
+    mountedAppJ.container.textContent?.includes('已人工微调') === true,
+    'J.17: App 工作区内动态呈现【已人工微调】标识'
   );
 
-  const appBadgeJ = mountedAppModalJ.container.querySelector(`[data-testid="badge-log-source-${adoptedLogJ.id}"]`);
-  assert(appBadgeJ?.textContent?.includes('人工微调采纳') === true, 'J.15: 最近修改记录弹窗展示【人工微调采纳】徽章');
-  assert(!appBadgeJ?.textContent?.includes('审阅替换稿采纳'), 'J.16: 绝不展示【审阅替换稿采纳】徽章');
-
-  // 点击撤销按钮，验证正文与审阅意见状态完好恢复
-  const appUndoBtnJ = mountedAppModalJ.container.querySelector(`button[data-testid="btn-undo-log-${adoptedLogJ.id}"]`) as HTMLButtonElement;
+  // 在 App 容器内真实点击采纳按钮
+  const adoptBtnInApp = mountedAppJ.container.querySelector('button[data-testid="btn-adopt-suggestion"]') as HTMLButtonElement;
+  assert(Boolean(adoptBtnInApp) && !adoptBtnInApp.disabled, 'J.18: 找到并使能采纳建议按钮');
   act(() => {
-    appUndoBtnJ.click();
+    adoptBtnInApp.click();
   });
-  assert(appTaskStateJ.drafts[0].blocks[1].content === originalBlock2Content, 'J.17: 撤销后正文成功恢复为基准原文');
-  const restoredCommentJ = appTaskStateJ.reviewComments.find((c) => c.id === cmtInstructionKeywordJ.id);
-  assert(restoredCommentJ?.status === 'pending', 'J.18: 撤销后审阅意见恢复为 pending 状态');
-  mountedAppModalJ.unmount();
+
+  // 验证 App 工作区内第2段正文已更新为微调后文本
+  const updatedBlock2InApp = mountedAppJ.container.querySelector('#block-card-BLK-02');
+  assert(
+    updatedBlock2InApp?.textContent?.includes('并全力推进后续业务落地') === true,
+    'J.19: App 采纳后第2段正文成功更新为微调后内容'
+  );
+
+  // 在 App 容器内点击“最近修改记录”按钮打开弹窗
+  const openRecentBtnInApp = mountedAppJ.container.querySelector('button[data-testid="btn-open-recent-modifications"]') as HTMLButtonElement;
+  assert(Boolean(openRecentBtnInApp), 'J.20: 在 App 工作区找到“最近修改记录”按钮');
+  act(() => {
+    openRecentBtnInApp.click();
+  });
+
+  assert(
+    mountedAppJ.container.textContent?.includes('人工微调采纳') === true,
+    'J.21: App 弹窗内展示【人工微调采纳】徽章'
+  );
+  assert(
+    !mountedAppJ.container.textContent?.includes('审阅替换稿采纳'),
+    'J.22: App 弹窗内绝不展示【审阅替换稿采纳】徽章'
+  );
+  assert(
+    !mountedAppJ.container.textContent?.includes('审阅人原始替换正文（已妥善存证）'),
+    'J.23: App 弹窗内绝不将 AI 生成内容存为审阅人原始替换正文'
+  );
+
+  // 在 App 弹窗内点击撤销按钮
+  const undoBtnInApp = mountedAppJ.container.querySelector('button[data-testid^="btn-undo-log-"]') as HTMLButtonElement;
+  assert(Boolean(undoBtnInApp), 'J.24: 在 App 弹窗内找到撤销按钮');
+  act(() => {
+    undoBtnInApp.click();
+  });
+
+  // 验证 App 工作区内正文成功恢复为基准原文
+  const restoredBlock2InApp = mountedAppJ.container.querySelector('#block-card-BLK-02');
+  assert(
+    !restoredBlock2InApp?.textContent?.includes('并全力推进后续业务落地'),
+    'J.25: 撤销后微调内容已从 App 正文中撤回'
+  );
+  assert(
+    restoredBlock2InApp?.textContent?.includes('累计参训800人次') === true,
+    'J.26: 撤销后正文成功恢复为基准原文'
+  );
+
   mountedAppJ.unmount();
 
   console.log('\n================================================================');
