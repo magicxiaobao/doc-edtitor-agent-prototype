@@ -18,7 +18,30 @@ import {
 import { runDocumentAudit } from './mockAuditService';
 import { checkPermission } from './permissionService';
 import { computeContentHash } from './mockDraftService';
-import { validateMaterialForSupplementation, computeMaterialFingerprint } from './materialSupplementService';
+import { 
+  validateMaterialForSupplementation, 
+  computeMaterialFingerprint,
+  validateSelectedMaterialsQuantitativeClaims
+} from './materialSupplementService';
+
+/**
+ * Compares two adopted evidence records for exact semantic equivalence.
+ * Detects modifications to snippet text, documents, periods, usage, or metrics
+ * even if a caller reuses an existing contentFingerprint.
+ */
+export function areAdoptedEvidenceRecordsEqual(a: AdoptedEvidenceRecord, b: AdoptedEvidenceRecord): boolean {
+  if (a.evidenceId !== b.evidenceId) return false;
+  if (a.sourceDocId !== b.sourceDocId) return false;
+  if (a.sourceDocName !== b.sourceDocName) return false;
+  if ((a.snippetText || '').trim() !== (b.snippetText || '').trim()) return false;
+  if (a.period !== b.period) return false;
+  if (a.usage !== b.usage) return false;
+  if ((a.snippetLocation || '') !== (b.snippetLocation || '')) return false;
+  if ((a.associatedFactId || '') !== (b.associatedFactId || '')) return false;
+  if ((a.metric || '') !== (b.metric || '')) return false;
+  if ((a.metricScope || '') !== (b.metricScope || '')) return false;
+  return true;
+}
 
 /**
  * Compute deterministic hash of draft blocks to detect manual edits
@@ -266,11 +289,7 @@ export function applyDraftContentChange(
       const areEvidencesChanged =
         origEvs.length !== curEvs.length ||
         !origEvs.every((oev) =>
-          curEvs.some(
-            (cev) =>
-              cev.evidenceId === oev.evidenceId &&
-              cev.contentFingerprint === oev.contentFingerprint
-          )
+          curEvs.some((cev) => areAdoptedEvidenceRecordsEqual(oev, cev))
         );
 
       const isSubstantiveChange = isContentChanged || areFactIdsChanged || areEvidencesChanged;
@@ -1233,6 +1252,26 @@ export function validateParagraphSuggestionAcceptance(
         };
       }
     }
+
+    // 6. Quantitative claims re-verification on current task facts and snippets
+    const curSnippets = (task.snippets || []).filter((s) => snippetIdsToCheck.includes(s.id));
+    if (curSnippets.length > 0) {
+      const quantCheck = validateSelectedMaterialsQuantitativeClaims(task, curSnippets);
+      if (!quantCheck.valid) {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据材料量化核准校验未通过（${quantCheck.reason}），旧建议已失效！`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+    }
   }
 
   if (isZeroDiff) {
@@ -1591,11 +1630,7 @@ export function validateUndoEligibility(
     const evsUnchanged =
       currentEvs.length === savedEvs.length &&
       currentEvs.every((cev) =>
-        savedEvs.some(
-          (sev) =>
-            sev.evidenceId === cev.evidenceId &&
-            sev.contentFingerprint === cev.contentFingerprint
-        )
+        savedEvs.some((sev) => areAdoptedEvidenceRecordsEqual(sev, cev))
       );
     if (!evsUnchanged) {
       return {

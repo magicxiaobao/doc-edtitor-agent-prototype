@@ -115,12 +115,18 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
 
 export function isValidAdoptedEvidenceRecord(ev: any): boolean {
   if (!ev || typeof ev !== 'object') return false;
-  if (typeof ev.evidenceId !== 'string' || !ev.evidenceId) return false;
-  if (typeof ev.sourceDocId !== 'string' || !ev.sourceDocId) return false;
-  if (typeof ev.sourceDocName !== 'string' || !ev.sourceDocName) return false;
+  if (typeof ev.evidenceId !== 'string' || !ev.evidenceId.trim()) return false;
+  if (typeof ev.sourceDocId !== 'string' || !ev.sourceDocId.trim()) return false;
+  if (typeof ev.sourceDocName !== 'string' || !ev.sourceDocName.trim()) return false;
   if (typeof ev.snippetText !== 'string') return false;
-  if (typeof ev.period !== 'string') return false;
-  if (typeof ev.contentFingerprint !== 'string') return false;
+  if (typeof ev.period !== 'string' || !ev.period.trim()) return false;
+  if (ev.usage !== 'current_fact' && ev.usage !== 'style_ref') return false;
+  if (typeof ev.contentFingerprint !== 'string' || !ev.contentFingerprint.trim()) return false;
+  if (ev.capturedAt !== undefined && typeof ev.capturedAt !== 'string') return false;
+  if (ev.snippetLocation !== undefined && typeof ev.snippetLocation !== 'string') return false;
+  if (ev.associatedFactId !== undefined && typeof ev.associatedFactId !== 'string') return false;
+  if (ev.metric !== undefined && typeof ev.metric !== 'string') return false;
+  if (ev.metricScope !== undefined && typeof ev.metricScope !== 'string') return false;
   return true;
 }
 

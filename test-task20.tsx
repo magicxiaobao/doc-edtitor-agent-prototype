@@ -39,7 +39,8 @@ import {
   STORAGE_KEY_V2, 
   BACKUP_CORRUPTED_KEY,
   validateTaskStructure, 
-  recoverTasksFromCorruptedBackup 
+  recoverTasksFromCorruptedBackup,
+  isValidAdoptedEvidenceRecord 
 } from './src/services/storageService';
 
 function mountTestComponent(element: React.ReactElement) {
@@ -1019,8 +1020,89 @@ async function runTask20Tests() {
       ],
     };
     const minuteClaimWithFact = validateSelectedMaterialsQuantitativeClaims(taskWith10MinFact, [minuteSnippet]);
-    console.log('DEBUG K.1.7 minuteClaimWithFact:', minuteClaimWithFact);
     assert(minuteClaimWithFact.valid === true, 'K.1.7: 登记核准的“10分钟”事实记录后顺利通过核验');
+
+    // EVD-03 内置材料中的“2026年1至9月”不再误抽出“1至”
+    const taskWithEvd03 = createTestTaskWithCases();
+    const evd03 = taskWithEvd03.snippets.find((s) => s.id === 'EVD-03') || {
+      id: 'EVD-03',
+      sourceDocId: 'SRC-03',
+      docName: '培训工作台账',
+      location: '第5段',
+      period: '2026年1至9月',
+      text: '2026年1至9月，组织专题培训16场，累计参训800人次。',
+    };
+    const evd03Check = validateSelectedMaterialsQuantitativeClaims(taskWithEvd03, [evd03]);
+    assert(evd03Check.valid === true, 'K.1.8: EVD-03 培训材料“2026年1至9月”未误抽出“1至”，有效材料顺利通过准入');
+
+    // 同一文档中的“一季度城区培训16场”不可为“三季度农村培训16场”背书
+    const docTrainMulti = {
+      id: 'DOC-TRAIN-MULTI',
+      name: '全市培训工作总结汇编',
+      usage: 'current_fact' as const,
+      period: '2026年度',
+      fileType: 'txt' as const,
+      parseStatus: 'parsed' as const,
+      source: '宣教科',
+      content: '培训汇编',
+      excluded: false,
+    };
+    const snipQ1Urban: EvidenceSnippet = {
+      id: 'SNIP-Q1-URBAN',
+      sourceDocId: 'DOC-TRAIN-MULTI',
+      docName: '全市培训工作总结汇编',
+      location: '第1段',
+      period: '2026年一季度',
+      text: '一季度重点面向城区开展业务轮训，组织专题培训16场。',
+    };
+    const snipQ3Rural: EvidenceSnippet = {
+      id: 'SNIP-Q3-RURAL',
+      sourceDocId: 'DOC-TRAIN-MULTI',
+      docName: '全市培训工作总结汇编',
+      location: '第3段',
+      period: '2026年三季度',
+      text: '三季度深入基层一线服务，组织开展农村培训16场。',
+    };
+    const taskWithUrbanFact: Task = {
+      ...createTestTaskWithCases(),
+      documents: [...createTestTaskWithCases().documents, docTrainMulti],
+      snippets: [...createTestTaskWithCases().snippets, snipQ1Urban, snipQ3Rural],
+      facts: [
+        ...createTestTaskWithCases().facts,
+        {
+          id: 'FACT-Q1-URBAN-16',
+          metric: '组织专题培训',
+          period: '2026年一季度',
+          value: '16',
+          unit: '场',
+          metricScope: '城区口径',
+          primaryEvidenceId: 'SNIP-Q1-URBAN',
+          evidenceIds: ['SNIP-Q1-URBAN'],
+          sourceDocId: 'DOC-TRAIN-MULTI',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+    };
+    const ruralCheck = validateSelectedMaterialsQuantitativeClaims(taskWithUrbanFact, [snipQ3Rural]);
+    assert(ruralCheck.valid === false, 'K.1.9: 同一文档中的“一季度城区培训16场”不可为“三季度农村培训16场”背书，口径期间范围不一致安全阻断');
+
+    // 采纳前依据完整重验亦严格阻断口径不一致的材料
+    const workingDraftUrban = taskWithUrbanFact.drafts[0];
+    const targetBlockUrban = workingDraftUrban.blocks[1];
+    const suggestionRural = generateMaterialSupplementation(targetBlockUrban, [snipQ3Rural], {
+      task: taskWithUrbanFact,
+      currentDraft: workingDraftUrban,
+    });
+    const checkRuralAdoption = validateParagraphSuggestionAcceptance({
+      task: taskWithUrbanFact,
+      currentDraft: workingDraftUrban,
+      suggestion: suggestionRural,
+      pendingTextToAdopt: suggestionRural.suggestedText,
+      activeCompletedRunId: suggestionRural.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkRuralAdoption.valid === false, 'K.1.10: 采纳校验严格阻断口径不一致的材料依据');
 
     // K.2: 采纳前完整重验依据
     console.log('--- K.2 采纳前完整重验依据 ---');
@@ -1078,6 +1160,7 @@ async function runTask20Tests() {
 
     // K.3: 补写请求跨任务隔离
     console.log('--- K.3 补写请求跨任务隔离 ---');
+    let taskASuccessCalled = false;
     let taskBSuccessCalled = false;
     const taskA = { ...createTestTaskWithCases(), id: 'TASK-ALPHA' };
     const taskB = { ...createTestTaskWithCases(), id: 'TASK-BETA' };
@@ -1092,12 +1175,22 @@ async function runTask20Tests() {
         activeRole="主笔甲"
         onViewSnippet={() => {}}
         onSupplementSuccess={() => {
-          taskBSuccessCalled = true;
+          taskASuccessCalled = true;
         }}
       />
     );
 
-    // Re-render immediately with Task B before async completion
+    // 实际勾选材料并提交表单触发异步生成请求
+    const checkboxA = modalMount.container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    if (checkboxA) {
+      checkboxA.click();
+    }
+    const formA = modalMount.container.querySelector('form');
+    if (formA) {
+      formA.dispatchEvent(new (window as any).Event('submit', { bubbles: true, cancelable: true }));
+    }
+
+    // 在请求进行中立即切换为 Task B
     modalMount.rerender(
       <MaterialSupplementModal
         isOpen={true}
@@ -1112,7 +1205,12 @@ async function runTask20Tests() {
         }}
       />
     );
-    assert(taskBSuccessCalled === false, 'K.3.1: 任务切换后未发生跨任务回填，Task A 补写未回填至 Task B');
+
+    // 等待原异步请求超时完成
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    assert(taskASuccessCalled === false, 'K.3.1: Task A 的进行中请求已安全中止');
+    assert(taskBSuccessCalled === false, 'K.3.2: 任务切换后未发生跨任务回填，Task A 补写未回填至 Task B');
     modalMount.unmount();
 
     // K.4: 新证据字段贯通容灾恢复与结构校验
@@ -1174,6 +1272,40 @@ async function runTask20Tests() {
     assert(recoveredBlock.adoptedEvidences !== undefined && recoveredBlock.adoptedEvidences.length === 1, 'K.4.3: 灾备恢复保留了合法证据项并剔除了损坏项');
     assert(recoveredBlock.adoptedEvidences![0].evidenceId === 'SNIP-APPOINT-01', 'K.4.4: 恢复后的证据ID完好无损');
 
+    // 证据 usage 为对象时的结构损坏检测与隔离（解决 Objects are not valid as a React child 崩溃隐患）
+    const corruptedTaskWithObjectUsage = {
+      ...taskBase,
+      drafts: [
+        {
+          ...workingDraft,
+          blocks: [
+            {
+              ...workingDraft.blocks[0],
+              adoptedEvidences: [
+                {
+                  ...validEvidenceRecord,
+                  usage: { type: 'corrupted_object' } as any,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    assert(isValidAdoptedEvidenceRecord({ ...validEvidenceRecord, usage: { corrupted: true } }) === false, 'K.4.5: usage 为非枚举对象时被识别为非法证据项');
+    assert(validateTaskStructure(corruptedTaskWithObjectUsage) === false, 'K.4.6: 证据 usage 为对象时被标记为数据结构损坏');
+
+    const corruptedUsagePayload = JSON.stringify({
+      schemaVersion: 2,
+      currentTaskId: taskBase.id,
+      tasks: [corruptedTaskWithObjectUsage],
+    });
+    setStorageItem(BACKUP_CORRUPTED_KEY, corruptedUsagePayload);
+    const recUsageRes = recoverTasksFromCorruptedBackup();
+    assert(recUsageRes.success === true, 'K.4.7: 从 usage 损坏备份中成功恢复');
+    const recUsageBlock = recUsageRes.recoveredTasks[0].drafts[0].blocks[0];
+    assert(recUsageBlock.adoptedEvidences === undefined || recUsageBlock.adoptedEvidences.length === 0, 'K.4.8: usage 为对象的损坏证据项被有效隔离剔除');
+
     // K.5: 采纳后后续修改引用/证据保守阻断撤销
     console.log('--- K.5 采纳后后续修改引用/证据保守阻断撤销 ---');
     const adoptRes = adoptParagraphSuggestion({
@@ -1204,6 +1336,33 @@ async function runTask20Tests() {
     const undoCheckAfterRefChange = validateUndoEligibility(adjustedTask, currentWorkingDraft, logEntry.id, '主笔甲');
     assert(undoCheckAfterRefChange.canUndo === false, 'K.5.2: 采纳后正文未变但引用发生后续调整，安全撤销被保守阻断');
     assert(undoCheckAfterRefChange.reason!.includes('后续') || undoCheckAfterRefChange.reason!.includes('调整') || undoCheckAfterRefChange.reason!.includes('修改'), 'K.5.3: 给出依据引用已变更的撤销阻断提示');
+
+    // 通过统一修改服务修改证据 snippetText（保留原指纹）
+    const modifiedSnippetTextTask = applyDraftContentChange(
+      adoptedTask,
+      adoptedTask.currentDraftId,
+      (blocks) =>
+        blocks.map((b) =>
+          b.id === targetBlock.id && b.adoptedEvidences
+            ? {
+                ...b,
+                adoptedEvidences: b.adoptedEvidences.map((ev) => ({
+                  ...ev,
+                  snippetText: '这是被后续修改过的依据原文', // 原指纹不变
+                })),
+              }
+            : b
+        ),
+      '仅修改依据文本保留原指纹',
+      '主笔甲'
+    ).updatedTask;
+
+    const modifiedDraft = modifiedSnippetTextTask.drafts.find((d) => d.id === modifiedSnippetTextTask.currentDraftId);
+    const modifiedTargetBlock = modifiedDraft?.blocks.find((b) => b.id === targetBlock.id);
+    assert(modifiedTargetBlock?.revisionSeq !== logEntry.appliedRevisionSeq, 'K.5.4: 统一修改服务修改证据文本后修改序号正确递增');
+
+    const undoCheckAfterSnippetChange = validateUndoEligibility(modifiedSnippetTextTask, modifiedDraft, logEntry.id, '主笔甲');
+    assert(undoCheckAfterSnippetChange.canUndo === false, 'K.5.5: 修改证据文本保留旧指纹时，撤销校验保守阻断');
 
     // K.6: 杜绝无依据成效结论与准确说明
     console.log('--- K.6 杜绝无依据成效结论 ---');

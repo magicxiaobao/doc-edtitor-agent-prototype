@@ -138,8 +138,32 @@ export function getEligibleMaterialsForSupplementation(task: Task): {
 }
 
 /**
+ * Masks calendar years, months, full date ranges, quarter notations, and document locations
+ * with spaces of identical length, preventing date components (e.g. "1至" in "2026年1至9月")
+ * from being mistakenly parsed as quantitative claims.
+ */
+export function maskDateAndPeriodPatterns(text: string): string {
+  if (!text) return '';
+  let result = text;
+  // Match full Chinese date ranges, e.g. 2026年1至9月, 2026年1-9月, 1至9月, 2026年1月至9月, 2026年1月-9月
+  result = result.replace(/\d{4}年\d{1,2}月?(?:至|到|-|~)\d{1,2}月/g, (m) => ' '.repeat(m.length));
+  result = result.replace(/\d{1,2}月?(?:至|到|-|~)\d{1,2}月/g, (m) => ' '.repeat(m.length));
+  // Match full dates, e.g. 2026年12月31日, 12月31日
+  result = result.replace(/\d{4}年\d{1,2}月\d{1,2}日/g, (m) => ' '.repeat(m.length));
+  result = result.replace(/\d{1,2}月\d{1,2}日/g, (m) => ' '.repeat(m.length));
+  // Match years and quarters, e.g. 2026年, 2026年度, 第1季度, 前三季度, 一季度, 2026年一季度
+  result = result.replace(/\d{4}年(?:度|全年)?/g, (m) => ' '.repeat(m.length));
+  result = result.replace(/(?:第|前)?[一二三四1234]季度/g, (m) => ' '.repeat(m.length));
+  result = result.replace(/\d{1,2}月份?/g, (m) => ' '.repeat(m.length));
+  // Match document locations, e.g. 第1段, 第12条, 第3页, 第5章, 第2节
+  result = result.replace(/第\d+[段条页章节]/g, (m) => ' '.repeat(m.length));
+  return result;
+}
+
+/**
  * Verifies whether a fact's business metric and scope align with the claim context in snippet text.
- * Strictly prevents "工程验收16场" from matching "组织专题培训16场".
+ * Strictly prevents "工程验收16场" from matching "组织专题培训16场",
+ * and prevents "一季度城区培训16场" from matching "三季度农村培训16场".
  */
 export function isMetricContextCompatible(
   fact: Fact,
@@ -193,9 +217,39 @@ export function isMetricContextCompatible(
     return false;
   }
 
+  // 6. Geographic / administrative scope contradiction checks:
+  const isUrbanContext = contextLower.includes('城区') || contextLower.includes('城市') || contextLower.includes('市辖区') || contextLower.includes('市区');
+  const isRuralContext = contextLower.includes('农村') || contextLower.includes('乡村') || contextLower.includes('乡镇') || contextLower.includes('村委');
+  const isUrbanFact = metricLower.includes('城区') || metricLower.includes('城市') || scopeLower.includes('城区') || scopeLower.includes('城市');
+  const isRuralFact = metricLower.includes('农村') || metricLower.includes('乡村') || metricLower.includes('乡镇') || scopeLower.includes('农村') || scopeLower.includes('乡村');
+  if (isUrbanContext && isRuralFact) return false;
+  if (isRuralContext && isUrbanFact) return false;
+
+  // 7. Quarter / timing contradiction checks between context and fact
+  const isQ1Context = contextLower.includes('一季度') || contextLower.includes('1季度') || contextLower.includes('首季');
+  const isQ2Context = contextLower.includes('二季度') || contextLower.includes('2季度');
+  const isQ3Context = contextLower.includes('三季度') || contextLower.includes('3季度');
+  const isQ4Context = contextLower.includes('四季度') || contextLower.includes('4季度');
+  const isQ1Fact = metricLower.includes('一季度') || scopeLower.includes('一季度') || (fact.period || '').includes('一季度');
+  const isQ2Fact = metricLower.includes('二季度') || scopeLower.includes('二季度') || (fact.period || '').includes('二季度');
+  const isQ3Fact = metricLower.includes('三季度') || scopeLower.includes('三季度') || (fact.period || '').includes('三季度');
+  const isQ4Fact = metricLower.includes('四季度') || scopeLower.includes('四季度') || (fact.period || '').includes('四季度');
+  if (isQ1Context && (isQ2Fact || isQ3Fact || isQ4Fact)) return false;
+  if (isQ2Context && (isQ1Fact || isQ3Fact || isQ4Fact)) return false;
+  if (isQ3Context && (isQ1Fact || isQ2Fact || isQ4Fact)) return false;
+  if (isQ4Context && (isQ1Fact || isQ2Fact || isQ3Fact)) return false;
+
   // If fact is strictly bound to this snippet ID and no domain contradiction exists
   if (fact.primaryEvidenceId === snippet.id || (Array.isArray(fact.evidenceIds) && fact.evidenceIds.includes(snippet.id))) {
     return true;
+  }
+
+  // If fact is explicitly bound to a different snippet ID, reject endorsement
+  if (fact.primaryEvidenceId && fact.primaryEvidenceId !== snippet.id) {
+    return false;
+  }
+  if (Array.isArray(fact.evidenceIds) && fact.evidenceIds.length > 0 && !fact.evidenceIds.includes(snippet.id)) {
+    return false;
   }
 
   // Exact metric in surrounding context
@@ -203,15 +257,8 @@ export function isMetricContextCompatible(
     return true;
   }
 
-  // 2-character sub-tokens from metric in context
-  const metricTokens: string[] = [];
-  for (let i = 0; i < metric.length - 1; i++) {
-    const sub = metric.slice(i, i + 2);
-    if (!['累计', '完成', '开展', '工作', '推进', '统计', '口径', '台账'].includes(sub)) {
-      metricTokens.push(sub.toLowerCase());
-    }
-  }
-  if (metricTokens.length > 0 && metricTokens.some((tok) => contextLower.includes(tok))) {
+  // Scope in surrounding context
+  if (scopeLower && contextLower.includes(scopeLower)) {
     return true;
   }
 
@@ -241,8 +288,11 @@ export function validateSelectedMaterialsQuantitativeClaims(
     const text = snip.text;
     const doc = task.documents.find((d) => d.id === snip.sourceDocId);
 
-    // Match numbers with units, e.g. 120项, 128项, 16场, 800人次, 10分钟, 12次, 28场, 1200人次, 35个, 95%
-    const matches = text.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || [];
+    // 1. First mask date and period patterns to avoid extracting date fragments (e.g. '1至' in '2026年1至9月')
+    const maskedText = maskDateAndPeriodPatterns(text);
+
+    // Match numbers with units on masked text
+    const matches = maskedText.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || [];
 
     for (const match of matches) {
       // Filter out calendar years and dates and locations
@@ -269,42 +319,76 @@ export function validateSelectedMaterialsQuantitativeClaims(
       const textAfter = matchIdx >= 0 ? snip.text.slice(matchIdx + match.length, Math.min(snip.text.length, matchIdx + match.length + 60)) : '';
       const surroundingContext = `${textBefore}${match}${textAfter}`;
 
-      // Look for matching confirmed Fact in task.facts strictly bound to source with exact unit and compatible metric
+      // Look for matching confirmed Fact in task.facts strictly bound to source with exact unit, period and scope
       const matchedFact = task.facts.find((f) => {
         if (f.status !== 'confirmed' || f.isHistoricOnly) return false;
         if (f.hasConflict && !f.selectedConflictValue) return false;
 
-        // Source binding check: Fact must be bound to this snippet or source document
-        const isBoundToSource =
-          f.primaryEvidenceId === snip.id ||
-          (Array.isArray(f.evidenceIds) && f.evidenceIds.includes(snip.id)) ||
-          f.sourceDocId === snip.sourceDocId;
-        if (!isBoundToSource) return false;
+        // 1. Strict snippet & source binding check
+        const hasExplicitEvidenceBinding = Boolean(
+          f.primaryEvidenceId || (Array.isArray(f.evidenceIds) && f.evidenceIds.length > 0)
+        );
+        if (hasExplicitEvidenceBinding) {
+          const isSnippetBound =
+            f.primaryEvidenceId === snip.id ||
+            (Array.isArray(f.evidenceIds) && f.evidenceIds.includes(snip.id));
+          if (!isSnippetBound) {
+            // Fact is explicitly bound to another snippet, cannot endorse this snippet!
+            return false;
+          }
+        } else {
+          // Fact only has sourceDocId: must match snip.sourceDocId
+          if (f.sourceDocId !== snip.sourceDocId) return false;
+        }
 
-        // Strict value match
+        // 2. Strict value match
         const effectiveVal = f.selectedConflictValue || f.value;
         if (effectiveVal !== numVal) return false;
 
-        // Strict unit match: EXACT EQUALITY ONLY (removes substring inclusion, e.g. '人' != '人次')
+        // 3. Strict unit match: EXACT EQUALITY ONLY (removes substring inclusion, e.g. '人' != '人次')
         const normalizeUnit = (u: string) => u.trim().replace(/(?:以内|以上|以下|左右|多|余|内)$/, '');
         const unitMatches = f.unit.trim() === unit.trim() || (normalizeUnit(f.unit) === normalizeUnit(unit) && normalizeUnit(unit).length > 0);
         if (!unitMatches) return false;
 
-        // Period compatibility check: fact period must be within task period
+        // 4. Strict period alignment: Fact period and snippet period MUST align!
+        const snipEffectivePeriod = (snip.period || doc?.period || '').trim();
+        const factEffectivePeriod = (f.period || '').trim();
+        if (factEffectivePeriod && snipEffectivePeriod) {
+          // Check for quarter contradiction between fact and snippet
+          const isQ1_F = factEffectivePeriod.includes('一季度') || factEffectivePeriod.includes('1季度');
+          const isQ2_F = factEffectivePeriod.includes('二季度') || factEffectivePeriod.includes('2季度');
+          const isQ3_F = factEffectivePeriod.includes('三季度') || factEffectivePeriod.includes('3季度');
+          const isQ4_F = factEffectivePeriod.includes('四季度') || factEffectivePeriod.includes('4季度');
+
+          const isQ1_S = snipEffectivePeriod.includes('一季度') || snipEffectivePeriod.includes('1季度');
+          const isQ2_S = snipEffectivePeriod.includes('二季度') || snipEffectivePeriod.includes('2季度');
+          const isQ3_S = snipEffectivePeriod.includes('三季度') || snipEffectivePeriod.includes('3季度');
+          const isQ4_S = snipEffectivePeriod.includes('四季度') || snipEffectivePeriod.includes('4季度');
+
+          const qF = isQ1_F ? 1 : isQ2_F ? 2 : isQ3_F ? 3 : isQ4_F ? 4 : 0;
+          const qS = isQ1_S ? 1 : isQ2_S ? 2 : isQ3_S ? 3 : isQ4_S ? 4 : 0;
+          if (qF > 0 && qS > 0 && qF !== qS) {
+            return false;
+          }
+
+          // Check parsed date range consistency
+          const rF = parsePeriodDateRange(factEffectivePeriod);
+          const rS = parsePeriodDateRange(snipEffectivePeriod);
+          if (rF && rS) {
+            if (rF.start.getTime() > rS.end.getTime() || rS.start.getTime() > rF.end.getTime()) {
+              return false;
+            }
+          }
+        }
+
+        // Fact period must also be within task period
         if (task.startDate && task.endDate && f.period) {
           if (!isDateRangeWithinTask(f.period, task.startDate, task.endDate)) {
             return false;
           }
         }
-        const factPeriodMatches =
-          !f.period ||
-          f.period === snip.period ||
-          f.period === doc?.period ||
-          (!task.startDate && !task.endDate) ||
-          isDateRangeWithinTask(f.period, task.startDate, task.endDate);
-        if (!factPeriodMatches) return false;
 
-        // Business metric & scope context compatibility check
+        // 5. Business metric & scope context compatibility check
         return isMetricContextCompatible(f, snip, surroundingContext);
       });
 
