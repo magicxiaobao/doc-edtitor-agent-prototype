@@ -497,6 +497,40 @@ export async function exportDocumentAsDocx(
         width: { size: 100, type: WidthType.PERCENTAGE },
       })
     );
+
+    const allAdoptedEvidences = draft.blocks.flatMap((b) =>
+      (b.adoptedEvidences || []).filter(Boolean).map((ev) => ({ ...ev, blockOrder: b.order }))
+    );
+    if (allAdoptedEvidences.length > 0) {
+      docParagraphs.push(
+        new Paragraph({
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 300, after: 150 },
+          children: [
+            new TextRun({
+              text: '【段落补写采纳材料依据清单】',
+              bold: true,
+              size: 24,
+              font: 'SimHei',
+            }),
+          ],
+        })
+      );
+      allAdoptedEvidences.forEach((ev, idx) => {
+        docParagraphs.push(
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({
+                text: `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”`,
+                size: 20,
+                font: 'FangSong',
+              }),
+            ],
+          })
+        );
+      });
+    }
   }
 
   // 2. Output Review Comments & Decisions

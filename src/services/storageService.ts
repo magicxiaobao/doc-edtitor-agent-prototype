@@ -113,6 +113,17 @@ function sanitizeTasksForStorage(tasks: Task[]): Task[] {
   return tasks;
 }
 
+export function isValidAdoptedEvidenceRecord(ev: any): boolean {
+  if (!ev || typeof ev !== 'object') return false;
+  if (typeof ev.evidenceId !== 'string' || !ev.evidenceId) return false;
+  if (typeof ev.sourceDocId !== 'string' || !ev.sourceDocId) return false;
+  if (typeof ev.sourceDocName !== 'string' || !ev.sourceDocName) return false;
+  if (typeof ev.snippetText !== 'string') return false;
+  if (typeof ev.period !== 'string') return false;
+  if (typeof ev.contentFingerprint !== 'string') return false;
+  return true;
+}
+
 export function isValidModificationLog(log: any): boolean {
   if (!log || typeof log !== 'object') return false;
   if (typeof log.id !== 'string' || !log.id) return false;
@@ -125,6 +136,26 @@ export function isValidModificationLog(log: any): boolean {
   if (typeof log.beforeContent !== 'string') return false;
   if (typeof log.afterContent !== 'string') return false;
   if (log.status !== 'applied' && log.status !== 'undone') return false;
+  if (log.adoptedEvidences !== undefined) {
+    if (!Array.isArray(log.adoptedEvidences)) return false;
+    for (const ev of log.adoptedEvidences) {
+      if (!isValidAdoptedEvidenceRecord(ev)) return false;
+    }
+  }
+  if (log.previousAdoptedEvidences !== undefined) {
+    if (!Array.isArray(log.previousAdoptedEvidences)) return false;
+    for (const ev of log.previousAdoptedEvidences) {
+      if (!isValidAdoptedEvidenceRecord(ev)) return false;
+    }
+  }
+  if (log.postAdoptedEvidences !== undefined) {
+    if (!Array.isArray(log.postAdoptedEvidences)) return false;
+    for (const ev of log.postAdoptedEvidences) {
+      if (!isValidAdoptedEvidenceRecord(ev)) return false;
+    }
+  }
+  if (log.previousReferencedFactIds !== undefined && !Array.isArray(log.previousReferencedFactIds)) return false;
+  if (log.postAdoptedReferencedFactIds !== undefined && !Array.isArray(log.postAdoptedReferencedFactIds)) return false;
   return true;
 }
 
@@ -168,6 +199,12 @@ export function validateTaskStructure(task: any): boolean {
       if (typeof b.sectionId !== 'string') return false;
       if (typeof b.order !== 'number') return false;
       if (!Array.isArray(b.referencedFactIds)) return false;
+      if (b.adoptedEvidences !== undefined) {
+        if (!Array.isArray(b.adoptedEvidences)) return false;
+        for (const ev of b.adoptedEvidences) {
+          if (!isValidAdoptedEvidenceRecord(ev)) return false;
+        }
+      }
     }
   }
 
@@ -212,15 +249,22 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
     }
 
     const migratedDrafts = drafts.map((d: any) => {
-      const draftBlocks: ParagraphBlock[] = Array.isArray(d?.blocks) ? d.blocks.map((b: any, bIdx: number) => ({
-        id: typeof b?.id === 'string' && b.id ? b.id : `BLK-MIG-${bIdx + 1}`,
-        sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
-        order: typeof b?.order === 'number' ? b.order : bIdx + 1,
-        content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
-        referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
-        updatedAt: b?.updatedAt || new Date().toISOString(),
-        revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
-      })) : [];
+      const draftBlocks: ParagraphBlock[] = Array.isArray(d?.blocks) ? d.blocks.map((b: any, bIdx: number) => {
+        const validEvidences = Array.isArray(b?.adoptedEvidences)
+          ? b.adoptedEvidences.filter(isValidAdoptedEvidenceRecord)
+          : undefined;
+
+        return {
+          id: typeof b?.id === 'string' && b.id ? b.id : `BLK-MIG-${bIdx + 1}`,
+          sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
+          order: typeof b?.order === 'number' ? b.order : bIdx + 1,
+          content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
+          referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
+          adoptedEvidences: validEvidences && validEvidences.length > 0 ? validEvidences : undefined,
+          updatedAt: b?.updatedAt || new Date().toISOString(),
+          revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
+        };
+      }) : [];
 
       // 历史依据缺失应保留“未知/缺失”，禁止将任务当前快照凭空回填成历史草稿的审批依据
       if (!d.snapshotMetadata) {
@@ -545,15 +589,22 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
       if (rawDrafts.length > 0) {
         cleanedDrafts = rawDrafts.map((d: any, dIdx: number) => {
           const rawBlocks: any[] = Array.isArray(d?.blocks) ? d.blocks : [];
-          const cleanedBlocks: ParagraphBlock[] = rawBlocks.map((b: any, bIdx: number) => ({
-            id: typeof b?.id === 'string' && b.id ? b.id : `BLK-REC-${dIdx}-${bIdx + 1}`,
-            sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
-            order: typeof b?.order === 'number' ? b.order : bIdx + 1,
-            content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
-            referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
-            updatedAt: b?.updatedAt || new Date().toISOString(),
-            revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
-          }));
+          const cleanedBlocks: ParagraphBlock[] = rawBlocks.map((b: any, bIdx: number) => {
+            const validEvidences = Array.isArray(b?.adoptedEvidences)
+              ? b.adoptedEvidences.filter(isValidAdoptedEvidenceRecord)
+              : undefined;
+
+            return {
+              id: typeof b?.id === 'string' && b.id ? b.id : `BLK-REC-${dIdx}-${bIdx + 1}`,
+              sectionId: typeof b?.sectionId === 'string' && b.sectionId ? b.sectionId : 'SEC-01',
+              order: typeof b?.order === 'number' ? b.order : bIdx + 1,
+              content: typeof b?.content === 'string' ? b.content : (typeof b?.text === 'string' ? b.text : ''),
+              referencedFactIds: Array.isArray(b?.referencedFactIds) ? b.referencedFactIds : [],
+              adoptedEvidences: validEvidences && validEvidences.length > 0 ? validEvidences : undefined,
+              updatedAt: b?.updatedAt || new Date().toISOString(),
+              revisionSeq: typeof b?.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) && b.revisionSeq > 0 ? b.revisionSeq : undefined,
+            };
+          });
 
           // 保留原有草稿版本属性，禁止按数组位置推断可编辑性。
           // 属性无法确定时保守恢复为只读历史快照，继续编辑时通过 applyDraftContentChange 自动分叉新工作稿。

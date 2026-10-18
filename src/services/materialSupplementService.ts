@@ -14,10 +14,45 @@ import { computeContentHash } from './mockDraftService';
 import { computeTextDiff } from './diffService';
 
 /**
+ * Validates whether a date range period falls strictly within the task start/end date.
+ * Supports ISO date strings (2026-01-01), Chinese dates, or quarterly/monthly period strings.
+ */
+export function isDateRangeWithinTask(
+  periodStr: string,
+  taskStartDate?: string,
+  taskEndDate?: string
+): boolean {
+  if (!periodStr) return false;
+  const range = parsePeriodDateRange(periodStr);
+  if (!range) return false;
+  if (!taskStartDate || !taskEndDate) return true;
+
+  const parsedStart = parsePeriodDateRange(taskStartDate)?.start;
+  const parsedEnd = parsePeriodDateRange(taskEndDate)?.end;
+
+  const taskStart = parsedStart || new Date(taskStartDate.includes('T') ? taskStartDate : taskStartDate + 'T00:00:00Z');
+  const taskEnd = parsedEnd || new Date(taskEndDate.includes('T') ? taskEndDate : taskEndDate + 'T23:59:59Z');
+
+  if (isNaN(taskStart.getTime()) || isNaN(taskEnd.getTime())) {
+    return true;
+  }
+
+  // Range cannot start before task start date (60s tolerance for precision)
+  if (range.start.getTime() < taskStart.getTime() - 60000) {
+    return false;
+  }
+  // Range cannot end after task end date (60s tolerance for precision)
+  if (range.end.getTime() > taskEnd.getTime() + 60000) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Validates whether a snippet and its parent document are eligible for supplementation:
  * 1. Document must exist in task.documents and NOT be excluded
  * 2. Document usage must be 'current_fact' (style_ref, history_bg, rag_clue strictly forbidden)
- * 3. Document and snippet period must align with the current task's statistical period (no cross-period 2025, no indeterminate period)
+ * 3. Document and snippet period must align with the current task's statistical period (complete start/end date range validation)
  * 4. Snippet must have substantive text (not '无原文', not RAG clue without source, not '暂无案例' disclaimer)
  */
 export function validateMaterialForSupplementation(
@@ -60,26 +95,20 @@ export function validateMaterialForSupplementation(
     return { eligible: false, reason: '材料内容过短，缺少实质性工作举措描述' };
   }
 
-  // Period alignment check:
-  // Must match current task period (e.g. 2026 vs 2025)
+  // Complete period alignment check:
+  // Must match current task period (complete start to end date range validation)
   if (task.startDate && task.endDate) {
-    const taskRange = parsePeriodDateRange(`${task.startDate}至${task.endDate}`);
+    const isDocPeriodValid = isDateRangeWithinTask(doc.period, task.startDate, task.endDate);
+    const isSnipPeriodValid = snippet.period ? isDateRangeWithinTask(snippet.period, task.startDate, task.endDate) : isDocPeriodValid;
+
+    if (!isDocPeriodValid || !isSnipPeriodValid) {
+      return { eligible: false, reason: `材料统计期间（${snippet.period || doc.period}）与本任务期间（${task.startDate}至${task.endDate}）跨期不符，不可作为本期依据` };
+    }
+  } else {
     const docRange = parsePeriodDateRange(doc.period);
     const snipRange = snippet.period ? parsePeriodDateRange(snippet.period) : docRange;
-
     if (!docRange || !snipRange) {
       return { eligible: false, reason: '材料无法判定统计期间，不可作为本期补写依据' };
-    }
-
-    if (taskRange) {
-      // Check if docRange/snipRange strictly belongs to same year or overlaps
-      const taskStartYear = taskRange.start.getUTCFullYear();
-      const docStartYear = docRange.start.getUTCFullYear();
-      const snipStartYear = snipRange.start.getUTCFullYear();
-
-      if (docStartYear !== taskStartYear || snipStartYear !== taskStartYear) {
-        return { eligible: false, reason: `材料统计期间（${snippet.period || doc.period}）与本任务期间跨期不符，不可作为本期依据` };
-      }
     }
   }
 
@@ -109,6 +138,87 @@ export function getEligibleMaterialsForSupplementation(task: Task): {
 }
 
 /**
+ * Verifies whether a fact's business metric and scope align with the claim context in snippet text.
+ * Strictly prevents "工程验收16场" from matching "组织专题培训16场".
+ */
+export function isMetricContextCompatible(
+  fact: Fact,
+  snippet: EvidenceSnippet,
+  surroundingContext: string
+): boolean {
+  const metric = (fact.metric || '').trim();
+  const scope = (fact.metricScope || '').trim();
+  if (!metric) return true;
+
+  const metricLower = metric.toLowerCase();
+  const scopeLower = scope.toLowerCase();
+  const contextLower = surroundingContext.toLowerCase();
+
+  // Cross-domain subject contradiction checks (evaluated first and unconditionally)
+  // 1. Engineering / Acceptance vs Training
+  const isContextEngineering = contextLower.includes('工程') || contextLower.includes('验收') || contextLower.includes('竣工') || contextLower.includes('施工') || contextLower.includes('监理');
+  const isFactTraining = metricLower.includes('培训') || metricLower.includes('参训') || metricLower.includes('学员') || metricLower.includes('讲座') || scopeLower.includes('培训');
+  if (isContextEngineering && isFactTraining) {
+    return false;
+  }
+
+  // 2. Training vs Engineering
+  const isContextTraining = contextLower.includes('培训') || contextLower.includes('参训') || contextLower.includes('学员') || contextLower.includes('讲座');
+  const isFactEngineering = metricLower.includes('工程') || metricLower.includes('验收') || metricLower.includes('竣工') || metricLower.includes('施工') || scopeLower.includes('工程');
+  if (isContextTraining && isFactEngineering) {
+    return false;
+  }
+
+  // 3. Training vs Procurement / Service
+  if (
+    isContextTraining &&
+    (metricLower.includes('采购') || metricLower.includes('交易') || metricLower.includes('预约'))
+  ) {
+    return false;
+  }
+
+  // 4. Procurement vs Appointment / Training
+  if (
+    (contextLower.includes('采购') || contextLower.includes('招标') || contextLower.includes('标段') || contextLower.includes('交易')) &&
+    (metricLower.includes('预约') || metricLower.includes('培训') || metricLower.includes('实操') || metricLower.includes('窗口'))
+  ) {
+    return false;
+  }
+
+  // 5. Appointment service vs Engineering / Procurement / Training
+  if (
+    (contextLower.includes('预约') || contextLower.includes('窗口') || contextLower.includes('便民')) &&
+    (isFactEngineering || isFactTraining || metricLower.includes('采购') || metricLower.includes('交易'))
+  ) {
+    return false;
+  }
+
+  // If fact is strictly bound to this snippet ID and no domain contradiction exists
+  if (fact.primaryEvidenceId === snippet.id || (Array.isArray(fact.evidenceIds) && fact.evidenceIds.includes(snippet.id))) {
+    return true;
+  }
+
+  // Exact metric in surrounding context
+  if (contextLower.includes(metricLower)) {
+    return true;
+  }
+
+  // 2-character sub-tokens from metric in context
+  const metricTokens: string[] = [];
+  for (let i = 0; i < metric.length - 1; i++) {
+    const sub = metric.slice(i, i + 2);
+    if (!['累计', '完成', '开展', '工作', '推进', '统计', '口径', '台账'].includes(sub)) {
+      metricTokens.push(sub.toLowerCase());
+    }
+  }
+  if (metricTokens.length > 0 && metricTokens.some((tok) => contextLower.includes(tok))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Validates quantitative assertions inside selected snippets:
  * Rule: Newly added quantitative claims must correspond to valid confirmed facts in the task
  * with identical value, unit, period and scope.
@@ -129,8 +239,10 @@ export function validateSelectedMaterialsQuantitativeClaims(
 
   for (const snip of selectedSnippets) {
     const text = snip.text;
-    // Match numbers with units, e.g. 120项, 128项, 16场, 800人次, 12次, 28场, 1200人次, 35个, 95%
-    const matches = text.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,3}/g) || [];
+    const doc = task.documents.find((d) => d.id === snip.sourceDocId);
+
+    // Match numbers with units, e.g. 120项, 128项, 16场, 800人次, 10分钟, 12次, 28场, 1200人次, 35个, 95%
+    const matches = text.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || [];
 
     for (const match of matches) {
       // Filter out calendar years and dates and locations
@@ -139,7 +251,7 @@ export function validateSelectedMaterialsQuantitativeClaims(
       if (/^\d{1,2}日$/.test(match)) continue;
       if (/^第\d+段$/.test(match)) continue;
       if (/^第\d+季度$/.test(match)) continue;
-      if (/^\d+分钟$/.test(match)) continue; // Qualitative service waiting time
+      // Note: Minute exemption is strictly removed! 10分钟 is validated as a quantitative claim.
 
       // Parse number and unit
       const numMatch = match.match(/^(\d+(?:\.\d+)?)([\u4e00-\u9fa5%]+)$/);
@@ -151,16 +263,49 @@ export function validateSelectedMaterialsQuantitativeClaims(
       // Exclude generic number words that are not quantitative metrics
       if (['年', '月份', '季度', '段', '页', '批次', '步'].includes(unit)) continue;
 
-      // Look for matching confirmed Fact in task.facts
+      // Extract clause around match
+      const matchIdx = snip.text.indexOf(match);
+      const textBefore = matchIdx >= 0 ? snip.text.slice(Math.max(0, matchIdx - 60), matchIdx) : '';
+      const textAfter = matchIdx >= 0 ? snip.text.slice(matchIdx + match.length, Math.min(snip.text.length, matchIdx + match.length + 60)) : '';
+      const surroundingContext = `${textBefore}${match}${textAfter}`;
+
+      // Look for matching confirmed Fact in task.facts strictly bound to source with exact unit and compatible metric
       const matchedFact = task.facts.find((f) => {
         if (f.status !== 'confirmed' || f.isHistoricOnly) return false;
         if (f.hasConflict && !f.selectedConflictValue) return false;
 
-        const effectiveVal = f.selectedConflictValue || f.value;
-        const valueMatches = effectiveVal === numVal;
-        const unitMatches = f.unit === unit || unit.includes(f.unit) || f.unit.includes(unit);
+        // Source binding check: Fact must be bound to this snippet or source document
+        const isBoundToSource =
+          f.primaryEvidenceId === snip.id ||
+          (Array.isArray(f.evidenceIds) && f.evidenceIds.includes(snip.id)) ||
+          f.sourceDocId === snip.sourceDocId;
+        if (!isBoundToSource) return false;
 
-        return valueMatches && unitMatches;
+        // Strict value match
+        const effectiveVal = f.selectedConflictValue || f.value;
+        if (effectiveVal !== numVal) return false;
+
+        // Strict unit match: EXACT EQUALITY ONLY (removes substring inclusion, e.g. '人' != '人次')
+        const normalizeUnit = (u: string) => u.trim().replace(/(?:以内|以上|以下|左右|多|余|内)$/, '');
+        const unitMatches = f.unit.trim() === unit.trim() || (normalizeUnit(f.unit) === normalizeUnit(unit) && normalizeUnit(unit).length > 0);
+        if (!unitMatches) return false;
+
+        // Period compatibility check: fact period must be within task period
+        if (task.startDate && task.endDate && f.period) {
+          if (!isDateRangeWithinTask(f.period, task.startDate, task.endDate)) {
+            return false;
+          }
+        }
+        const factPeriodMatches =
+          !f.period ||
+          f.period === snip.period ||
+          f.period === doc?.period ||
+          (!task.startDate && !task.endDate) ||
+          isDateRangeWithinTask(f.period, task.startDate, task.endDate);
+        if (!factPeriodMatches) return false;
+
+        // Business metric & scope context compatibility check
+        return isMetricContextCompatible(f, snip, surroundingContext);
       });
 
       if (matchedFact) {
@@ -174,7 +319,7 @@ export function validateSelectedMaterialsQuantitativeClaims(
   if (unverifiedClaims.length > 0) {
     return {
       valid: false,
-      reason: `所选材料包含未核准的量化指标（${unverifiedClaims.join('、')}），未在事实库中找到对应核准记录。首批补写规则要求量化主张必须先在材料与事实页面完成核准登记，已安全阻断本次生成。`,
+      reason: `所选材料包含未核准的量化指标（${unverifiedClaims.join('、')}），未在事实库中找到口径一致的核准记录。首批补写规则要求量化主张必须先在材料与事实页面完成核准登记，已安全阻断本次生成。`,
       unverifiedClaims,
       matchedFactIds: Array.from(matchedFactIds),
     };
@@ -416,7 +561,7 @@ export function generateMaterialSupplementation(
   });
 
   const baseText = originalText.trim().replace(/[。；;]+$/, '');
-  const supplementText = `同时，结合【${docNames.join('、')}】实际做法，${excerpts.join('；')}，有力提升工作推进质效。`;
+  const supplementText = `同时，结合【${docNames.join('、')}】实际做法，${excerpts.join('；')}。`;
   const suggestedText = `${baseText}。${supplementText}`;
 
   // Build adopted evidence records
@@ -443,7 +588,7 @@ export function generateMaterialSupplementation(
 
   const diffSegments = computeTextDiff(originalText, suggestedText);
   const wordCountDelta = suggestedText.length - originalText.length;
-  const diffExplanation = `依据所选材料【${docNames.join('、')}】补充段落工作举措。全量保留段落既有事实数据，新增内容全部忠实摘录自所选材料原文，未捏造未核实业务机制。`;
+  const diffExplanation = `依据所选材料【${docNames.join('、')}】补充段落工作举措。全量保留段落既有事实数据，举措核心内容忠实摘录自所选材料原文，衔接语句作中性表述加工，未添加无依据成效或业务机制。`;
 
   return {
     runId,
@@ -463,9 +608,10 @@ export function generateMaterialSupplementation(
     createdAt: new Date().toISOString(),
     wordCountDelta,
     needsVerificationNotes: [
-      `新增内容忠实依据所选材料【${docNames.join('、')}】原文摘录`,
+      `所选材料原文摘录：【${docNames.join('、')}】核心举措`,
+      '结构衔接：中性引入所选材料实际做法，未追加无依据成效结论',
       '全量保护段落既有事实与台账数据口径',
-      '采纳前将再次复核所选材料有效性',
+      '采纳前将再次复核所选材料与核准事实有效性',
     ],
     diffSegments,
     isUnsupportedPrompt: false,
@@ -475,6 +621,14 @@ export function generateMaterialSupplementation(
     adoptedEvidences,
     materialFingerprint: computeMaterialFingerprint(selectedSnippets),
     materialPrompt: prompt,
+    upstreamApprovalVersion: {
+      factSnapshotConfirmedAt: task.factSnapshot?.confirmedAt,
+      factSnapshotHash: task.factSnapshot?.hash,
+      styleConfirmedAt: task.styleSnapshot?.confirmedAt,
+      styleHash: task.styleSnapshot?.hash,
+      outlineConfirmedAt: task.outlineSnapshot?.confirmedAt,
+      outlineHash: task.outlineSnapshot?.hash,
+    },
   };
 }
 

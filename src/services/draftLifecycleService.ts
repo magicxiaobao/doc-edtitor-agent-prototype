@@ -18,6 +18,7 @@ import {
 import { runDocumentAudit } from './mockAuditService';
 import { checkPermission } from './permissionService';
 import { computeContentHash } from './mockDraftService';
+import { validateMaterialForSupplementation, computeMaterialFingerprint } from './materialSupplementService';
 
 /**
  * Compute deterministic hash of draft blocks to detect manual edits
@@ -254,8 +255,28 @@ export function applyDraftContentChange(
       const origSeq = typeof orig.revisionSeq === 'number' && Number.isFinite(orig.revisionSeq) && orig.revisionSeq > 0 ? orig.revisionSeq : 0;
       const isContentChanged = b.content !== orig.content;
 
-      if (isContentChanged) {
-        // Block content actually changed: automatically increment revision sequence
+      const origFactIds = orig.referencedFactIds || [];
+      const curFactIds = b.referencedFactIds || [];
+      const areFactIdsChanged =
+        origFactIds.length !== curFactIds.length ||
+        !origFactIds.every((id) => curFactIds.includes(id));
+
+      const origEvs = orig.adoptedEvidences || [];
+      const curEvs = b.adoptedEvidences || [];
+      const areEvidencesChanged =
+        origEvs.length !== curEvs.length ||
+        !origEvs.every((oev) =>
+          curEvs.some(
+            (cev) =>
+              cev.evidenceId === oev.evidenceId &&
+              cev.contentFingerprint === oev.contentFingerprint
+          )
+        );
+
+      const isSubstantiveChange = isContentChanged || areFactIdsChanged || areEvidencesChanged;
+
+      if (isSubstantiveChange) {
+        // Block content, references, or evidence changed: increment revision sequence
         const explicitSeq = typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : undefined;
         const nextSeq = (explicitSeq !== undefined && explicitSeq > origSeq) ? explicitSeq : origSeq + 1;
         const nextUpdatedAt = (b.updatedAt && b.updatedAt !== orig.updatedAt) ? b.updatedAt : nowIso;
@@ -266,7 +287,7 @@ export function applyDraftContentChange(
         };
       }
 
-      // Content did not change
+      // No change
       return {
         ...b,
         revisionSeq: typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : origSeq,
@@ -959,52 +980,153 @@ export function validateParagraphSuggestionAcceptance(
   }
 
   if (suggestion.isMaterialSupplementation) {
+    // 1. Mandatory Fact Snapshot & Approval check: Snapshot missing or invalidated MUST block
+    if (!task.factSnapshot) {
+      return {
+        valid: false,
+        reason: '建议已失效：任务核准事实快照缺失或已被清空（事实审批已失效或撤销），旧候选已失效！请先在材料与事实页面确认事实快照并重新生成。',
+        targetBlock,
+        isFineTuned,
+        isZeroDiff,
+        isModifiedAfter,
+        isTaskMismatch,
+        isDraftVersionMismatch,
+        isSupersededRun,
+        isTargetBlockMissing,
+      };
+    }
+
+    if (
+      suggestion.upstreamApprovalVersion?.factSnapshotHash &&
+      suggestion.upstreamApprovalVersion.factSnapshotHash !== task.factSnapshot.hash
+    ) {
+      return {
+        valid: false,
+        reason: '建议已失效：任务最新核准事实快照已更新，与草稿生成冻结依据存在版本差异，旧候选已失效，请重新生成！',
+        targetBlock,
+        isFineTuned,
+        isZeroDiff,
+        isModifiedAfter,
+        isTaskMismatch,
+        isDraftVersionMismatch,
+        isSupersededRun,
+        isTargetBlockMissing,
+      };
+    }
+
+    if (currentDraft?.snapshotMetadata?.factSnapshot) {
+      if (currentDraft.snapshotMetadata.factSnapshot.hash !== task.factSnapshot.hash) {
+        return {
+          valid: false,
+          reason: '建议已失效：任务最新核准事实快照已更新，与草稿生成冻结依据存在版本差异，旧候选已失效，请重新生成！',
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+    }
+
+    // 2. Comprehensive check on all referenced materials/snippets
+    const snippetIdsToCheck = Array.from(
+      new Set([
+        ...(suggestion.selectedSnippetIds || []),
+        ...((suggestion.adoptedEvidences || []).map((ev) => ev.evidenceId)),
+      ])
+    );
+
+    for (const snipId of snippetIdsToCheck) {
+      const snip = (task.snippets || []).find((s) => s.id === snipId);
+      if (!snip) {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据材料片段【${snipId}】已从材料库中删除，旧建议已失效！请重新选择材料并生成。`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+
+      const doc = (task.documents || []).find((d) => d.id === snip.sourceDocId);
+      if (!doc) {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据来源文档已被删除，无法继续采纳旧建议！请重新选择材料并生成。`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+
+      if (doc.excluded) {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据来源文档【${doc.name}】已被排除，旧建议依据已失效！请重新选择材料并生成。`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+
+      if (doc.usage !== 'current_fact') {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据来源文档【${doc.name}】用途已变更为【${doc.usage}】（非本期事实候选），旧建议已失效！`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+
+      // Shared material admission re-validation
+      const admissionRes = validateMaterialForSupplementation(task, snip);
+      if (!admissionRes.eligible) {
+        return {
+          valid: false,
+          reason: `建议已失效：采纳依据材料【${snipId}】准入状态已失效（${admissionRes.reason}），旧建议已失效，请重新生成！`,
+          targetBlock,
+          isFineTuned,
+          isZeroDiff,
+          isModifiedAfter,
+          isTaskMismatch,
+          isDraftVersionMismatch,
+          isSupersededRun,
+          isTargetBlockMissing,
+        };
+      }
+    }
+
+    // 3. Adopted evidence records consistency checks
     if (suggestion.adoptedEvidences && suggestion.adoptedEvidences.length > 0) {
       for (const ev of suggestion.adoptedEvidences) {
         const doc = task.documents.find((d) => d.id === ev.sourceDocId);
-        if (!doc) {
-          return {
-            valid: false,
-            reason: `建议已失效：采纳依据来源文档【${ev.sourceDocName}】已被删除，无法继续采纳旧建议！请重新选择材料并生成。`,
-            targetBlock,
-            isFineTuned,
-            isZeroDiff,
-            isModifiedAfter,
-            isTaskMismatch,
-            isDraftVersionMismatch,
-            isSupersededRun,
-            isTargetBlockMissing,
-          };
-        }
-        if (doc.excluded) {
-          return {
-            valid: false,
-            reason: `建议已失效：采纳依据来源文档【${doc.name}】已被排除，旧建议依据已失效！请重新选择材料并生成。`,
-            targetBlock,
-            isFineTuned,
-            isZeroDiff,
-            isModifiedAfter,
-            isTaskMismatch,
-            isDraftVersionMismatch,
-            isSupersededRun,
-            isTargetBlockMissing,
-          };
-        }
         const snip = task.snippets.find((s) => s.id === ev.evidenceId);
-        if (!snip) {
-          return {
-            valid: false,
-            reason: `建议已失效：采纳依据材料片段【${ev.evidenceId}】已从材料库中删除，旧建议已失效！请重新选择材料并生成。`,
-            targetBlock,
-            isFineTuned,
-            isZeroDiff,
-            isModifiedAfter,
-            isTaskMismatch,
-            isDraftVersionMismatch,
-            isSupersededRun,
-            isTargetBlockMissing,
-          };
-        }
+        if (!doc || !snip) continue;
+
         if (snip.text.trim() !== ev.snippetText.trim()) {
           return {
             valid: false,
@@ -1019,14 +1141,87 @@ export function validateParagraphSuggestionAcceptance(
             isTargetBlockMissing,
           };
         }
+
+        if (doc.usage !== ev.usage) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据来源文档【${doc.name}】用途已变更为【${doc.usage}】（与生成时【${ev.usage}】不一致），旧建议已失效！`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+
+        if (doc.period !== ev.period && (snip.period || doc.period) !== ev.period) {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据材料【${ev.evidenceId}】统计期间已变动（现为【${snip.period || doc.period}】，生成时为【${ev.period}】），旧建议已失效！`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+
+        // Associated confirmed fact re-verification:
+        if (ev.associatedFactId) {
+          const matchedFact = task.facts.find((f) => f.id === ev.associatedFactId);
+          if (!matchedFact || matchedFact.status !== 'confirmed') {
+            return {
+              valid: false,
+              reason: `建议已失效：采纳依据关联的事实【${ev.associatedFactId}】核准状态已失效（已撤销或未核准），旧候选已失效，请重新生成！`,
+              targetBlock,
+              isFineTuned,
+              isZeroDiff,
+              isModifiedAfter,
+              isTaskMismatch,
+              isDraftVersionMismatch,
+              isSupersededRun,
+              isTargetBlockMissing,
+            };
+          }
+        }
       }
     }
 
-    if (currentDraft?.snapshotMetadata?.factSnapshot && task.factSnapshot) {
-      if (currentDraft.snapshotMetadata.factSnapshot.hash !== task.factSnapshot.hash) {
+    // 4. Check all selectedFactIds if present on suggestion
+    if (suggestion.selectedFactIds && suggestion.selectedFactIds.length > 0) {
+      for (const fid of suggestion.selectedFactIds) {
+        const f = task.facts.find((fact) => fact.id === fid);
+        if (!f || f.status !== 'confirmed') {
+          return {
+            valid: false,
+            reason: `建议已失效：采纳依据核准事实【${fid}】已失效（被删除或已撤销核准），旧候选已失效，请重新生成！`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+      }
+    }
+
+    // 5. Material fingerprint verification:
+    if (suggestion.materialFingerprint && suggestion.selectedSnippetIds) {
+      const curSnippets = task.snippets.filter((s) => suggestion.selectedSnippetIds?.includes(s.id));
+      const curFp = computeMaterialFingerprint(curSnippets);
+      if (curFp !== suggestion.materialFingerprint) {
         return {
           valid: false,
-          reason: '建议已失效：任务最新核准事实快照已更新，与草稿生成冻结依据存在版本差异，旧候选已失效，请重新生成！',
+          reason: `建议已失效：采纳依据材料指纹与生成时不一致（材料内容、期间或元信息已被变更），旧建议已失效！`,
           targetBlock,
           isFineTuned,
           isZeroDiff,
@@ -1069,6 +1264,7 @@ export function validateParagraphSuggestionAcceptance(
 }
 
 export interface AdoptParagraphSuggestionResult {
+  success: boolean;
   updatedTask: Task;
   workingDraft: DraftVersion;
   logEntry: ParagraphModificationLog;
@@ -1260,6 +1456,8 @@ export function adoptParagraphSuggestion(
     adoptedEvidences: isMaterialSupplementation ? (suggestion.adoptedEvidences || []) : undefined,
     previousAdoptedEvidences: isMaterialSupplementation ? (targetBlock.adoptedEvidences ? JSON.parse(JSON.stringify(targetBlock.adoptedEvidences)) : []) : undefined,
     previousReferencedFactIds: isMaterialSupplementation ? [...(targetBlock.referencedFactIds || [])] : undefined,
+    postAdoptedReferencedFactIds: [...(writtenBlock.referencedFactIds || [])],
+    postAdoptedEvidences: writtenBlock.adoptedEvidences ? JSON.parse(JSON.stringify(writtenBlock.adoptedEvidences)) : undefined,
     associatedCommentId: suggestion.sourceCommentId,
     associatedCommentReviewer: suggestion.sourceCommentReviewer,
     previousCommentState,
@@ -1280,6 +1478,7 @@ export function adoptParagraphSuggestion(
   };
 
   return {
+    success: true,
     updatedTask: finalUpdatedTask,
     workingDraft,
     logEntry,
@@ -1369,6 +1568,41 @@ export function validateUndoEligibility(
 
   if (targetBlock.revisionSeq !== log.appliedRevisionSeq) {
     return { canUndo: false, reason: '目标段落在此次采纳后已有后续修改序号，不可跨操作撤销' };
+  }
+
+  // 校验段落引用的事实与依据在采纳后是否发生后续调整（防止正文未变但引用/依据已调整时被粗暴覆盖）
+  if (log.postAdoptedReferencedFactIds !== undefined) {
+    const currentFactIds = targetBlock.referencedFactIds || [];
+    const savedFactIds = log.postAdoptedReferencedFactIds || [];
+    const factIdsUnchanged =
+      currentFactIds.length === savedFactIds.length &&
+      currentFactIds.every((fid) => savedFactIds.includes(fid));
+    if (!factIdsUnchanged) {
+      return {
+        canUndo: false,
+        reason: '目标段落的事实依据引用在此次采纳后已被后续调整修改，为保护最新依据引用状态，阻断撤销',
+      };
+    }
+  }
+
+  if (log.postAdoptedEvidences !== undefined) {
+    const currentEvs = targetBlock.adoptedEvidences || [];
+    const savedEvs = log.postAdoptedEvidences || [];
+    const evsUnchanged =
+      currentEvs.length === savedEvs.length &&
+      currentEvs.every((cev) =>
+        savedEvs.some(
+          (sev) =>
+            sev.evidenceId === cev.evidenceId &&
+            sev.contentFingerprint === cev.contentFingerprint
+        )
+      );
+    if (!evsUnchanged) {
+      return {
+        canUndo: false,
+        reason: '目标段落的材料依据存证在此次采纳后已被后续调整修改，为保护最新材料存证状态，阻断撤销',
+      };
+    }
   }
 
   // If associated with a review comment, verify the comment has not been subsequently handled

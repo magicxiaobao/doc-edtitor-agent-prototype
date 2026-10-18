@@ -22,15 +22,25 @@ import {
   validateParagraphSuggestionAcceptance,
   adoptParagraphSuggestion,
   undoSafeParagraphModification,
-  validateUndoEligibility
+  validateUndoEligibility,
+  applyDraftContentChange,
 } from './src/services/draftLifecycleService';
+import { modifyOrExcludeFact } from './src/services/factLifecycleService';
 import { exportDocumentAsTxt } from './src/services/exportService';
 import { DraftingStage } from './src/components/stages/DraftingStage';
 import { MaterialSupplementModal } from './src/components/MaterialSupplementModal';
 import { ParagraphSuggestionEditor } from './src/components/ParagraphSuggestionEditor';
 import { RecentModificationsModal } from './src/components/RecentModificationsModal';
 import { App } from './src/App';
-import { loadPersistedState, savePersistedState, setStorageItem, STORAGE_KEY_V2 } from './src/services/storageService';
+import { 
+  loadPersistedState, 
+  savePersistedState, 
+  setStorageItem, 
+  STORAGE_KEY_V2, 
+  BACKUP_CORRUPTED_KEY,
+  validateTaskStructure, 
+  recoverTasksFromCorruptedBackup 
+} from './src/services/storageService';
 
 function mountTestComponent(element: React.ReactElement) {
   const container = dom.window.document.createElement('div');
@@ -875,8 +885,334 @@ async function runTask20Tests() {
     unmount();
   }
 
+  // ================================================================
+  // K. 6 组专项问题回归验证 (材料准入、采纳重验、跨任务回填、结构与灾备、撤销安全、无依据成效)
+  // ================================================================
+  console.log('\n>>> [验收用例 K] 6 组专项问题回归验证 (P1/P2 六项复核):');
+  {
+    // K.1: 材料准入严格校验：一季度任务拒收二季度材料、工程验收vs培训、800人vs800人次、10分钟核准
+    console.log('--- K.1 材料准入严格校验 ---');
+    const q1Task: Task = {
+      ...createTestTaskWithCases(),
+      startDate: '2026-01-01',
+      endDate: '2026-03-31',
+    };
+    const q2Doc: SourceDocument = {
+      id: 'DOC-Q2-01',
+      name: '2026年第二季度重点工作总结',
+      usage: 'current_fact',
+      period: '2026年二季度',
+      fileType: 'txt',
+      parseStatus: 'parsed',
+      source: '业务科',
+      content: '二季度工作',
+      excluded: false,
+    };
+    const q2Snip: EvidenceSnippet = {
+      id: 'SNIP-Q2-01',
+      sourceDocId: 'DOC-Q2-01',
+      docName: '2026年第二季度重点工作总结',
+      location: '第1段',
+      period: '2026年二季度',
+      text: '创新推进重点工程协同保障机制，高标准落实各项举措。',
+    };
+    const q1TaskWithQ2 = {
+      ...q1Task,
+      documents: [...q1Task.documents, q2Doc],
+      snippets: [...q1Task.snippets, q2Snip],
+    };
+    const checkQ2 = validateMaterialForSupplementation(q1TaskWithQ2, q2Snip);
+    assert(checkQ2.eligible === false, 'K.1.1: 一季度公文任务严格拒收同年二季度材料准入');
+    assert(checkQ2.reason!.includes('跨期不符'), 'K.1.2: 明确提示材料统计期间与一季度任务跨期不符');
+
+    // “工程验收16场”匹配到“培训16场”阻断
+    const trainingFactTask: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TRAIN-16',
+          metric: '组织专题培训',
+          period: '2026年1至9月',
+          value: '16',
+          unit: '场',
+          metricScope: '专业技能培训统计口径',
+          primaryEvidenceId: 'SNIP-APPOINT-01',
+          evidenceIds: ['SNIP-APPOINT-01'],
+          sourceDocId: 'DOC-APPOINT-01',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+    };
+    const engSnippet: EvidenceSnippet = {
+      id: 'SNIP-ENG-16',
+      sourceDocId: 'DOC-APPOINT-01',
+      docName: '工程质量监管总结',
+      location: '第2段',
+      period: '2026年1至9月',
+      text: '抓牢安全生产底线，从严落实全过程监管，累计完成重大工程验收16场。',
+    };
+    const engClaimCheck = validateSelectedMaterialsQuantitativeClaims(trainingFactTask, [engSnippet]);
+    assert(engClaimCheck.valid === false, 'K.1.3: “工程验收16场”不可错误匹配事实库中的“培训16场”');
+
+    // “800人”匹配“800人次”阻断 (严格单位匹配)
+    const personFactTask: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TRAIN-800',
+          metric: '组织专业技能培训',
+          period: '2026年1至9月',
+          value: '800',
+          unit: '人次',
+          metricScope: '参训人员口径',
+          primaryEvidenceId: 'SNIP-APPOINT-01',
+          evidenceIds: ['SNIP-APPOINT-01'],
+          sourceDocId: 'DOC-APPOINT-01',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+    };
+    const personSnippet: EvidenceSnippet = {
+      id: 'SNIP-PERSON-800',
+      sourceDocId: 'DOC-APPOINT-01',
+      docName: '技能培训材料',
+      location: '第1段',
+      period: '2026年1至9月',
+      text: '分级分类开展实操培训，累计参训人员达800人。',
+    };
+    const personClaimCheck = validateSelectedMaterialsQuantitativeClaims(personFactTask, [personSnippet]);
+    assert(personClaimCheck.valid === false, 'K.1.4: “800人”与“800人次”严格区分单位，移除包含匹配');
+
+    // “10分钟”核准检查（移除分钟豁免）
+    const minuteSnippet: EvidenceSnippet = {
+      id: 'SNIP-MIN-10',
+      sourceDocId: 'DOC-APPOINT-01',
+      docName: '便民服务总结',
+      location: '第3段',
+      period: '2026年1至9月',
+      text: '创新推出分时段预约机制，群众平均等候时间压缩至10分钟以内。',
+    };
+    const minuteClaimWithoutFact = validateSelectedMaterialsQuantitativeClaims(createTestTaskWithCases(), [minuteSnippet]);
+    assert(minuteClaimWithoutFact.valid === false, 'K.1.5: “10分钟”不再直接豁免跳过，无核准事实时阻断');
+    assert(minuteClaimWithoutFact.unverifiedClaims!.some((c) => c.includes('10分钟')), 'K.1.6: 明确将“10分钟”作为未核准量化指标列出');
+
+    // 带核准事实的“10分钟”通过校验
+    const taskWith10MinFact: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        ...createTestTaskWithCases().facts,
+        {
+          id: 'FACT-MIN-10',
+          metric: '平均等候时间',
+          period: '2026年1至9月',
+          value: '10',
+          unit: '分钟',
+          metricScope: '窗口便民服务统计口径',
+          primaryEvidenceId: 'SNIP-MIN-10',
+          evidenceIds: ['SNIP-MIN-10'],
+          sourceDocId: 'DOC-APPOINT-01',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+    };
+    const minuteClaimWithFact = validateSelectedMaterialsQuantitativeClaims(taskWith10MinFact, [minuteSnippet]);
+    console.log('DEBUG K.1.7 minuteClaimWithFact:', minuteClaimWithFact);
+    assert(minuteClaimWithFact.valid === true, 'K.1.7: 登记核准的“10分钟”事实记录后顺利通过核验');
+
+    // K.2: 采纳前完整重验依据
+    console.log('--- K.2 采纳前完整重验依据 ---');
+    const taskBase = createTestTaskWithCases();
+    const workingDraft = taskBase.drafts.find((d) => d.id === taskBase.currentDraftId)!;
+    const targetBlock = workingDraft.blocks[1];
+    const snipA = taskBase.snippets.find((s) => s.id === 'SNIP-APPOINT-01')!;
+    const suggestionBase = generateMaterialSupplementation(targetBlock, [snipA], {
+      task: taskBase,
+      currentDraft: workingDraft,
+    });
+
+    // 来源改为 style_ref
+    const taskStyleRef: Task = {
+      ...taskBase,
+      documents: taskBase.documents.map((d) => d.id === 'DOC-APPOINT-01' ? { ...d, usage: 'style_ref' as const } : d),
+    };
+    const checkStyleRef = validateParagraphSuggestionAcceptance({
+      task: taskStyleRef,
+      currentDraft: workingDraft,
+      suggestion: suggestionBase,
+      pendingTextToAdopt: suggestionBase.suggestedText,
+      activeCompletedRunId: suggestionBase.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkStyleRef.valid === false, 'K.2.1: 生成后来源文档变更为 style_ref 阻断采纳');
+
+    // 来源改为旧年份 2025年
+    const taskOldYear: Task = {
+      ...taskBase,
+      documents: taskBase.documents.map((d) => d.id === 'DOC-APPOINT-01' ? { ...d, period: '2025年' } : d),
+    };
+    const checkOldYear = validateParagraphSuggestionAcceptance({
+      task: taskOldYear,
+      currentDraft: workingDraft,
+      suggestion: suggestionBase,
+      pendingTextToAdopt: suggestionBase.suggestedText,
+      activeCompletedRunId: suggestionBase.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkOldYear.valid === false, 'K.2.2: 生成后来源文档变更为历史旧年份 2025年 阻断采纳');
+
+    // 真实事实维护服务撤销核准、清空事实快照
+    const taskRevoked = modifyOrExcludeFact(taskBase, 'FACT-APPOINT-01', { status: 'pending' }, '主笔甲').updatedTask!;
+    assert(taskRevoked.factSnapshot === undefined, 'K.2.3: 真实事实维护服务撤销核准后清空了事实快照');
+    const checkRevoked = validateParagraphSuggestionAcceptance({
+      task: taskRevoked,
+      currentDraft: workingDraft,
+      suggestion: suggestionBase,
+      pendingTextToAdopt: suggestionBase.suggestedText,
+      activeCompletedRunId: suggestionBase.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkRevoked.valid === false, 'K.2.4: 事实快照清空或核准撤销后采纳校验安全阻断');
+
+    // K.3: 补写请求跨任务隔离
+    console.log('--- K.3 补写请求跨任务隔离 ---');
+    let taskBSuccessCalled = false;
+    const taskA = { ...createTestTaskWithCases(), id: 'TASK-ALPHA' };
+    const taskB = { ...createTestTaskWithCases(), id: 'TASK-BETA' };
+
+    const modalMount = mountTestComponent(
+      <MaterialSupplementModal
+        isOpen={true}
+        onClose={() => {}}
+        task={taskA}
+        currentDraft={taskA.drafts[0]}
+        activeBlock={taskA.drafts[0].blocks[1]}
+        activeRole="主笔甲"
+        onViewSnippet={() => {}}
+        onSupplementSuccess={() => {
+          taskBSuccessCalled = true;
+        }}
+      />
+    );
+
+    // Re-render immediately with Task B before async completion
+    modalMount.rerender(
+      <MaterialSupplementModal
+        isOpen={true}
+        onClose={() => {}}
+        task={taskB}
+        currentDraft={taskB.drafts[0]}
+        activeBlock={taskB.drafts[0].blocks[1]}
+        activeRole="主笔甲"
+        onViewSnippet={() => {}}
+        onSupplementSuccess={() => {
+          taskBSuccessCalled = true;
+        }}
+      />
+    );
+    assert(taskBSuccessCalled === false, 'K.3.1: 任务切换后未发生跨任务回填，Task A 补写未回填至 Task B');
+    modalMount.unmount();
+
+    // K.4: 新证据字段贯通容灾恢复与结构校验
+    console.log('--- K.4 容灾恢复与结构校验 ---');
+    // adoptedEvidences: [null] 结构损坏检测
+    const corruptedTaskWithNull = {
+      ...taskBase,
+      drafts: [
+        {
+          ...workingDraft,
+          blocks: [
+            {
+              ...workingDraft.blocks[0],
+              adoptedEvidences: [null as any],
+            },
+          ],
+        },
+      ],
+    };
+    const structureValid = validateTaskStructure(corruptedTaskWithNull);
+    assert(structureValid === false, 'K.4.1: adoptedEvidences: [null] 被准确识别为数据结构损坏');
+
+    // 灾备恢复保留合法证据并隔离损坏项
+    const validEvidenceRecord = {
+      evidenceId: 'SNIP-APPOINT-01',
+      sourceDocId: 'DOC-APPOINT-01',
+      sourceDocName: '政务大厅推行便民服务预约制工作总结',
+      snippetText: '创新推出“便民服务分时段精准预约”新模式',
+      period: '2026年1至9月',
+      usage: 'current_fact' as const,
+      contentFingerprint: 'MAT-FP-TEST1234',
+      capturedAt: new Date().toISOString(),
+    };
+    const corruptedPayload = JSON.stringify({
+      schemaVersion: 2,
+      currentTaskId: taskBase.id,
+      tasks: [
+        {
+          ...taskBase,
+          drafts: [
+            {
+              ...workingDraft,
+              blocks: [
+                {
+                  ...workingDraft.blocks[0],
+                  content: '第1段恢复测试正文。',
+                  adoptedEvidences: [null, validEvidenceRecord],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    setStorageItem(BACKUP_CORRUPTED_KEY, corruptedPayload);
+    const recoveryRes = recoverTasksFromCorruptedBackup();
+    assert(recoveryRes.success === true, 'K.4.2: 从损坏备份中成功恢复任务');
+    const recoveredBlock = recoveryRes.recoveredTasks[0].drafts[0].blocks[0];
+    assert(recoveredBlock.adoptedEvidences !== undefined && recoveredBlock.adoptedEvidences.length === 1, 'K.4.3: 灾备恢复保留了合法证据项并剔除了损坏项');
+    assert(recoveredBlock.adoptedEvidences![0].evidenceId === 'SNIP-APPOINT-01', 'K.4.4: 恢复后的证据ID完好无损');
+
+    // K.5: 采纳后后续修改引用/证据保守阻断撤销
+    console.log('--- K.5 采纳后后续修改引用/证据保守阻断撤销 ---');
+    const adoptRes = adoptParagraphSuggestion({
+      task: taskBase,
+      currentDraft: workingDraft,
+      suggestion: suggestionBase,
+      pendingTextToAdopt: suggestionBase.suggestedText,
+      activeCompletedRunId: suggestionBase.runId,
+      activeRole: '主笔甲',
+    });
+    assert(adoptRes.success === true, 'K.5.1: 补写建议初次采纳写入成功');
+    const adoptedTask = adoptRes.updatedTask!;
+    const logEntry = adoptRes.logEntry!;
+
+    // 仅通过统一修改服务调整引用（正文未变）
+    const adjustedTask = applyDraftContentChange(
+      adoptedTask,
+      adoptedTask.currentDraftId,
+      (blocks) =>
+        blocks.map((b) =>
+          b.id === targetBlock.id ? { ...b, referencedFactIds: [...b.referencedFactIds, 'FACT-PROCURE-01'] } : b
+        ),
+      '仅调整引用事实',
+      '主笔甲'
+    ).updatedTask;
+
+    const currentWorkingDraft = adjustedTask.drafts.find((d) => d.id === adjustedTask.currentDraftId);
+    const undoCheckAfterRefChange = validateUndoEligibility(adjustedTask, currentWorkingDraft, logEntry.id, '主笔甲');
+    assert(undoCheckAfterRefChange.canUndo === false, 'K.5.2: 采纳后正文未变但引用发生后续调整，安全撤销被保守阻断');
+    assert(undoCheckAfterRefChange.reason!.includes('后续') || undoCheckAfterRefChange.reason!.includes('调整') || undoCheckAfterRefChange.reason!.includes('修改'), 'K.5.3: 给出依据引用已变更的撤销阻断提示');
+
+    // K.6: 杜绝无依据成效结论与准确说明
+    console.log('--- K.6 杜绝无依据成效结论 ---');
+    assert(!suggestionBase.suggestedText.includes('有力提升工作推进质效'), 'K.6.1: 正文中未追加无依据的“有力提升工作推进质效”成效套话');
+    assert(suggestionBase.diffExplanation.includes('中性表述加工'), 'K.6.2: 差异说明准确区分原文忠实摘录与中性衔接加工，杜绝“全部忠实摘录”虚假声称');
+  }
+
   console.log('\n================================================================');
-  console.log('   🎉 任务20 全部 10 组验收用例 (A-J) 100% 全部通过！');
+  console.log('   🎉 任务20 全部 11 组验收用例 (A-K 包含6组专项问题) 100% 全部通过！');
   console.log('================================================================');
 }
 

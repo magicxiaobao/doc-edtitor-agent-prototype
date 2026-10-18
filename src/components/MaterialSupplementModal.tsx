@@ -70,6 +70,47 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
   const modalRef = useRef<HTMLDivElement>(null);
   const triggerElementRef = useRef<HTMLElement | null>(null);
 
+  const currentTaskIdRef = useRef(task.id);
+  const currentDraftIdRef = useRef(currentDraft?.id);
+  const currentBlockIdRef = useRef(activeBlock?.id);
+  const previousTaskIdRef = useRef(task.id);
+  const previousDraftIdRef = useRef(currentDraft?.id);
+  const previousBlockIdRef = useRef(activeBlock?.id);
+
+  useEffect(() => {
+    if (
+      previousTaskIdRef.current !== task.id ||
+      previousDraftIdRef.current !== currentDraft?.id ||
+      previousBlockIdRef.current !== activeBlock?.id
+    ) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      setIsGenerating(false);
+      setSelectedSnippetIds([]);
+      setGenerationError(null);
+      if (previousTaskIdRef.current !== task.id && isOpen) {
+        onClose();
+      }
+      previousTaskIdRef.current = task.id;
+      previousDraftIdRef.current = currentDraft?.id;
+      previousBlockIdRef.current = activeBlock?.id;
+    }
+    currentTaskIdRef.current = task.id;
+    currentDraftIdRef.current = currentDraft?.id;
+    currentBlockIdRef.current = activeBlock?.id;
+  }, [task.id, currentDraft?.id, activeBlock?.id, isOpen, onClose]);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
+
   // Store trigger element for focus restoration
   useEffect(() => {
     if (isOpen) {
@@ -186,6 +227,11 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
     setGenerationError(null);
     setIsGenerating(true);
 
+    const boundTaskId = task.id;
+    const boundDraftId = currentDraft?.id;
+    const boundBlockId = activeBlock.id;
+    const runId = `RUN-MAT-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -197,14 +243,36 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
         prompt: instruction,
         task,
         currentDraft,
-        runId: `RUN-MAT-${Date.now().toString(36)}`,
+        runId,
         signal: controller.signal,
       });
+
+      // Strict boundary check: If task, draft, or block changed in workspace, discard!
+      if (
+        controller.signal.aborted ||
+        currentTaskIdRef.current !== boundTaskId ||
+        currentDraftIdRef.current !== boundDraftId ||
+        currentBlockIdRef.current !== boundBlockId ||
+        task.id !== boundTaskId ||
+        suggestion.taskId !== boundTaskId ||
+        suggestion.targetBlockId !== boundBlockId
+      ) {
+        return;
+      }
 
       setIsGenerating(false);
       onSupplementSuccess(suggestion);
       onClose();
     } catch (err: any) {
+      if (
+        controller.signal.aborted ||
+        currentTaskIdRef.current !== boundTaskId ||
+        currentDraftIdRef.current !== boundDraftId ||
+        currentBlockIdRef.current !== boundBlockId ||
+        task.id !== boundTaskId
+      ) {
+        return;
+      }
       if (err.name === 'AbortError' || controller.signal.aborted) {
         setGenerationError('主笔已取消本次补写建议生成。原有正文与草稿内容保持不变。');
       } else {

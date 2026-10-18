@@ -1,6 +1,6 @@
 import React from 'react';
 import { ExternalLink, AlertTriangle } from 'lucide-react';
-import { Fact, Task, DraftVersion, ParagraphBlock, EvidenceSnippet } from '../types';
+import { Fact, Task, DraftVersion, ParagraphBlock, EvidenceSnippet, AdoptedEvidenceRecord } from '../types';
 import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 
 export interface MaterialEvidenceListProps {
@@ -228,12 +228,22 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
             本段已采纳材料依据（补写存证）：
           </span>
           <span className="text-xs text-slate-500 font-mono">
-            {activeBlock.adoptedEvidences?.length || 0} 项
+            {((activeBlock.adoptedEvidences || []).filter((ev): ev is AdoptedEvidenceRecord => Boolean(ev && typeof ev === 'object' && ev.evidenceId))).length} 项
           </span>
         </div>
 
-        {activeBlock.adoptedEvidences && activeBlock.adoptedEvidences.length > 0 ? (
-          activeBlock.adoptedEvidences.map((ev, eIdx) => {
+        {(() => {
+          const safeAdoptedEvidences = (activeBlock.adoptedEvidences || []).filter(
+            (ev): ev is AdoptedEvidenceRecord => Boolean(ev && typeof ev === 'object' && ev.evidenceId)
+          );
+          if (safeAdoptedEvidences.length === 0) {
+            return (
+              <div className="text-xs text-slate-400 py-2">
+                本段暂未采纳材料补写存证依据
+              </div>
+            );
+          }
+          return safeAdoptedEvidences.map((ev, eIdx) => {
             const currentDoc = task.documents.find((d) => d.id === ev.sourceDocId);
             const currentSnip = task.snippets.find((s) => s.id === ev.evidenceId);
 
@@ -338,12 +348,8 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                 </div>
               </div>
             );
-          })
-        ) : (
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-400 italic text-center">
-            本段尚未采纳材料补写依据
-          </div>
-        )}
+          });
+        })()}
       </div>
     </div>
   );

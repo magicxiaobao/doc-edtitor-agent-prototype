@@ -364,6 +364,14 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setShowMaterialSupplementModal(true);
   };
   const handleSupplementSuccess = (suggestion: RevisionSuggestion) => {
+    if (
+      !suggestion ||
+      suggestion.taskId !== task.id ||
+      (currentDraft && suggestion.sourceDraftId !== currentDraft.id) ||
+      (selectedBlockId && suggestion.targetBlockId !== selectedBlockId)
+    ) {
+      return;
+    }
     setRevisionSuggestion(suggestion);
     setInspectorTab('ai_suggestions');
     if (suggestion.runId) {
@@ -507,11 +515,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     ? new Date(task.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : '刚刚';
 
-  // Version switch cleanup effect: cancel in-flight requests, clear suggestions and stale location (Requirement P2)
+  // Task & Version switch cleanup effect: cancel in-flight requests, clear suggestions and stale location
+  const previousTaskIdRef = useRef<string>(task.id);
   const previousDraftIdRef = useRef<string | undefined>(currentDraft?.id);
   useEffect(() => {
-    if (previousDraftIdRef.current && previousDraftIdRef.current !== currentDraft?.id) {
-      // 1. Cancel in-flight revision request
+    const isTaskChanged = previousTaskIdRef.current !== task.id;
+    const isDraftChanged = previousDraftIdRef.current && previousDraftIdRef.current !== currentDraft?.id;
+
+    if (isTaskChanged || isDraftChanged) {
+      // 1. Cancel in-flight revision request & supplementation
       if (revisionAbortControllerRef.current) {
         revisionAbortControllerRef.current.abort();
         revisionAbortControllerRef.current = null;
@@ -521,30 +533,32 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       activeRevisionRunIdRef.current = null;
       completedRevisionRunIdRef.current = null;
 
-      // 2. Clear revision suggestions and error
+      // 2. Clear revision suggestions, errors, and modal
       setRevisionSuggestion(null);
       setRevisionError(null);
       setCustomPromptInput('');
       setFineTunedPendingTexts({});
+      setShowMaterialSupplementModal(false);
 
-      // 3. Clear invalid / stale block selection if block doesn't exist in new draft
+      // 3. Clear invalid / stale block selection if block doesn't exist in new draft or task
       if (selectedBlockId && currentDraft) {
         const blockStillExists = currentDraft.blocks.some((b) => b.id === selectedBlockId);
-        if (!blockStillExists) {
+        if (!blockStillExists || isTaskChanged) {
           setSelectedBlockId(null);
         }
       }
 
-      // 4. Clear invalid / stale comment selection if comment doesn't exist in new draft's comments
+      // 4. Clear invalid / stale comment selection if comment doesn't exist in new draft's comments or task
       if (selectedCommentId) {
         const commentStillExists = activeReviewComments.some((c) => c.id === selectedCommentId);
-        if (!commentStillExists) {
+        if (!commentStillExists || isTaskChanged) {
           setSelectedCommentId(null);
         }
       }
     }
+    previousTaskIdRef.current = task.id;
     previousDraftIdRef.current = currentDraft?.id;
-  }, [currentDraft?.id, currentDraft?.blocks, activeReviewComments, selectedBlockId, selectedCommentId]);
+  }, [task.id, currentDraft?.id, currentDraft?.blocks, activeReviewComments, selectedBlockId, selectedCommentId]);
 
   // Requirement 1, 2, 3, 8: Handle navigation intent from ReviewStage
   const lastProcessedNavRef = useRef<string | null>(null);

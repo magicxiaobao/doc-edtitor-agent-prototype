@@ -214,6 +214,14 @@ export interface RevisionSuggestion {
   adoptedEvidences?: AdoptedEvidenceRecord[];
   materialFingerprint?: string;
   materialPrompt?: string;
+  upstreamApprovalVersion?: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
 }
 
 export interface AuditRecord {
@@ -277,6 +285,8 @@ export interface ParagraphModificationLog {
   adoptedEvidences?: AdoptedEvidenceRecord[]; // 采纳时实际采用的材料依据存证快照
   previousAdoptedEvidences?: AdoptedEvidenceRecord[]; // 采纳前的材料依据存证快照（用于安全撤销精准恢复）
   previousReferencedFactIds?: string[]; // 采纳前的事实引用列表（用于安全撤销精准恢复）
+  postAdoptedReferencedFactIds?: string[]; // 采纳后的完整事实引用快照（用于检测后续引用是否被单独修改）
+  postAdoptedEvidences?: AdoptedEvidenceRecord[]; // 采纳后的完整材料依据快照（用于检测后续证据是否被单独修改）
   associatedCommentId?: string;        // 关联审阅意见ID
   associatedCommentReviewer?: string;  // 关联审阅人
   previousCommentState?: ReviewCommentSnapshotBeforeChange; // 采纳前意见状态存证（用于安全撤销时精准恢复）
