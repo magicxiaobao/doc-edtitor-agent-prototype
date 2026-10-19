@@ -357,6 +357,17 @@ export function isPeriodWithinTaskPeriod(
  * - Non-existent evidence, historic style materials, or textless clues
  *   CANNOT be accepted as current quantitative facts just by passing an ID.
  */
+function sourcePeriodError(factPeriod: string, snippet: EvidenceSnippet, doc: SourceDocument): string | undefined {
+  const fact = parsePeriodDateRange(factPeriod);
+  const evidence = parsePeriodDateRange(snippet.period);
+  const source = parsePeriodDateRange(doc.period);
+  if (!fact || !evidence || !source) return '事实、片段与来源材料须填写可识别的统计期间，请先核验出处';
+  if (fact.start.getTime() !== evidence.start.getTime() || fact.end.getTime() !== evidence.end.getTime() || fact.start < source.start || fact.end > source.end) {
+    return `事实期间【${factPeriod}】与原文片段【${snippet.period}】或来源材料【${doc.period}】不符，不能将跨期材料改标为本期事实`;
+  }
+  return undefined;
+}
+
 export function createFactCandidate(
   task: Task,
   factData: Omit<Fact, 'id' | 'status'>,
@@ -386,6 +397,8 @@ export function createFactCandidate(
         error: `片段【${snippet.id}】所属的来源文档不存在，严禁凭失效出处登记事实！`,
       };
     }
+    const periodError = sourcePeriodError(factData.period, snippet, sourceDoc);
+    if (periodError) return { success: false, error: periodError };
     if (sourceDoc.excluded || sourceDoc.usage === 'style_ref' || sourceDoc.usage === 'history_bg' || factData.isHistoricOnly) {
       return {
         success: false,
@@ -463,6 +476,8 @@ export function confirmFact(
     if (!sourceDoc) {
       return { success: false, error: `依据片段【${snippet.id}】所属来源文件不存在，严禁凭失效出处确认为事实！` };
     }
+    const periodError = sourcePeriodError(fact.period, snippet, sourceDoc);
+    if (periodError) return { success: false, error: periodError };
     if (sourceDoc.excluded || sourceDoc.usage === 'style_ref' || sourceDoc.usage === 'history_bg') {
       return { success: false, error: `来源材料【${sourceDoc.name}】为历史文风参考材料，严禁确认为本期量化履职事实！` };
     }

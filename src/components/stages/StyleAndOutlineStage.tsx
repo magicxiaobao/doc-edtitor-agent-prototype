@@ -47,7 +47,12 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
     if (!checkPermission(activeRole, 'confirm_outline').allowed) { alert('仅主笔可修改文风与大纲'); return; }
     const next = { ...updated };
     if (next.outline) {
-      next.outline = next.outline.map(section => ({ ...section, assignedFactIds: section.assignedFactIds.filter(id => task.facts.some(f => f.id === id && f.status === 'confirmed' && !f.isHistoricOnly)) }));
+      next.outline = next.outline.map(section => {
+        const assignedFactIds = section.assignedFactIds.filter(id => task.facts.some(f => f.id === id && f.status === 'confirmed' && !f.isHistoricOnly));
+        const removed = assignedFactIds.length !== section.assignedFactIds.length;
+        return { ...section, assignedFactIds, hasMaterialGap: removed ? true : section.hasMaterialGap,
+          gapDescription: removed ? '已移除未核准或失效事实，请重新分配材料' : section.gapDescription };
+      });
       if (!next.outlineConfirmed) next.outlineSnapshot = undefined;
     }
     if (next.styleRules && !next.styleConfirmed) next.styleSnapshot = undefined;

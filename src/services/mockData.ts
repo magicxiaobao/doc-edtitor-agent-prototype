@@ -484,6 +484,8 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
       unit: f.unit, period: f.period, metricScope: f.metricScope,
       primaryEvidenceId: f.primaryEvidenceId, selectedConflictValue: f.selectedConflictValue,
       conflictResolutionReason: f.conflictResolutionReason,
+      hasConflict: f.hasConflict,
+      conflictCandidates: f.conflictCandidates ? JSON.parse(JSON.stringify(f.conflictCandidates)) : undefined,
     })),
     hash: 'SNAPSHOT-HASH-CONFIRMED-128',
   };

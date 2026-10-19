@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import assert from 'node:assert/strict';
 import { createPresetTask } from './src/services/mockData';
 import { validateSelectedMaterialsQuantitativeClaims } from './src/services/materialSupplementService';
-import { extractClausePeriod } from './src/services/factLifecycleService';
+import { extractClausePeriod, createFactCandidate, confirmFact } from './src/services/factLifecycleService';
 import { MaterialsAndFactsStage } from './src/components/stages/MaterialsAndFactsStage';
 import { MaterialSupplementModal } from './src/components/MaterialSupplementModal';
 import type { Task, EvidenceSnippet, SourceDocument } from './src/types';
@@ -24,6 +24,16 @@ for (const scenario of ['ready_to_draft', 'under_review'] as const) {
   assert(!preset.factSnapshot?.factIds.includes('FACT-06'));
   for (const item of preset.factSnapshot!.items!) assert.equal(preset.facts.find(f => f.id === item.factId)?.status, 'confirmed');
 }
+
+const wrongSource = createPresetTask('ready_to_draft');
+const boundFact = wrongSource.facts.find(f => f.id === 'FACT-02')!;
+const boundSnippet = wrongSource.snippets.find(s => s.id === boundFact.primaryEvidenceId)!;
+wrongSource.documents.find(d => d.id === boundSnippet.sourceDocId)!.period = '2025年度';
+assert.equal(createFactCandidate(wrongSource, {...boundFact, period:'2026年1至9月'}, '主笔甲').success, false);
+assert.equal(confirmFact(wrongSource, boundFact.id, '主笔甲').success, false);
+const conflictSnapshot = createPresetTask('under_review').factSnapshot!.items!.find(f => f.factId === 'FACT-01')!;
+assert.equal(conflictSnapshot.hasConflict, true);
+assert(conflictSnapshot.conflictCandidates!.some(c => c.value === '120'));
 
 const container = document.createElement('div'); document.body.append(container);
 const root = createRoot(container);

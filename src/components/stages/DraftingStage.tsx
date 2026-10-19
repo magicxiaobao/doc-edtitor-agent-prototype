@@ -681,6 +681,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Identify blocks whose referenced facts have changed, been revoked, or are unconfirmed
   const blocksNeedingReview = (currentDraft?.blocks || []).filter((block) => {
+    if (!isCurrentDraftImmutable && !task.factSnapshot && block.referencedFactIds.length > 0) return true;
     return block.referencedFactIds.some((fId) => {
       const fact = task.facts.find((f) => f.id === fId);
       if (!fact) return true;
@@ -1706,7 +1707,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           )}
 
           {isGenerating && (
-            <button data-testid="btn-close-tablet-outline"
+            <button
               onClick={handleCancelGenerate}
               className="px-2.5 py-1.5 bg-rose-50 text-rose-700 border border-rose-300 rounded text-xs hover:bg-rose-100 cursor-pointer font-medium"
               title="取消当前起草生成并保持现有内容"
@@ -2991,7 +2992,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 <FileText className="w-4 h-4 text-blue-700" />
                 <h3 className="font-bold text-sm text-slate-800">章节大纲导航</h3>
               </div>
-              <button
+              <button data-testid="btn-close-tablet-outline"
                 type="button"
                 onClick={() => {
                   setShowTabletOutlineDrawer(false);
