@@ -179,6 +179,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [showContradictionModal, setShowContradictionModal] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
   const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
+  useEffect(() => { setShowContradictionModal(false); setCoordinationCommentIds([]); }, [task.id]);
+
   const [strategyReason, setStrategyReason] = useState(
     '综合两位审阅领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研代表性成效，控制全篇在2500字左右。'
   );
@@ -3677,9 +3679,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     type="button"
                     onClick={() => handleResolveContradiction('implement_now')}
                     className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold shadow-xs cursor-pointer"
-                    title="立即根据裁决策略改写对应段落正文，生成新工作稿并将两项意见标记为已落实"
+                    title="根据策略调整正文；意见仍需逐条核实，不自动视为全部落实"
                   >
-                    立即按策略落实正文
+                    应用策略并逐条核实意见
                   </button>
                 </div>
               </div>

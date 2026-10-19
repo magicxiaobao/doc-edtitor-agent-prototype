@@ -346,20 +346,19 @@ export function applyCoordinationDecision(
     authorRole
   );
 
-  // Update related review comments to 'implemented'
+  // A generic strategy is not proof that an arbitrary opinion has been fulfilled.
   const updatedComments = taskWithNewDraft.reviewComments.map((cmt) => {
-    if (relatedCommentIds.includes(cmt.id)) {
-      return {
-        ...cmt,
-        status: 'implemented' as const,
-        authorReply: `主笔已协调决断：${coordinationResult.strategyExplanation}`,
-        decisionReason: coordinationResult.strategyExplanation,
-        resolutionType: 'strategy_decided' as const,
-        implementationDraftId: workingDraft.id,
-        implementationBlockId: coordinationResult.diffPreview[0]?.blockId,
-      };
-    }
-    return cmt;
+    if (!relatedCommentIds.includes(cmt.id)) return cmt;
+    const covered = coordinationResult.diffPreview.find(d => d.blockId === getEffectiveTargetBlockId(cmt));
+    const exactReplacement = cmt.type === 'paragraph' && getCommentSuggestionType(cmt) === 'replacement' && covered && cmt.suggestedChange?.trim() === covered.proposedText.trim();
+    return {
+      ...cmt, status: exactReplacement ? 'implemented' as const : 'accepted_pending_implementation' as const,
+      authorReply: exactReplacement ? `主笔已按替换正文落实：${coordinationResult.strategyExplanation}` : `已按协调策略调整部分正文；本条意见仍待逐条核实落实：${coordinationResult.strategyExplanation}`,
+      decisionReason: coordinationResult.strategyExplanation,
+      resolutionType: exactReplacement ? 'text_modified' as const : 'strategy_decided' as const,
+      implementationDraftId: exactReplacement ? workingDraft.id : undefined,
+      implementationBlockId: exactReplacement ? covered.blockId : undefined,
+    };
   });
 
   const finalTask: Task = {

@@ -433,15 +433,15 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       </div>
 
       {/* Contradictory comments banner */}
-      {task.reviewComments.some((c) => (coordinationCommentIds.includes(c.id)) && c.status === 'pending') && (
+      {task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length >= 2 && (
         <div className="bg-amber-50 border-2 border-amber-400 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
           <div className="space-y-1">
             <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
               <AlertTriangle className="w-4 h-4 text-amber-600" />
-              <span>检测到相互矛盾的审阅篇幅要求！</span>
+              <span>存在多条待协调意见，请选择需要统筹的范围</span>
             </div>
             <p className="text-xs text-amber-800">
-              审阅乙提出“篇幅压缩到2000字以内”；审阅丁提出“增加两个详细案例以丰富成效”。需要主笔统筹裁决协调策略。
+              查看实际意见并选择参与范围。通用策略只提供正文调整预览，各条意见仍须单独核实落实。
             </p>
           </div>
           <button
@@ -1274,7 +1274,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                   type="button"
                   onClick={() => handleResolveContradiction('implement_now')}
                   className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-bold shadow-xs cursor-pointer"
-                  title="执行正文段落压缩调整并生成新版本，标记为已落实"
+                  title="执行正文调整；仅明确匹配的段落替换意见可标已落实，其余待逐条核实"
                 >
                   确认策略并落实到正文
                 </button>

@@ -214,7 +214,7 @@ export function runDocumentAudit(
           }
 
           const prefix = block.content.slice(0, matchIndex).split(/[，,。；;\n]/).at(-1) || '';
-          const namedFact = blockFacts.filter(f => f.unit === foundUnit && prefix.includes(f.metric)).sort((a,b) => prefix.lastIndexOf(b.metric) - prefix.lastIndexOf(a.metric))[0];
+          const namedFact = blockFacts.filter(f => f.unit === foundUnit && prefix.includes(f.metric)).sort((a,b) => (prefix.lastIndexOf(b.metric) + b.metric.length) - (prefix.lastIndexOf(a.metric) + a.metric.length) || b.metric.length - a.metric.length)[0];
           if (namedFact && namedFact.id !== fact.id) continue;
           // If foundNum does not match fact value or conflict candidates
           const matchesFact = foundNum === fact.value || foundNum === fact.selectedConflictValue;

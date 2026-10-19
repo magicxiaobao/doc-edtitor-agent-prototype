@@ -320,9 +320,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
                 className="border border-slate-300 rounded-md px-2 py-1.5 bg-white text-slate-700 text-xs font-medium"
               >
                 <option value="all">全部状态 ({activeReviewComments.length})</option>
-                <option value="pending">
-                  待处理 ({activeReviewComments.filter((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length})
-                </option>
+                <option value="pending">待处理 ({activeReviewComments.filter(c => c.status === 'pending').length})</option>
                 <option value="accepted_pending_implementation">
                   决定采纳·待落实 ({activeReviewComments.filter((c) => c.status === 'accepted_pending_implementation').length})
                 </option>
