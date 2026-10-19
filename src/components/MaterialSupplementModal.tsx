@@ -27,7 +27,8 @@ import {
   validateMaterialForSupplementation, 
   computeMaterialFingerprint,
   isSupportedSupplementPrompt,
-  requestMaterialSupplementationAsync
+  requestMaterialSupplementationAsync,
+  validateSelectedMaterialsQuantitativeClaims
 } from '../services/materialSupplementService';
 import { checkPermission } from '../services/permissionService';
 
@@ -111,11 +112,24 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
     };
   }, []);
 
-  // Store trigger element for focus restoration
+  // Store trigger element for focus restoration & auto-focus first element
   useEffect(() => {
     if (isOpen) {
       triggerElementRef.current = document.activeElement as HTMLElement;
       setGenerationError(null);
+      const timer = setTimeout(() => {
+        if (modalRef.current) {
+          const focusables = Array.from(
+            modalRef.current.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            )
+          ).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+          if (focusables.length > 0) {
+            focusables[0].focus();
+          }
+        }
+      }, 50);
+      return () => clearTimeout(timer);
     } else {
       if (triggerElementRef.current && typeof triggerElementRef.current.focus === 'function') {
         triggerElementRef.current.focus();
@@ -123,9 +137,20 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
     }
   }, [isOpen]);
 
-  // Tab cycle and Escape key handling
+  // Tab cycle and Escape key handling with strict focus trap
   useEffect(() => {
     if (!isOpen) return;
+
+    const getFocusables = (): HTMLElement[] => {
+      if (!modalRef.current) return [];
+      const all = Array.from(
+        modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      const visible = all.filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+      return visible.length > 0 ? visible : all;
+    };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -139,13 +164,26 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
       }
 
       if (e.key === 'Tab' && modalRef.current) {
-        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        );
-        if (focusables.length === 0) return;
+        const focusables = getFocusables();
+
+        if (focusables.length === 0) {
+          e.preventDefault();
+          return;
+        }
 
         const firstElement = focusables[0];
         const lastElement = focusables[focusables.length - 1];
+
+        // If focus has leaked outside modal, trap it back
+        if (!modalRef.current.contains(document.activeElement)) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            lastElement.focus();
+          } else {
+            firstElement.focus();
+          }
+          return;
+        }
 
         if (e.shiftKey) {
           if (document.activeElement === firstElement) {
@@ -161,8 +199,23 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
       }
     };
 
+    const handleFocusIn = (e: FocusEvent) => {
+      if (!modalRef.current) return;
+      if (!modalRef.current.contains(e.target as Node)) {
+        e.preventDefault();
+        const focusables = getFocusables();
+        if (focusables.length > 0) {
+          focusables[0].focus();
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('focusin', handleFocusIn, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('focusin', handleFocusIn, true);
+    };
   }, [isOpen, isGenerating, onClose]);
 
   if (!isOpen || !activeBlock) return null;
@@ -170,18 +223,38 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
   const perm = checkPermission(activeRole, 'adopt_revision');
   const isImmutable = Boolean(currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal || task.isFinalized);
 
-  // Filter and validate all snippets in task
+  // Filter and validate all snippets in task with early quantitative verification
   const allSnippetsWithValidation = (task.snippets || []).map((snip) => {
     const admission = validateMaterialForSupplementation(task, snip);
     const doc = (task.documents || []).find((d) => d.id === snip.sourceDocId);
     const relatedFact = (task.facts || []).find(
       (f) => f.primaryEvidenceId === snip.id || f.evidenceIds?.includes(snip.id) || (doc && f.sourceDocId === doc.id)
     );
+
+    // Early quantitative claim verification against fact base
+    const quantCheck = validateSelectedMaterialsQuantitativeClaims(task, [snip]);
+
+    let isEligible = admission.eligible;
+    let reason = admission.reason;
+    if (isEligible && !quantCheck.valid) {
+      isEligible = false;
+      const unverifiedItems = quantCheck.unverifiedClaims?.map((c) => {
+        const m = c.match(/“([^”]+)”/);
+        return m ? m[1] : c;
+      }) || [];
+      reason = `包含未核准量化指标（${unverifiedItems.join('、') || '量化数据未核准'}），须先在材料与事实页面核准登记`;
+    }
+
     return {
       snippet: snip,
       doc,
       relatedFact,
-      admission,
+      admission: {
+        eligible: isEligible,
+        reason,
+        baseAdmissionEligible: admission.eligible,
+        quantValid: quantCheck.valid,
+      },
     };
   });
 
@@ -321,33 +394,30 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-5 flex-1">
-          {/* Paragraph Scope & Baseline Card */}
-          <div className="p-4 bg-blue-50/60 rounded-lg border border-blue-200 text-xs space-y-2">
-            <div className="flex items-center justify-between">
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1">
+          {/* Paragraph Scope & Baseline Card (Compact streamlined bar for tablet landscape & desktop) */}
+          <div className="p-2 sm:p-2.5 bg-blue-50/80 rounded-lg border border-blue-200 text-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
               <span 
                 data-testid="label-scope-notice"
-                className="font-bold text-blue-900 text-sm flex items-center gap-1.5"
+                className="font-bold text-blue-900 text-xs shrink-0 flex items-center gap-1.5"
               >
-                <CheckCircle2 className="w-4 h-4 text-blue-700 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-blue-700 shrink-0" />
                 本次仅修改第 {activeBlock.order} 段
               </span>
-              <span className="text-xs text-blue-700 font-mono">
-                当前段落共 {activeBlock.content.length} 字
-              </span>
-            </div>
-            <div className="bg-white p-3 rounded border border-blue-100 space-y-1">
-              <span className="text-xs text-slate-400 font-semibold block">当前段落原文：</span>
+              <span className="text-slate-300 text-xs shrink-0">|</span>
+              <span className="text-xs text-slate-500 shrink-0 hidden sm:inline font-medium">当前段落原文：</span>
               <p 
                 data-testid="current-block-content-preview"
-                className="text-base text-slate-900 font-serif leading-relaxed"
+                className="text-xs text-slate-800 font-serif truncate max-w-sm sm:max-w-md md:max-w-lg cursor-pointer hover:text-slate-950"
+                title={`点击查看完整：${activeBlock.content}`}
               >
                 {activeBlock.content}
               </p>
             </div>
-            <p className="text-xs text-slate-500">
-              提示：生成阶段不会修改正文。生成的建议将包含材料原文、可读段落候选与出处依据，确认采纳后才安全写入。
-            </p>
+            <span className="text-xs text-blue-700 font-mono shrink-0">
+              共 {activeBlock.content.length} 字
+            </span>
           </div>
 
           {/* Material Selection Section */}
@@ -425,17 +495,19 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
                             <span className="font-bold text-slate-900 text-sm">
                               {snippet.docName}
                             </span>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               {isValid ? (
-                                <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded font-medium">
-                                  准入有效
+                                <span className="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>准入有效</span>
                                 </span>
                               ) : (
                                 <span 
                                   data-testid={`admission-error-badge-${snippet.id}`}
-                                  className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-2 py-0.5 rounded font-medium"
+                                  className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1"
                                 >
-                                  {admission.reason}
+                                  <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                  <span>{admission.reason}</span>
                                 </span>
                               )}
                               <span className="bg-slate-100 text-slate-700 text-xs px-2 py-0.5 rounded font-mono">

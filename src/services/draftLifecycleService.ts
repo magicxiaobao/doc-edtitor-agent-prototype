@@ -987,7 +987,12 @@ export function validateParagraphSuggestionAcceptance(
   if (suggestion.isUnsupportedPrompt) {
     return {
       valid: false,
-      reason: '未支持的自定义指令，无法采纳',
+      reason:
+        suggestion.unsupportedPromptNotice ||
+        suggestion.diffExplanation ||
+        (suggestion.isMaterialSupplementation
+          ? '所选材料包含未核准量化数据或不符合准入条件，无法采纳'
+          : '未支持的自定义指令，无法采纳'),
       targetBlock,
       isFineTuned,
       isZeroDiff,

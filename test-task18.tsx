@@ -226,6 +226,7 @@ export async function runTask18Tests() {
   // -------------------------------------------------------------------------
   // 验收标准 B & 6: 768px 平板快捷导航与段落即时操作抽屉交互
   // -------------------------------------------------------------------------
+  (dom.window as any).innerWidth = 768;
   console.log('\n>>> [验收用例 5] 768px 平板快捷导航与段落即时操作抽屉交互验证:');
   const btnOpenTabletOutline = mountedWithDraft.container.querySelector('[data-testid="btn-open-tablet-outline"]') as HTMLButtonElement;
   assert(btnOpenTabletOutline !== null, '5.1: 平板视口具备章节导航抽屉呼出按钮');
@@ -527,7 +528,7 @@ export async function runTask18Tests() {
   assert(Boolean(rejectBtn), '10.5: 【核心P2验收】抽屉内具备“拒绝并说明”入口');
 
   const aiTabBtn = Array.from(tabletDrawerEl?.querySelectorAll('button') || []).find((b) =>
-    b.textContent?.includes('AI修改建议')
+    b.textContent?.includes('AI建议') || b.textContent?.includes('AI修改建议')
   );
   act(() => {
     aiTabBtn?.click();

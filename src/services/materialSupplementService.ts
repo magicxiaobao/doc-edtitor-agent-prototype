@@ -9,8 +9,18 @@ import {
   AdoptedEvidenceRecord,
   DiffSegment
 } from '../types';
-import { parsePeriodDateRange, arePeriodsStrictlyIdentical } from './factLifecycleService';
-export { arePeriodsStrictlyIdentical } from './factLifecycleService';
+import {
+  parsePeriodDateRange,
+  arePeriodsStrictlyIdentical,
+  extractClausePeriod,
+  CANONICAL_PERIOD_PATTERN
+} from './factLifecycleService';
+export {
+  arePeriodsStrictlyIdentical,
+  parsePeriodDateRange,
+  extractClausePeriod,
+  CANONICAL_PERIOD_PATTERN
+} from './factLifecycleService';
 import { computeContentHash } from './mockDraftService';
 import { computeTextDiff } from './diffService';
 
@@ -158,16 +168,8 @@ export function getEligibleMaterialsForSupplementation(task: Task): {
 export function maskDateAndPeriodPatterns(text: string): string {
   if (!text) return '';
   let result = text;
-  // Match full Chinese date ranges, e.g. 2026年1至9月, 2026年1-9月, 1至9月, 2026年1月至9月, 2026年1月-9月
-  result = result.replace(/\d{4}年\d{1,2}月?(?:至|到|-|~)\d{1,2}月/g, (m) => ' '.repeat(m.length));
-  result = result.replace(/\d{1,2}月?(?:至|到|-|~)\d{1,2}月/g, (m) => ' '.repeat(m.length));
-  // Match full dates, e.g. 2026年12月31日, 12月31日
-  result = result.replace(/\d{4}年\d{1,2}月\d{1,2}日/g, (m) => ' '.repeat(m.length));
-  result = result.replace(/\d{1,2}月\d{1,2}日/g, (m) => ' '.repeat(m.length));
-  // Match years and quarters, e.g. 2026年, 2026年度, 第1季度, 前三季度, 一季度, 2026年一季度
-  result = result.replace(/\d{4}年(?:度|全年)?/g, (m) => ' '.repeat(m.length));
-  result = result.replace(/(?:第|前)?[一二三四1234]季度/g, (m) => ' '.repeat(m.length));
-  result = result.replace(/\d{1,2}月份?/g, (m) => ' '.repeat(m.length));
+  // Match full Chinese date ranges, quarters, months, and exact dates using canonical period pattern
+  result = result.replace(new RegExp(CANONICAL_PERIOD_PATTERN, 'g'), (m) => ' '.repeat(m.length));
   // Match document locations, e.g. 第1段, 第12条, 第3页, 第5章, 第2节
   result = result.replace(/第\d+[段条页章节]/g, (m) => ' '.repeat(m.length));
   return result;
@@ -332,6 +334,22 @@ export function validateSelectedMaterialsQuantitativeClaims(
       const textAfter = matchIdx >= 0 ? snip.text.slice(matchIdx + match.length, Math.min(snip.text.length, matchIdx + match.length + 60)) : '';
       const surroundingContext = `${textBefore}${match}${textAfter}`;
 
+      // Extract explicit statistical period governing this metric in snippet text
+      const snipEffectivePeriod = (snip.period || doc?.period || '').trim();
+      const fallbackYear =
+        snipEffectivePeriod.match(/\d{4}年/)?.[0] ||
+        doc?.period?.match(/\d{4}年/)?.[0] ||
+        (task.startDate ? `${task.startDate.slice(0, 4)}年` : undefined);
+      const clausePeriodInfo = extractClausePeriod(snip.text, match, fallbackYear);
+
+      // If multiple conflicting periods exist in the clause/sentence and attribution cannot be determined, prompt manual verification
+      if (clausePeriodInfo.isAmbiguous) {
+        unverifiedClaims.push(
+          `${snip.docName || '所选材料'}中的“${match}”（${clausePeriodInfo.reason || '存在多个统计期间且无法确定指标归属，请人工核验'}）`
+        );
+        continue;
+      }
+
       // Look for matching confirmed Fact in task.facts strictly bound to source with exact unit, period and scope
       const matchedFact = task.facts.find((f) => {
         if (f.status !== 'confirmed' || f.isHistoricOnly) return false;
@@ -363,23 +381,22 @@ export function validateSelectedMaterialsQuantitativeClaims(
         const unitMatches = f.unit.trim() === unit.trim() || (normalizeUnit(f.unit) === normalizeUnit(unit) && normalizeUnit(unit).length > 0);
         if (!unitMatches) return false;
 
-        // 4. Strict period alignment: Fact period and snippet period MUST strictly match on normalized start/end dates
-        const snipEffectivePeriod = (snip.period || doc?.period || '').trim();
+        // 4. Strict period alignment:
         const factEffectivePeriod = (f.period || '').trim();
-        if (factEffectivePeriod || snipEffectivePeriod) {
-          if (!arePeriodsStrictlyIdentical(factEffectivePeriod, snipEffectivePeriod)) {
+        // A. If snippet text has an explicit period for this metric clause, both fact and snippet metadata must strictly match it
+        if (clausePeriodInfo.period) {
+          if (!arePeriodsStrictlyIdentical(factEffectivePeriod, clausePeriodInfo.period)) {
             return false;
           }
-        }
-
-        // Snippet text explicit period consistency: If snippet text mentions a period explicitly, it must strictly match fact period
-        const textPeriodMatch = snip.text.match(/\d{4}年\d{1,2}月?(?:至|-|~|到)\d{1,2}月?|\d{4}年(?:前三季度|上半年|下半年|[一二三四1234]季度|度|全年)?|(?:前三季度|上半年|下半年|[一二三四1234]季度)/);
-        if (textPeriodMatch && factEffectivePeriod) {
-          const rawTextPeriod = textPeriodMatch[0];
-          const yearPrefix = factEffectivePeriod.match(/\d{4}年/)?.[0] || '2026年';
-          const normalizedTextPeriod = rawTextPeriod.includes('年') ? rawTextPeriod : `${yearPrefix}${rawTextPeriod}`;
-          if (!arePeriodsStrictlyIdentical(factEffectivePeriod, normalizedTextPeriod)) {
+          if (snipEffectivePeriod && !arePeriodsStrictlyIdentical(snipEffectivePeriod, clausePeriodInfo.period)) {
             return false;
+          }
+        } else {
+          // B. If no explicit period in text, fact and snippet metadata must strictly match each other
+          if (factEffectivePeriod || snipEffectivePeriod) {
+            if (!arePeriodsStrictlyIdentical(factEffectivePeriod, snipEffectivePeriod)) {
+              return false;
+            }
           }
         }
 
@@ -635,20 +652,112 @@ export function generateMaterialSupplementation(
     }
   }
 
-  // 5. Construct truthful excerpted text
+  // 5. Detect whether selected snippets provide authentic incremental information relative to originalText
   const docNames = Array.from(new Set(selectedSnippets.map((s) => s.docName || '所选材料')));
-  const excerpts = selectedSnippets.map((s) => {
+
+  // Extract cleaned excerpt clauses per snippet
+  const cleanedSnippets = selectedSnippets.map((s) => {
     let t = s.text.trim();
     // Strip leading dates or section numbers
     t = t.replace(/^\d{4}年(?:\d{1,2}月|\d{1,2}至\d{1,2}月|\d{1,2}-\d{1,2}月)[，、\s]*/, '');
     t = t.replace(/^[第一二三四五六七八九十]+段[：:]\s*/, '');
     t = t.replace(/[。；;]+$/, '');
-    return t;
+    return {
+      snippet: s,
+      cleanedText: t,
+    };
   });
 
+  // Extract quantitative metrics from originalText
+  const originalNumbers = (originalText.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || []).map((m) => m.trim());
+
+  // Determine incremental content per snippet
+  const incrementalClauses: string[] = [];
+  const redundantItems: string[] = [];
+
+  for (const item of cleanedSnippets) {
+    const rawClauses = item.cleanedText
+      .split(/[。；;]+/)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+    for (const clause of rawClauses) {
+      // If the entire clause is already a substring of originalText
+      if (originalText.includes(clause)) {
+        redundantItems.push(clause);
+        continue;
+      }
+
+      // Check sub-clauses by comma
+      const subClauses = clause
+        .split(/[，,]+/)
+        .map((sc) => sc.trim())
+        .filter((sc) => sc.length > 0);
+
+      const newSubClauses = subClauses.filter((sc) => {
+        if (originalText.includes(sc)) {
+          redundantItems.push(sc);
+          return false;
+        }
+        // If subclause is just repeating numbers already in original text (e.g. 16场, 800人次)
+        const scNums = sc.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || [];
+        if (scNums.length > 0 && scNums.every((n) => originalNumbers.includes(n))) {
+          // If the metrics are already present and the subclause keywords also match originalText
+          const stripped = sc.replace(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g, '').trim();
+          if (!stripped || originalText.includes(stripped)) {
+            redundantItems.push(sc);
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (newSubClauses.length > 0) {
+        incrementalClauses.push(newSubClauses.join('，'));
+      }
+    }
+  }
+
+  // If no incremental clauses are found (content is completely redundant/duplicate with originalText)
+  if (incrementalClauses.length === 0) {
+    const sampleDuplicates = Array.from(new Set(redundantItems)).slice(0, 3).join('”、“');
+    const notice = `所选材料【${docNames.join('、')}】核心内容已包含在当前段落中（如“${sampleDuplicates || '既有举措与数据'}”），未检测到可补充的新增举措或数据。为杜绝在正文中重复堆叠相同数据与内容，已安全保留段落原文。`;
+    return {
+      runId,
+      taskId: task.id,
+      sourceDraftId: currentDraft?.id || task.currentDraftId,
+      targetBlockId: block.id,
+      targetBlockOrder: block.order,
+      targetSectionTitle: task.outline.find((s) => s.id === block.sectionId)?.title,
+      baseContent: originalText,
+      baseContentHash: computeContentHash(originalText),
+      action: 'custom',
+      customPrompt: prompt,
+      originalText,
+      suggestedText: originalText,
+      diffExplanation: notice,
+      factsAffected: block.referencedFactIds,
+      createdAt: new Date().toISOString(),
+      wordCountDelta: 0,
+      needsVerificationNotes: [
+        '所选材料核心内容已包含在当前段落中，未检测到新增做法',
+        '杜绝相同数据与举措在同一段落内重复拼接',
+        '材料出处记录已在依据面板中提供追溯',
+      ],
+      diffSegments: computeTextDiff(originalText, originalText),
+      isUnsupportedPrompt: true,
+      unsupportedPromptNotice: notice,
+      isMaterialSupplementation: true,
+      selectedSnippetIds: selectedSnippets.map((s) => s.id),
+      materialFingerprint: computeMaterialFingerprint(selectedSnippets),
+      materialPrompt: prompt,
+    };
+  }
+
   const baseText = originalText.trim().replace(/[。；;]+$/, '');
-  const supplementText = `同时，结合【${docNames.join('、')}】实际做法，${excerpts.join('；')}。`;
-  const suggestedText = `${baseText}。${supplementText}`;
+  // Form genuine, authentic official document sentence without template prefix "结合【...】实际做法"
+  const incrementalText = incrementalClauses.join('；');
+  const suggestedText = `${baseText}。同时，${incrementalText}。`;
 
   // Build adopted evidence records
   const adoptedEvidences: AdoptedEvidenceRecord[] = selectedSnippets.map((snip) => {

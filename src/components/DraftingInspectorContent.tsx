@@ -138,32 +138,32 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
     <div className="flex flex-col h-full space-y-4">
       {/* Header with Tabs and Close / Collapse toggle */}
       <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-sm font-medium flex-1 mr-2">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-medium flex-1 mr-2 overflow-x-auto min-w-0 no-scrollbar">
           <button
             type="button"
             onClick={() => onSelectInspectorTab('ai_suggestions')}
-            className={`flex-1 px-3 py-1.5 rounded-md transition-colors cursor-pointer text-center text-sm ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-xs font-semibold ${
               inspectorTab === 'ai_suggestions'
-                ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            AI修改建议
+            <span className="whitespace-nowrap">AI建议</span>
           </button>
           <button
             type="button"
             onClick={() => onSelectInspectorTab('review_comments')}
-            className={`flex-1 px-3 py-1.5 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1 text-center text-sm ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1 text-center text-xs font-semibold ${
               inspectorTab === 'review_comments'
-                ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <span>审阅意见</span>
+            <span className="whitespace-nowrap">审阅意见</span>
             {activeReviewComments.filter(
               (c) => c.status === 'pending' || c.status === 'accepted_pending_implementation'
             ).length > 0 && (
-              <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full text-xs font-bold">
+              <span className="bg-amber-100 text-amber-800 px-1 py-0.2 rounded-full text-xs font-bold shrink-0">
                 {
                   activeReviewComments.filter(
                     (c) => c.status === 'pending' || c.status === 'accepted_pending_implementation'
@@ -175,13 +175,13 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           <button
             type="button"
             onClick={() => onSelectInspectorTab('material_evidence')}
-            className={`flex-1 px-3 py-1.5 rounded-md transition-colors cursor-pointer text-center text-sm ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-xs font-semibold ${
               inspectorTab === 'material_evidence'
-                ? 'bg-white text-blue-800 shadow-2xs font-semibold'
+                ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            材料依据
+            <span className="whitespace-nowrap">材料依据</span>
           </button>
         </div>
 

@@ -334,6 +334,38 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     return () => window.removeEventListener('keydown', handleTabKey);
   }, [showTabletInspectorDrawer, showTabletOutlineDrawer]);
 
+  // Auto-close tablet drawers when viewport expands to desktop (>= 1024px)
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window !== 'undefined' && window.innerWidth >= 1024) {
+        setShowTabletInspectorDrawer(false);
+        setShowTabletOutlineDrawer(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Unified responsive routing helper: desktop updates sidebar without covering canvas, narrow screen opens drawer
+  const handleOpenBlockInspector = (
+    blockId: string,
+    tab: 'ai_suggestions' | 'review_comments' | 'material_evidence',
+    triggerEl?: HTMLElement,
+    commentId?: string
+  ) => {
+    setSelectedBlockId(blockId);
+    setInspectorTab(tab);
+    if (commentId) setSelectedCommentId(commentId);
+    setShowRightInspector(true);
+    const isNarrowScreen = typeof window !== 'undefined' && window.innerWidth < 1024;
+    if (isNarrowScreen) {
+      if (triggerEl) lastTabletTriggerRef.current = triggerEl;
+      setShowTabletInspectorDrawer(true);
+    } else {
+      setShowTabletInspectorDrawer(false);
+    }
+  };
+
   const draftCancelledRef = useRef(false);
   const [activeDraftRunId, setActiveDraftRunId] = useState<string | null>(null);
   const activeDraftRunIdRef = useRef<string | null>(null);
@@ -584,9 +616,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
 
-    // 1. Expand inspector (desktop sidebar + tablet drawer) and switch to 'review_comments' tab
+    // 1. Expand inspector (desktop sidebar on >=1024px, tablet drawer on <1024px) and switch to 'review_comments' tab
     setShowRightInspector(true);
-    setShowTabletInspectorDrawer(true);
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setShowTabletInspectorDrawer(true);
+    }
     setInspectorTab('review_comments');
     setSelectedCommentId(targetComment.id);
 
@@ -2725,11 +2759,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedBlockId(block.id);
-                                setInspectorTab('ai_suggestions');
-                                setShowRightInspector(true);
-                                lastTabletTriggerRef.current = e.currentTarget;
-                                setShowTabletInspectorDrawer(true);
+                                handleOpenBlockInspector(block.id, 'ai_suggestions', e.currentTarget);
                               }}
                               className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-md text-sm font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
                               title={`针对第${block.order}段打开AI修改建议（仅修改第${block.order}段）`}
@@ -2742,11 +2772,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedBlockId(block.id);
-                                setInspectorTab('review_comments');
-                                setShowRightInspector(true);
-                                lastTabletTriggerRef.current = e.currentTarget;
-                                setShowTabletInspectorDrawer(true);
+                                handleOpenBlockInspector(block.id, 'review_comments', e.currentTarget);
                               }}
                               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-md text-sm font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
                               title={`查看针对第${block.order}段的审阅意见`}
@@ -2761,11 +2787,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedBlockId(block.id);
-                                setInspectorTab('material_evidence');
-                                setShowRightInspector(true);
-                                lastTabletTriggerRef.current = e.currentTarget;
-                                setShowTabletInspectorDrawer(true);
+                                handleOpenBlockInspector(block.id, 'material_evidence', e.currentTarget);
                               }}
                               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-md text-sm font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
                               title={`查看第${block.order}段关联的事实与出处依据`}
@@ -2825,12 +2847,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setSelectedBlockId(block.id);
-                                    setInspectorTab('review_comments');
-                                    setSelectedCommentId(c.id);
-                                    setShowRightInspector(true);
-                                    lastTabletTriggerRef.current = e.currentTarget;
-                                    setShowTabletInspectorDrawer(true);
+                                    handleOpenBlockInspector(block.id, 'review_comments', e.currentTarget, c.id);
                                   }}
                                   className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded font-medium cursor-pointer transition-colors ${
                                     c.status === 'implemented'
@@ -2888,7 +2905,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
         {/* Right: Collapsible Inspector with "AI修改建议" and "材料依据" Tabs */}
         {showRightInspector ? (
-          <div className="col-span-12 lg:col-span-3 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 sticky top-18 max-h-[82vh] overflow-hidden flex flex-col">
+          <div className="hidden lg:flex lg:col-span-3 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 sticky top-18 max-h-[82vh] overflow-hidden flex-col">
             <DraftingInspectorContent
               task={task}
               currentDraft={currentDraft}

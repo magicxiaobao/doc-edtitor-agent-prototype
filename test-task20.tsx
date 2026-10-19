@@ -17,7 +17,8 @@ import {
   isSupportedSupplementPrompt,
   generateMaterialSupplementation,
   requestMaterialSupplementationAsync,
-  arePeriodsStrictlyIdentical
+  arePeriodsStrictlyIdentical,
+  parsePeriodDateRange
 } from './src/services/materialSupplementService';
 import { 
   validateParagraphSuggestionAcceptance,
@@ -1124,6 +1125,181 @@ async function runTask20Tests() {
     assert(arePeriodsStrictlyIdentical('2026年1至3月', '2026年4至6月') === false, 'K.1.20: 2026年1至3月 与 2026年4至6月 完全不相交拒绝判定为一致');
     assert(arePeriodsStrictlyIdentical('2025年', '2026年') === false, 'K.1.21: 2025年 与 2026年 跨年份完全不相交拒绝判定为一致');
 
+    // P1 问题1：无法识别的期间仍被兜底解析为全年
+    assert(arePeriodsStrictlyIdentical('2026年1季度', '2026年2季度') === false, 'K.1.21a: 2026年1季度 与 2026年2季度 严格判定不一致');
+    assert(arePeriodsStrictlyIdentical('2026年待确认', '2026年度') === false, 'K.1.21b: 未知格式 2026年待确认 严禁兜底解析为全年，与 2026年度 判定不一致');
+    assert(arePeriodsStrictlyIdentical('2026年待确认', '2026年待确认') === false, 'K.1.21c: 未知格式均返回解析失败，严禁相同未识别字符串直接放行');
+    assert(parsePeriodDateRange('2026年待确认') === null, 'K.1.21d: 无法识别的期间返回 null，严禁兜底返回全年');
+    assert(parsePeriodDateRange('2026年2月30日') === null, 'K.1.21e: 不合法日历日期返回 null');
+    assert(parsePeriodDateRange('2026年13月') === null, 'K.1.21f: 超出12个月的非法月份返回 null');
+    assert(parsePeriodDateRange('2026年9月至3月') === null, 'K.1.21g: 起始时间晚于结束时间的非法区间返回 null');
+
+    // P1 问题2：正文期间提取与元数据解析共用格式定义，移除硬编码2026年，避免误拦与错放
+    // 场景1：事实、片段及正文均为 2026年1月，培训16场 -> 量化核验通过 (杜绝误阻断)
+    const taskScenario1: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TEST-01',
+          metric: '专题培训',
+          period: '2026年1月',
+          value: '16',
+          unit: '场',
+          metricScope: '专题培训口径',
+          primaryEvidenceId: 'SNIP-TEST-01',
+          evidenceIds: ['SNIP-TEST-01'],
+          sourceDocId: 'DOC-TEST-01',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+      documents: [
+        {
+          id: 'DOC-TEST-01',
+          name: '1月份培训总结',
+          period: '2026年1月',
+          usage: 'current_fact',
+          status: 'verified',
+        },
+      ],
+      snippets: [
+        {
+          id: 'SNIP-TEST-01',
+          sourceDocId: 'DOC-TEST-01',
+          docName: '1月份培训总结',
+          location: '第1段',
+          period: '2026年1月',
+          text: '2026年1月，组织专题培训16场。',
+        },
+      ],
+    };
+    const quantCheckS1 = validateSelectedMaterialsQuantitativeClaims(taskScenario1, taskScenario1.snippets);
+    assert(quantCheckS1.valid === true, 'K.1.21h: 场景1 事实、片段及正文均为 2026年1月，培训16场，量化核验顺利通过');
+
+    // 场景2：事实、片段标注全年，正文写“2026年1月，培训16场” -> 错误通过已修复，安全阻断
+    const taskScenario2: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TEST-02',
+          metric: '专题培训',
+          period: '2026年度', // 标注全年
+          value: '16',
+          unit: '场',
+          metricScope: '专题培训口径',
+          primaryEvidenceId: 'SNIP-TEST-02',
+          evidenceIds: ['SNIP-TEST-02'],
+          sourceDocId: 'DOC-TEST-02',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+      documents: [
+        {
+          id: 'DOC-TEST-02',
+          name: '年度培训总结',
+          period: '2026年度',
+          usage: 'current_fact',
+          status: 'verified',
+        },
+      ],
+      snippets: [
+        {
+          id: 'SNIP-TEST-02',
+          sourceDocId: 'DOC-TEST-02',
+          docName: '年度培训总结',
+          location: '第1段',
+          period: '2026年度',
+          text: '2026年1月，组织专题培训16场。', // 正文写1月，与事实全年矛盾
+        },
+      ],
+    };
+    const quantCheckS2 = validateSelectedMaterialsQuantitativeClaims(taskScenario2, taskScenario2.snippets);
+    assert(quantCheckS2.valid === false, 'K.1.21i: 场景2 事实片段标注全年但正文明确写 2026年1月，量化核验安全阻断（杜绝错放）');
+
+    // 场景3：事实、片段及正文均为 2026年4月15日至6月15日 -> 量化核验通过 (杜绝误阻断)
+    const taskScenario3: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TEST-03',
+          metric: '专题培训',
+          period: '2026年4月15日至6月15日',
+          value: '16',
+          unit: '场',
+          metricScope: '专题培训口径',
+          primaryEvidenceId: 'SNIP-TEST-03',
+          evidenceIds: ['SNIP-TEST-03'],
+          sourceDocId: 'DOC-TEST-03',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+      documents: [
+        {
+          id: 'DOC-TEST-03',
+          name: '专项行动培训通报',
+          period: '2026年4月15日至6月15日',
+          usage: 'current_fact',
+          status: 'verified',
+        },
+      ],
+      snippets: [
+        {
+          id: 'SNIP-TEST-03',
+          sourceDocId: 'DOC-TEST-03',
+          docName: '专项行动培训通报',
+          location: '第2段',
+          period: '2026年4月15日至6月15日',
+          text: '2026年4月15日至6月15日，组织专题培训16场。',
+        },
+      ],
+    };
+    const quantCheckS3 = validateSelectedMaterialsQuantitativeClaims(taskScenario3, taskScenario3.snippets);
+    assert(quantCheckS3.valid === true, 'K.1.21j: 场景3 事实、片段及正文均为 2026年4月15日至6月15日，量化核验顺利通过');
+
+    // 场景4：存在多个期间且无法确定指标归属时，提示人工核验并阻断
+    const taskScenario4: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        {
+          id: 'FACT-TEST-04',
+          metric: '专题培训',
+          period: '2026年1季度',
+          value: '16',
+          unit: '场',
+          metricScope: '专题培训口径',
+          primaryEvidenceId: 'SNIP-TEST-04',
+          evidenceIds: ['SNIP-TEST-04'],
+          sourceDocId: 'DOC-TEST-04',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+      documents: [
+        {
+          id: 'DOC-TEST-04',
+          name: '工作简报',
+          period: '2026年上半年',
+          usage: 'current_fact',
+          status: 'verified',
+        },
+      ],
+      snippets: [
+        {
+          id: 'SNIP-TEST-04',
+          sourceDocId: 'DOC-TEST-04',
+          docName: '工作简报',
+          location: '第3段',
+          period: '2026年上半年',
+          text: '2026年1季度筹备，2026年2季度开展，共组织专题培训16场。',
+        },
+      ],
+    };
+    const quantCheckS4 = validateSelectedMaterialsQuantitativeClaims(taskScenario4, taskScenario4.snippets);
+    assert(quantCheckS4.valid === false, 'K.1.21k: 存在多个期间且无法确定指标归属时，量化核验安全阻断');
+    assert(quantCheckS4.reason?.includes('人工核验'), 'K.1.21l: 明确提示无法确定指标归属，请人工核验');
+
     // 独立复测场景：核准事实“2026年1至3月”与材料正文及片段“2026年1至9月”重叠但不完全一致
     const taskPeriodDiscrepancy: Task = {
       ...createTestTaskWithCases(),
@@ -1194,6 +1370,28 @@ async function runTask20Tests() {
       task: taskBase,
       currentDraft: workingDraft,
     });
+
+    // 正常生成候选 → 改变事实期间 → 采纳时按期间原因阻断（避免使用已被生成阶段阻断的候选验证采纳）
+    assert(suggestionBase.isUnsupportedPrompt !== true, 'K.2.2a: 基础候选正常生成成功，非生成阻断产物');
+    const taskChangedFactPeriod: Task = {
+      ...taskBase,
+      facts: taskBase.facts.map((f) =>
+        f.id === 'FACT-APPOINT-01' ? { ...f, period: '2026年1至3月' } : f
+      ),
+    };
+    const checkFactPeriodChanged = validateParagraphSuggestionAcceptance({
+      task: taskChangedFactPeriod,
+      currentDraft: workingDraft,
+      suggestion: suggestionBase,
+      pendingTextToAdopt: suggestionBase.suggestedText,
+      activeCompletedRunId: suggestionBase.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkFactPeriodChanged.valid === false, 'K.2.2b: 正常生成候选后改变事实期间（2026年1至3月 != 2026年1至9月），采纳时按期间原因安全阻断');
+    assert(
+      checkFactPeriodChanged.reason?.includes('统计期间') && checkFactPeriodChanged.reason?.includes('不一致'),
+      'K.2.2c: 采纳校验明确提示关联事实统计期间与依据材料不一致的阻断原因'
+    );
 
     // 来源改为 style_ref
     const taskStyleRef: Task = {
@@ -1458,6 +1656,144 @@ async function runTask20Tests() {
     console.log('--- K.6 杜绝无依据成效结论 ---');
     assert(!suggestionBase.suggestedText.includes('有力提升工作推进质效'), 'K.6.1: 正文中未追加无依据的“有力提升工作推进质效”成效套话');
     assert(suggestionBase.diffExplanation.includes('中性表述加工'), 'K.6.2: 差异说明准确区分原文忠实摘录与中性衔接加工，杜绝“全部忠实摘录”虚假声称');
+    // K.7: 补写去重与整合、准入提示统一、桌面侧栏与抽屉分流、弹窗焦点隔离
+    console.log('--- K.7 补写去重与整合、提示统一、响应式分流、焦点隔离 ---');
+    // K.7.1 - K.7.3: 补写去重与整合
+    const blockWithTraining = taskBase.drafts[0].blocks[1]; // 包含 16场、800人次
+    const snipTraining = taskBase.snippets.find((s) => s.id === 'SNIP-TRAIN-01' || s.id === 'EVD-03') || {
+      id: 'EVD-03',
+      sourceDocId: 'DOC-TRAIN-01',
+      docName: '培训工作台账',
+      location: '第5段',
+      period: '2026年1至9月',
+      text: '2026年1至9月，组织专题培训16场，累计参训800人次。',
+    };
+    const dupSupplement = generateMaterialSupplementation(blockWithTraining, [snipTraining], {
+      task: taskBase,
+      currentDraft: workingDraft,
+    });
+    assert(
+      dupSupplement.suggestedText === blockWithTraining.content,
+      'K.7.1: 当材料内容与正文既有数据举措重复时，安全保留段落原文，杜绝重复拼接'
+    );
+    assert(
+      !dupSupplement.suggestedText.includes('结合【培训工作台账】实际做法'),
+      'K.7.2: 正文绝不夹带“结合【...】实际做法”等模板出处词句'
+    );
+    assert(
+      dupSupplement.diffExplanation.includes('核心内容') || dupSupplement.diffExplanation.includes('已包含'),
+      'K.7.3: 差异说明明确告知材料核心内容已在原段中，无新增做法'
+    );
+
+    // 有新增内容时整合进原段，出处留在依据区
+    assert(
+      suggestionBase.suggestedText.includes('便民服务分时段精准预约'),
+      'K.7.4: 有新增做法时自然整合进正文原段'
+    );
+    assert(
+      !suggestionBase.suggestedText.includes('结合【'),
+      'K.7.5: 正文不包含来源书名号引用，出处严格留存依据区'
+    );
+    assert(
+      suggestionBase.adoptedEvidences.length > 0 && Boolean(suggestionBase.adoptedEvidences[0].sourceDocName),
+      'K.7.6: 证据依据区完整记录材料出处文档名称'
+    );
+
+    // K.7.7 - K.7.8: 统一阻断原因，杜绝“未支持的自定义指令”误报
+    const taskWithUnapproved120: Task = {
+      ...taskBase,
+      facts: taskBase.facts.map((f) => (f.id === 'FACT-APPOINT-01' ? { ...f, status: 'pending' as const } : f)),
+    };
+    const checkBlockedReason = validateParagraphSuggestionAcceptance({
+      task: taskWithUnapproved120,
+      currentDraft: workingDraft,
+      suggestion: dupSupplement,
+      pendingTextToAdopt: dupSupplement.suggestedText,
+      activeCompletedRunId: dupSupplement.runId,
+      activeRole: '主笔甲',
+    });
+    assert(
+      checkBlockedReason.valid === false,
+      'K.7.7: 无新增内容补写在采纳校验中正确阻断'
+    );
+    assert(
+      !checkBlockedReason.reason!.includes('未支持的自定义指令'),
+      'K.7.8: 阻断原因统一：材料补写阻断绝不误报“未支持的自定义指令”'
+    );
+
+    // K.7.9: 桌面视口仅更新侧栏不弹抽屉，窄屏视口呼出抽屉
+    (dom.window as any).innerWidth = 1280;
+    let desktopWorkspaceState = createTestTaskWithCases();
+    const mountedDesktopWorkspace = mountTestComponent(
+      <DraftingStage
+        task={desktopWorkspaceState}
+        onUpdateTask={(up) => {
+          desktopWorkspaceState = { ...desktopWorkspaceState, ...up };
+        }}
+        onViewSnippet={() => {}}
+        activeRole="主笔甲"
+      />
+    );
+    const p1AiBtnDesktop = mountedDesktopWorkspace.container.querySelector('[aria-label="第1段AI修改建议"]') as HTMLButtonElement;
+    assert(Boolean(p1AiBtnDesktop), 'K.7.9: 桌面工作区找到段落AI建议入口');
+    act(() => {
+      p1AiBtnDesktop.click();
+    });
+    const drawerOnDesktop = mountedDesktopWorkspace.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+    assert(drawerOnDesktop === null, 'K.7.10: 桌面视口点击AI建议更新右侧栏，绝不打开覆盖正文的抽屉');
+    mountedDesktopWorkspace.unmount();
+
+    // 窄屏视口 (768px)
+    (dom.window as any).innerWidth = 768;
+    const mountedTabletWorkspace = mountTestComponent(
+      <DraftingStage
+        task={desktopWorkspaceState}
+        onUpdateTask={() => {}}
+        onViewSnippet={() => {}}
+        activeRole="主笔甲"
+      />
+    );
+    const p1AiBtnTablet = mountedTabletWorkspace.container.querySelector('[aria-label="第1段AI修改建议"]') as HTMLButtonElement;
+    act(() => {
+      p1AiBtnTablet.click();
+    });
+    const drawerOnTablet = mountedTabletWorkspace.container.querySelector('[data-testid="drawer-tablet-inspector"]');
+    assert(drawerOnTablet !== null, 'K.7.11: 窄屏视口点击AI建议正常呼出抽屉');
+    mountedTabletWorkspace.unmount();
+
+    // K.7.12 - K.7.13: 弹窗焦点管理与紧凑布局
+    const modalMountFocus = mountTestComponent(
+      <MaterialSupplementModal
+        isOpen={true}
+        onClose={() => {}}
+        task={taskBase}
+        currentDraft={taskBase.drafts[0]}
+        activeBlock={taskBase.drafts[0].blocks[1]}
+        activeRole="主笔甲"
+        onViewSnippet={() => {}}
+        onSupplementSuccess={() => {}}
+      />
+    );
+    const scopeBar = modalMountFocus.container.querySelector('[data-testid="label-scope-notice"]');
+    assert(Boolean(scopeBar), 'K.7.12: 材料补写弹窗具备精炼紧凑的作用范围与原文展示栏');
+    const modalEl = modalMountFocus.container.querySelector('[data-testid="material-supplement-modal"]');
+    assert(Boolean(modalEl), 'K.7.13: 成功定位材料补写弹窗容器');
+
+    // 焦点隔离拦截：在外部元素触发 focusin 被捕获并恢复到弹窗首个可聚焦元素
+    const outsideEl = dom.window.document.createElement('button');
+    dom.window.document.body.appendChild(outsideEl);
+    act(() => {
+      outsideEl.focus();
+    });
+    const focusablesInModal = modalEl!.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+    );
+    assert(
+      dom.window.document.activeElement === focusablesInModal[0],
+      'K.7.14: 弹窗具有完备的焦点隔离（focusin 拦截），绝不穿透至背景元素'
+    );
+    outsideEl.remove();
+    modalMountFocus.unmount();
   }
 
   console.log('\n================================================================');

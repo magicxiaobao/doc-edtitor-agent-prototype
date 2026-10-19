@@ -2,16 +2,176 @@ import { Task, Fact, UserRole, EvidenceSnippet, SourceDocument, DraftVersion, Fa
 import { checkPermission } from './permissionService';
 
 /**
+ * Canonical regular expression for extracting periods from Chinese text and 公文 metadata.
+ * Ordered strictly from most specific (date ranges with days) to explicit full years.
+ */
+/**
+ * Canonical regular expression pattern for extracting periods from Chinese text and 公文 metadata.
+ * Ordered strictly from most specific (date ranges with days) to explicit full years.
+ */
+export const CANONICAL_PERIOD_PATTERN = [
+  // 1. Full date ranges with days: e.g. "2026年4月15日至6月15日", "2026-04-15至2026-06-15", "2026年4月15日-6月15日"
+  '\\d{4}年\\d{1,2}月\\d{1,2}日?\\s*(?:至|-|~|到)\\s*(?:\\d{4}年)?\\d{1,2}月\\d{1,2}日?',
+  '\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}\\s*(?:至|-|~|到)\\s*(?:\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{1,2}[-/.]\\d{1,2})',
+  '\\d{1,2}月\\d{1,2}日?\\s*(?:至|-|~|到)\\s*\\d{1,2}月\\d{1,2}日?',
+  // 2. Month ranges: e.g. "2026年1至9月", "2026年1-9月", "2025年11月至2026年3月", "1至9月", "2026年1月至9月"
+  '\\d{4}年\\d{1,2}月?\\s*(?:至|-|~|到)\\s*(?:\\d{4}年)?\\d{1,2}月',
+  '\\d{1,2}月?\\s*(?:至|-|~|到)\\s*\\d{1,2}月',
+  // 3. Quarters: e.g. "2026年前三季度", "2026年1季度", "2026年一季度", "2026年第1季度", "2026年上半年", "2026年下半年"
+  '(?:\\d{4}年)?前[3三]季度',
+  '(?:\\d{4}年)?(?:上|下)半年',
+  '(?:\\d{4}年)?(?:第)?[1234一二三四]季度',
+  '(?:\\d{4})[-年]?[Qq][1-4]',
+  // 4. Single exact dates: e.g. "2026年4月15日", "2026-04-15"
+  '\\d{4}年\\d{1,2}月\\d{1,2}日',
+  '\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}',
+  '\\d{1,2}月\\d{1,2}日',
+  // 5. Single months: e.g. "2026年1月", "2026年10月份", "1月"
+  '\\d{4}年\\d{1,2}月(?:份)?',
+  '\\d{1,2}月(?:份)?',
+  // 6. Explicit full years / annual: ONLY explicit full year formats
+  '\\d{4}年(?:度|全年|年全年)',
+  '\\d{4}年度',
+  '\\d{4}全年',
+  '\\d{4}年(?=[，,。；;、\\s]|$|中|期间)',
+].join('|');
+
+export const CANONICAL_PERIOD_REGEX = new RegExp(CANONICAL_PERIOD_PATTERN, 'g');
+
+/**
+ * Extracts and attributes the specific statistical period governing a quantitative claim inside text.
+ * Returns the normalized period string, or marks isAmbiguous if multiple conflicting periods exist without clear attribution.
+ */
+export function extractClausePeriod(
+  fullText: string,
+  matchClause: string,
+  fallbackYear?: string
+): { period: string | null; isAmbiguous: boolean; reason?: string } {
+  if (!fullText) return { period: null, isAmbiguous: false };
+
+  // First, extract sentences
+  const sentences = fullText.split(/[。；\n]+/).filter(Boolean);
+  const targetSentence = sentences.find((s) => s.includes(matchClause)) || matchClause;
+
+  // Find sub-clause in targetSentence
+  const subClauses = targetSentence.split(/[，,]+/).filter(Boolean);
+  const targetSubClause = subClauses.find((sc) => sc.includes(matchClause)) || targetSentence;
+
+  const matchPeriods = (text: string): string[] => {
+    const re = new RegExp(CANONICAL_PERIOD_PATTERN, 'g');
+    const matches = text.match(re) || [];
+    return Array.from(new Set(matches.map((m) => m.trim())));
+  };
+
+  // 1. Check subclause matches first
+  const subMatches = matchPeriods(targetSubClause);
+  if (subMatches.length === 1) {
+    return normalizeExtractedPeriod(subMatches[0], fallbackYear);
+  }
+  if (subMatches.length > 1) {
+    return {
+      period: null,
+      isAmbiguous: true,
+      reason: `指标【${matchClause}】所在分句包含多个统计期间（${subMatches.join('、')}），无法确定指标归属，请人工核验`,
+    };
+  }
+
+  // 2. If subclause didn't have a period, check sentence
+  const sentenceMatches = matchPeriods(targetSentence);
+  if (sentenceMatches.length === 1) {
+    return normalizeExtractedPeriod(sentenceMatches[0], fallbackYear);
+  }
+  if (sentenceMatches.length > 1) {
+    return {
+      period: null,
+      isAmbiguous: true,
+      reason: `指标【${matchClause}】所在语句包含多个统计期间（${sentenceMatches.join('、')}），无法确定指标归属，请人工核验`,
+    };
+  }
+
+  // 3. Check full text (e.g. overarching period at beginning of snippet)
+  const fullMatches = matchPeriods(fullText);
+  if (fullMatches.length === 1) {
+    return normalizeExtractedPeriod(fullMatches[0], fallbackYear);
+  }
+  if (fullMatches.length > 1) {
+    return {
+      period: null,
+      isAmbiguous: true,
+      reason: `材料正文包含多个统计期间（${fullMatches.join('、')}），无法确定指标【${matchClause}】归属，请人工核验`,
+    };
+  }
+
+  return { period: null, isAmbiguous: false };
+}
+
+function normalizeExtractedPeriod(raw: string, fallbackYear?: string): { period: string; isAmbiguous: boolean } {
+  if (/^\d{4}/.test(raw) || raw.includes('年')) {
+    return { period: raw, isAmbiguous: false };
+  }
+  if (fallbackYear) {
+    const y = fallbackYear.match(/\d{4}/)?.[0];
+    if (y) {
+      return { period: `${y}年${raw}`, isAmbiguous: false };
+    }
+  }
+  return { period: raw, isAmbiguous: false };
+}
+
+/**
+ * Helper to construct and validate strict UTC date range without rollover.
+ * Validates month 1-12, days in month, and ensures start <= end.
+ */
+function createValidDateRange(
+  sYear: number,
+  sMonth: number, // 1-12
+  sDay: number,
+  eYear: number,
+  eMonth: number, // 1-12
+  eDay: number
+): { start: Date; end: Date } | null {
+  if (sMonth < 1 || sMonth > 12 || eMonth < 1 || eMonth > 12) return null;
+  if (sDay < 1 || sDay > 31 || eDay < 1 || eDay > 31) return null;
+
+  const start = new Date(Date.UTC(sYear, sMonth - 1, sDay, 0, 0, 0));
+  const end = new Date(Date.UTC(eYear, eMonth - 1, eDay, 23, 59, 59));
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+  if (start.getTime() > end.getTime()) return null;
+
+  // Strict calendar validity: ensure no rollover occurred (e.g., Feb 30 -> Mar 2)
+  if (
+    start.getUTCFullYear() !== sYear ||
+    start.getUTCMonth() !== sMonth - 1 ||
+    start.getUTCDate() !== sDay ||
+    end.getUTCFullYear() !== eYear ||
+    end.getUTCMonth() !== eMonth - 1 ||
+    end.getUTCDate() !== eDay
+  ) {
+    return null;
+  }
+
+  return { start, end };
+}
+
+function getLastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
  * Parses a Chinese period string into a structured start and end Date.
  * Supports: "2026年1至9月", "2026年1-9月", "2026年前三季度", "2026年上半年",
- * "2026年一季度", "2026年10月", "2025年", "2027年二季度", etc.
+ * "2026年一季度", "2026年1季度", "2026年10月", "2026年1月", "2025年", "2026年4月15日至6月15日", etc.
+ * ONLY explicit annual formats ("2026年", "2026年度", "2026全年", "2026年全年") parse as full year.
+ * Unknown or unparseable formats return null (never fall back to full year!).
  */
 export function parsePeriodDateRange(periodStr: string): { start: Date; end: Date } | null {
   if (!periodStr) return null;
   const p = periodStr.trim();
+  if (!p) return null;
 
-  // 1. ISO/Dash date format with exact days: e.g. "2026-04-15至2026-06-15" or "2026-04-15 ~ 2026-06-15"
-  const isoRangeMatch = p.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s*(?:至|-|~|到)\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  // 1. ISO/Dash date format with exact days: e.g. "2026-04-15至2026-06-15"
+  const isoRangeMatch = p.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s*(?:至|-|~|到)\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
   if (isoRangeMatch) {
     const sYear = parseInt(isoRangeMatch[1], 10);
     const sM = parseInt(isoRangeMatch[2], 10);
@@ -19,26 +179,20 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     const eYear = parseInt(isoRangeMatch[4], 10);
     const eM = parseInt(isoRangeMatch[5], 10);
     const eD = parseInt(isoRangeMatch[6], 10);
-    return {
-      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
-      end: new Date(Date.UTC(eYear, eM - 1, eD, 23, 59, 59)),
-    };
+    return createValidDateRange(sYear, sM, sD, eYear, eM, eD);
   }
 
-  // 1b. Single ISO/Dash date: e.g. "2026-04-15" or "2026-01-01"
+  // 1b. Single ISO/Dash date: e.g. "2026-04-15"
   const isoSingleMatch = p.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
   if (isoSingleMatch) {
     const sYear = parseInt(isoSingleMatch[1], 10);
     const sM = parseInt(isoSingleMatch[2], 10);
     const sD = parseInt(isoSingleMatch[3], 10);
-    return {
-      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
-      end: new Date(Date.UTC(sYear, sM - 1, sD, 23, 59, 59)),
-    };
+    return createValidDateRange(sYear, sM, sD, sYear, sM, sD);
   }
 
-  // 2. Exact Chinese date ranges with days: e.g. "2026年4月15日至6月15日", "2025年11月15日至2026年3月15日"
-  const exactDateRangeMatch = p.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?\s*(?:至|-|~|到)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?/);
+  // 2. Exact Chinese date ranges with days: e.g. "2026年4月15日至6月15日", "2026年4月15日至2026年6月15日"
+  const exactDateRangeMatch = p.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?\s*(?:至|-|~|到)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?$/);
   if (exactDateRangeMatch) {
     const sYear = parseInt(exactDateRangeMatch[1], 10);
     const sM = parseInt(exactDateRangeMatch[2], 10);
@@ -46,86 +200,77 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     const eYear = exactDateRangeMatch[4] ? parseInt(exactDateRangeMatch[4], 10) : sYear;
     const eM = parseInt(exactDateRangeMatch[5], 10);
     const eD = parseInt(exactDateRangeMatch[6], 10);
-    return {
-      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
-      end: new Date(Date.UTC(eYear, eM - 1, eD, 23, 59, 59)),
-    };
+    return createValidDateRange(sYear, sM, sD, eYear, eM, eD);
   }
 
   // 3. Cross-year month ranges: e.g. "2025年11月至2026年3月"
-  const crossYearMonthMatch = p.match(/(\d{4})年(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{4})年(\d{1,2})月?/);
+  const crossYearMonthMatch = p.match(/^(\d{4})年(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{4})年(\d{1,2})月?$/);
   if (crossYearMonthMatch) {
     const sYear = parseInt(crossYearMonthMatch[1], 10);
     const sM = parseInt(crossYearMonthMatch[2], 10);
     const eYear = parseInt(crossYearMonthMatch[3], 10);
     const eM = parseInt(crossYearMonthMatch[4], 10);
-    return {
-      start: new Date(Date.UTC(sYear, sM - 1, 1, 0, 0, 0)),
-      end: new Date(Date.UTC(eYear, eM, 0, 23, 59, 59)),
-    };
+    return createValidDateRange(sYear, sM, 1, eYear, eM, getLastDayOfMonth(eYear, eM));
   }
 
-  // 4. Same-year month ranges: e.g. "2026年1至9月", "2026年1-9月", "2026年1月至9月", "2026年4至6月"
-  const sameYearMonthMatch = p.match(/(\d{4})年(?:\s*)(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{1,2})月?/);
+  // 4. Same-year month ranges: e.g. "2026年1至9月", "2026年1-9月", "2026年1月至9月"
+  const sameYearMonthMatch = p.match(/^(\d{4})年\s*(\d{1,2})月?\s*(?:至|-|~|到)\s*(\d{1,2})月?$/);
   if (sameYearMonthMatch) {
     const year = parseInt(sameYearMonthMatch[1], 10);
     const sM = parseInt(sameYearMonthMatch[2], 10);
     const eM = parseInt(sameYearMonthMatch[3], 10);
-    return {
-      start: new Date(Date.UTC(year, sM - 1, 1, 0, 0, 0)),
-      end: new Date(Date.UTC(year, eM, 0, 23, 59, 59)),
-    };
+    return createValidDateRange(year, sM, 1, year, eM, getLastDayOfMonth(year, eM));
   }
 
-  const yearMatch = p.match(/(\d{4})/);
+  const yearMatch = p.match(/^(\d{4})/);
   if (!yearMatch) return null;
   const year = parseInt(yearMatch[1], 10);
 
-  // Quarters with cumulative combinations checked first
-  if (p.includes('前三季度')) {
-    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 9, 0, 23, 59, 59)) };
+  // Quarters and Halves (supports both Chinese numeral and Arabic numeral, with or without '第')
+  if (/^(\d{4})年?前[3三]季度$/.test(p)) {
+    return createValidDateRange(year, 1, 1, year, 9, 30);
   }
-  if (p.includes('上半年')) {
-    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 6, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?上半年$/.test(p)) {
+    return createValidDateRange(year, 1, 1, year, 6, 30);
   }
-  if (p.includes('下半年')) {
-    return { start: new Date(Date.UTC(year, 6, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?下半年$/.test(p)) {
+    return createValidDateRange(year, 7, 1, year, 12, 31);
   }
-  if (p.includes('一季度') || p.includes('第1季度')) {
-    return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 3, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?(?:第)?[1一]季度$|^(\d{4})[-年]?[Qq]1$/.test(p)) {
+    return createValidDateRange(year, 1, 1, year, 3, 31);
   }
-  if (p.includes('二季度') || p.includes('第2季度')) {
-    return { start: new Date(Date.UTC(year, 3, 1)), end: new Date(Date.UTC(year, 6, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?(?:第)?[2二]季度$|^(\d{4})[-年]?[Qq]2$/.test(p)) {
+    return createValidDateRange(year, 4, 1, year, 6, 30);
   }
-  if (p.includes('三季度') || p.includes('第3季度')) {
-    return { start: new Date(Date.UTC(year, 6, 1)), end: new Date(Date.UTC(year, 9, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?(?:第)?[3三]季度$|^(\d{4})[-年]?[Qq]3$/.test(p)) {
+    return createValidDateRange(year, 7, 1, year, 9, 30);
   }
-  if (p.includes('四季度') || p.includes('第4季度')) {
-    return { start: new Date(Date.UTC(year, 9, 1)), end: new Date(Date.UTC(year, 12, 0, 23, 59, 59)) };
+  if (/^(\d{4})年?(?:第)?[4四]季度$|^(\d{4})[-年]?[Qq]4$/.test(p)) {
+    return createValidDateRange(year, 10, 1, year, 12, 31);
   }
 
   // Single exact date: e.g. "2026年4月15日"
-  const singleDateMatch = p.match(/(?:\d{4}年)?(\d{1,2})月(\d{1,2})日/);
+  const singleDateMatch = p.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
   if (singleDateMatch) {
-    const m = parseInt(singleDateMatch[1], 10);
-    const d = parseInt(singleDateMatch[2], 10);
-    return {
-      start: new Date(Date.UTC(year, m - 1, d, 0, 0, 0)),
-      end: new Date(Date.UTC(year, m - 1, d, 23, 59, 59)),
-    };
+    const m = parseInt(singleDateMatch[2], 10);
+    const d = parseInt(singleDateMatch[3], 10);
+    return createValidDateRange(year, m, d, year, m, d);
   }
 
-  // Single month: e.g. "10月"
-  const singleMonthMatch = p.match(/(\d{1,2})月/);
+  // Single month: e.g. "2026年1月", "2026年10月"
+  const singleMonthMatch = p.match(/^(\d{4})年(\d{1,2})月(?:份)?$/);
   if (singleMonthMatch) {
-    const m = parseInt(singleMonthMatch[1], 10);
-    const start = new Date(Date.UTC(year, m - 1, 1));
-    const end = new Date(Date.UTC(year, m, 0, 23, 59, 59));
-    return { start, end };
+    const m = parseInt(singleMonthMatch[2], 10);
+    return createValidDateRange(year, m, 1, year, m, getLastDayOfMonth(year, m));
   }
 
-  // Full year or annual: e.g. "2025年", "2026年度", "2026全年", "2026"
-  return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 11, 31, 23, 59, 59)) };
+  // Full year or annual: ONLY explicit full year formats
+  if (/^(\d{4})(?:年|年度|全年|年全年)$/.test(p)) {
+    return createValidDateRange(year, 1, 1, year, 12, 31);
+  }
+
+  // Unknown or unparseable format returns null (never fall back to full year!)
+  return null;
 }
 
 /**
@@ -133,16 +278,30 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
  * Enforces exact equivalence (e.g. "2026年一季度" === "2026年1至3月", "2026年前三季度" === "2026年1至9月"),
  * while strictly rejecting containment / inclusion (e.g. "2026年1至3月" vs "2026年1至9月"),
  * partial overlaps (e.g. "2026年1至4月" vs "2026年3至6月"), and disjoint ranges.
+ * Both periods MUST be successfully parseable and produce legal calendar dates;
+ * unparseable formats (e.g. "2026年待确认") or illegal dates return false.
+ * Same unparseable strings are NEVER passed directly without successful date resolution.
  */
 export function arePeriodsStrictlyIdentical(periodA?: string, periodB?: string): boolean {
   if (!periodA || !periodB) return false;
   const pA = periodA.trim();
   const pB = periodB.trim();
-  if (pA === pB) return true;
+  if (!pA || !pB) return false;
+
   const rangeA = parsePeriodDateRange(pA);
   const rangeB = parsePeriodDateRange(pB);
   if (!rangeA || !rangeB) {
-    return pA === pB;
+    return false;
+  }
+  if (
+    isNaN(rangeA.start.getTime()) ||
+    isNaN(rangeA.end.getTime()) ||
+    isNaN(rangeB.start.getTime()) ||
+    isNaN(rangeB.end.getTime()) ||
+    rangeA.start.getTime() > rangeA.end.getTime() ||
+    rangeB.start.getTime() > rangeB.end.getTime()
+  ) {
+    return false;
   }
   return rangeA.start.getTime() === rangeB.start.getTime() && rangeA.end.getTime() === rangeB.end.getTime();
 }
