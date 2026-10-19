@@ -21,7 +21,8 @@ import { computeContentHash } from './mockDraftService';
 import { 
   validateMaterialForSupplementation, 
   computeMaterialFingerprint,
-  validateSelectedMaterialsQuantitativeClaims
+  validateSelectedMaterialsQuantitativeClaims,
+  arePeriodsStrictlyIdentical
 } from './materialSupplementService';
 
 /**
@@ -1176,10 +1177,11 @@ export function validateParagraphSuggestionAcceptance(
           };
         }
 
-        if (doc.period !== ev.period && (snip.period || doc.period) !== ev.period) {
+        const currentEffectivePeriod = snip.period || doc.period || '';
+        if (!arePeriodsStrictlyIdentical(currentEffectivePeriod, ev.period)) {
           return {
             valid: false,
-            reason: `建议已失效：采纳依据材料【${ev.evidenceId}】统计期间已变动（现为【${snip.period || doc.period}】，生成时为【${ev.period}】），旧建议已失效！`,
+            reason: `建议已失效：采纳依据材料【${ev.evidenceId}】统计期间已变动（现为【${currentEffectivePeriod}】，生成时为【${ev.period}】），旧建议已失效！`,
             targetBlock,
             isFineTuned,
             isZeroDiff,
@@ -1208,11 +1210,53 @@ export function validateParagraphSuggestionAcceptance(
               isTargetBlockMissing,
             };
           }
+
+          // Strict normalized date range alignment between associated fact and evidence record
+          const factPeriod = (matchedFact.period || '').trim();
+          const evPeriod = (ev.period || currentEffectivePeriod).trim();
+          if (factPeriod || evPeriod) {
+            if (!arePeriodsStrictlyIdentical(factPeriod, evPeriod)) {
+              return {
+                valid: false,
+                reason: `建议已失效：采纳依据关联的事实【${matchedFact.id}】统计期间（${factPeriod || '未标注'}）与材料片段统计期间（${evPeriod || '未标注'}）不一致，旧候选已失效！`,
+                targetBlock,
+                isFineTuned,
+                isZeroDiff,
+                isModifiedAfter,
+                isTaskMismatch,
+                isDraftVersionMismatch,
+                isSupersededRun,
+                isTargetBlockMissing,
+              };
+            }
+          }
         }
       }
     }
 
-    // 4. Check all selectedFactIds if present on suggestion
+    // 4. Re-validate quantitative claims for all selected snippets at adoption time
+    if (suggestion.selectedSnippetIds && suggestion.selectedSnippetIds.length > 0) {
+      const selectedSnippets = (task.snippets || []).filter((s) => suggestion.selectedSnippetIds?.includes(s.id));
+      if (selectedSnippets.length > 0) {
+        const quantRes = validateSelectedMaterialsQuantitativeClaims(task, selectedSnippets);
+        if (!quantRes.valid) {
+          return {
+            valid: false,
+            reason: `建议已失效：材料量化指标核准校验未通过（${quantRes.reason}），旧建议已失效，请重新生成！`,
+            targetBlock,
+            isFineTuned,
+            isZeroDiff,
+            isModifiedAfter,
+            isTaskMismatch,
+            isDraftVersionMismatch,
+            isSupersededRun,
+            isTargetBlockMissing,
+          };
+        }
+      }
+    }
+
+    // 5. Check all selectedFactIds if present on suggestion
     if (suggestion.selectedFactIds && suggestion.selectedFactIds.length > 0) {
       for (const fid of suggestion.selectedFactIds) {
         const f = task.facts.find((fact) => fact.id === fid);

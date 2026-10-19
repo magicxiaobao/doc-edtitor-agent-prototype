@@ -9,7 +9,8 @@ import {
   AdoptedEvidenceRecord,
   DiffSegment
 } from '../types';
-import { parsePeriodDateRange } from './factLifecycleService';
+import { parsePeriodDateRange, arePeriodsStrictlyIdentical } from './factLifecycleService';
+export { arePeriodsStrictlyIdentical } from './factLifecycleService';
 import { computeContentHash } from './mockDraftService';
 import { computeTextDiff } from './diffService';
 
@@ -27,11 +28,23 @@ export function isDateRangeWithinTask(
   if (!range) return false;
   if (!taskStartDate || !taskEndDate) return true;
 
-  const parsedStart = parsePeriodDateRange(taskStartDate)?.start;
-  const parsedEnd = parsePeriodDateRange(taskEndDate)?.end;
+  const parseTaskBound = (dStr: string, isEnd: boolean): Date => {
+    const isoMatch = dStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (isoMatch) {
+      const y = parseInt(isoMatch[1], 10);
+      const m = parseInt(isoMatch[2], 10);
+      const d = parseInt(isoMatch[3], 10);
+      return isEnd
+        ? new Date(Date.UTC(y, m - 1, d, 23, 59, 59))
+        : new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+    }
+    const r = parsePeriodDateRange(dStr);
+    if (r) return isEnd ? r.end : r.start;
+    return new Date(dStr.includes('T') ? dStr : isEnd ? `${dStr}T23:59:59Z` : `${dStr}T00:00:00Z`);
+  };
 
-  const taskStart = parsedStart || new Date(taskStartDate.includes('T') ? taskStartDate : taskStartDate + 'T00:00:00Z');
-  const taskEnd = parsedEnd || new Date(taskEndDate.includes('T') ? taskEndDate : taskEndDate + 'T23:59:59Z');
+  const taskStart = parseTaskBound(taskStartDate, false);
+  const taskEnd = parseTaskBound(taskEndDate, true);
 
   if (isNaN(taskStart.getTime()) || isNaN(taskEnd.getTime())) {
     return true;
@@ -350,34 +363,23 @@ export function validateSelectedMaterialsQuantitativeClaims(
         const unitMatches = f.unit.trim() === unit.trim() || (normalizeUnit(f.unit) === normalizeUnit(unit) && normalizeUnit(unit).length > 0);
         if (!unitMatches) return false;
 
-        // 4. Strict period alignment: Fact period and snippet period MUST align!
+        // 4. Strict period alignment: Fact period and snippet period MUST strictly match on normalized start/end dates
         const snipEffectivePeriod = (snip.period || doc?.period || '').trim();
         const factEffectivePeriod = (f.period || '').trim();
-        if (factEffectivePeriod && snipEffectivePeriod) {
-          // Check for quarter contradiction between fact and snippet
-          const isQ1_F = factEffectivePeriod.includes('一季度') || factEffectivePeriod.includes('1季度');
-          const isQ2_F = factEffectivePeriod.includes('二季度') || factEffectivePeriod.includes('2季度');
-          const isQ3_F = factEffectivePeriod.includes('三季度') || factEffectivePeriod.includes('3季度');
-          const isQ4_F = factEffectivePeriod.includes('四季度') || factEffectivePeriod.includes('4季度');
-
-          const isQ1_S = snipEffectivePeriod.includes('一季度') || snipEffectivePeriod.includes('1季度');
-          const isQ2_S = snipEffectivePeriod.includes('二季度') || snipEffectivePeriod.includes('2季度');
-          const isQ3_S = snipEffectivePeriod.includes('三季度') || snipEffectivePeriod.includes('3季度');
-          const isQ4_S = snipEffectivePeriod.includes('四季度') || snipEffectivePeriod.includes('4季度');
-
-          const qF = isQ1_F ? 1 : isQ2_F ? 2 : isQ3_F ? 3 : isQ4_F ? 4 : 0;
-          const qS = isQ1_S ? 1 : isQ2_S ? 2 : isQ3_S ? 3 : isQ4_S ? 4 : 0;
-          if (qF > 0 && qS > 0 && qF !== qS) {
+        if (factEffectivePeriod || snipEffectivePeriod) {
+          if (!arePeriodsStrictlyIdentical(factEffectivePeriod, snipEffectivePeriod)) {
             return false;
           }
+        }
 
-          // Check parsed date range consistency
-          const rF = parsePeriodDateRange(factEffectivePeriod);
-          const rS = parsePeriodDateRange(snipEffectivePeriod);
-          if (rF && rS) {
-            if (rF.start.getTime() > rS.end.getTime() || rS.start.getTime() > rF.end.getTime()) {
-              return false;
-            }
+        // Snippet text explicit period consistency: If snippet text mentions a period explicitly, it must strictly match fact period
+        const textPeriodMatch = snip.text.match(/\d{4}年\d{1,2}月?(?:至|-|~|到)\d{1,2}月?|\d{4}年(?:前三季度|上半年|下半年|[一二三四1234]季度|度|全年)?|(?:前三季度|上半年|下半年|[一二三四1234]季度)/);
+        if (textPeriodMatch && factEffectivePeriod) {
+          const rawTextPeriod = textPeriodMatch[0];
+          const yearPrefix = factEffectivePeriod.match(/\d{4}年/)?.[0] || '2026年';
+          const normalizedTextPeriod = rawTextPeriod.includes('年') ? rawTextPeriod : `${yearPrefix}${rawTextPeriod}`;
+          if (!arePeriodsStrictlyIdentical(factEffectivePeriod, normalizedTextPeriod)) {
+            return false;
           }
         }
 
@@ -652,7 +654,9 @@ export function generateMaterialSupplementation(
   const adoptedEvidences: AdoptedEvidenceRecord[] = selectedSnippets.map((snip) => {
     const doc = task.documents.find((d) => d.id === snip.sourceDocId);
     const matchedFact = task.facts.find(
-      (f) => f.primaryEvidenceId === snip.id || f.evidenceIds.includes(snip.id)
+      (f) =>
+        (f.primaryEvidenceId === snip.id || (Array.isArray(f.evidenceIds) && f.evidenceIds.includes(snip.id))) &&
+        arePeriodsStrictlyIdentical(f.period || '', snip.period || doc?.period || '')
     );
     return {
       evidenceId: snip.id,

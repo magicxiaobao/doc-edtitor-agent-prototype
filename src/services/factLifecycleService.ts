@@ -25,6 +25,18 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     };
   }
 
+  // 1b. Single ISO/Dash date: e.g. "2026-04-15" or "2026-01-01"
+  const isoSingleMatch = p.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (isoSingleMatch) {
+    const sYear = parseInt(isoSingleMatch[1], 10);
+    const sM = parseInt(isoSingleMatch[2], 10);
+    const sD = parseInt(isoSingleMatch[3], 10);
+    return {
+      start: new Date(Date.UTC(sYear, sM - 1, sD, 0, 0, 0)),
+      end: new Date(Date.UTC(sYear, sM - 1, sD, 23, 59, 59)),
+    };
+  }
+
   // 2. Exact Chinese date ranges with days: e.g. "2026年4月15日至6月15日", "2025年11月15日至2026年3月15日"
   const exactDateRangeMatch = p.match(/(\d{4})年(\d{1,2})月(\d{1,2})日?\s*(?:至|-|~|到)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?/);
   if (exactDateRangeMatch) {
@@ -65,7 +77,7 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     };
   }
 
-  const yearMatch = p.match(/(\d{4})年/);
+  const yearMatch = p.match(/(\d{4})/);
   if (!yearMatch) return null;
   const year = parseInt(yearMatch[1], 10);
 
@@ -93,10 +105,10 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
   }
 
   // Single exact date: e.g. "2026年4月15日"
-  const singleDateMatch = p.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  const singleDateMatch = p.match(/(?:\d{4}年)?(\d{1,2})月(\d{1,2})日/);
   if (singleDateMatch) {
-    const m = parseInt(singleDateMatch[2], 10);
-    const d = parseInt(singleDateMatch[3], 10);
+    const m = parseInt(singleDateMatch[1], 10);
+    const d = parseInt(singleDateMatch[2], 10);
     return {
       start: new Date(Date.UTC(year, m - 1, d, 0, 0, 0)),
       end: new Date(Date.UTC(year, m - 1, d, 23, 59, 59)),
@@ -112,8 +124,27 @@ export function parsePeriodDateRange(periodStr: string): { start: Date; end: Dat
     return { start, end };
   }
 
-  // Full year or annual: e.g. "2025年", "2026年度", "2026全年"
+  // Full year or annual: e.g. "2025年", "2026年度", "2026全年", "2026"
   return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year, 11, 31, 23, 59, 59)) };
+}
+
+/**
+ * Evaluates whether two period strings resolve to strictly identical date boundaries.
+ * Enforces exact equivalence (e.g. "2026年一季度" === "2026年1至3月", "2026年前三季度" === "2026年1至9月"),
+ * while strictly rejecting containment / inclusion (e.g. "2026年1至3月" vs "2026年1至9月"),
+ * partial overlaps (e.g. "2026年1至4月" vs "2026年3至6月"), and disjoint ranges.
+ */
+export function arePeriodsStrictlyIdentical(periodA?: string, periodB?: string): boolean {
+  if (!periodA || !periodB) return false;
+  const pA = periodA.trim();
+  const pB = periodB.trim();
+  if (pA === pB) return true;
+  const rangeA = parsePeriodDateRange(pA);
+  const rangeB = parsePeriodDateRange(pB);
+  if (!rangeA || !rangeB) {
+    return pA === pB;
+  }
+  return rangeA.start.getTime() === rangeB.start.getTime() && rangeA.end.getTime() === rangeB.end.getTime();
 }
 
 /**

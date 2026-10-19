@@ -16,7 +16,8 @@ import {
   computeMaterialFingerprint,
   isSupportedSupplementPrompt,
   generateMaterialSupplementation,
-  requestMaterialSupplementationAsync
+  requestMaterialSupplementationAsync,
+  arePeriodsStrictlyIdentical
 } from './src/services/materialSupplementService';
 import { 
   validateParagraphSuggestionAcceptance,
@@ -1104,6 +1105,85 @@ async function runTask20Tests() {
     });
     assert(checkRuralAdoption.valid === false, 'K.1.10: 采纳校验严格阻断口径不一致的材料依据');
 
+    // 期间等价格式严格一致（归一化起止日期一致）
+    assert(arePeriodsStrictlyIdentical('2026年一季度', '2026年1至3月') === true, 'K.1.11: 2026年一季度 与 2026年1至3月 等价格式判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年前三季度', '2026年1至9月') === true, 'K.1.12: 2026年前三季度 与 2026年1至9月 等价格式判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年上半年', '2026年1至6月') === true, 'K.1.13: 2026年上半年 与 2026年1至6月 等价格式判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年全年', '2026年度') === true, 'K.1.14: 2026年全年 与 2026年度 等价格式判定为一致');
+
+    // 期间包含关系严格拒绝（起止日期不完全一致）
+    assert(arePeriodsStrictlyIdentical('2026年1至3月', '2026年1至9月') === false, 'K.1.15: 2026年1至3月 与 2026年1至9月 包含关系拒绝判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年1至9月', '2026年1至3月') === false, 'K.1.16: 2026年1至9月 与 2026年1至3月 包含关系拒绝判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年全年', '2026年一季度') === false, 'K.1.17: 2026年全年 与 2026年一季度 包含关系拒绝判定为一致');
+
+    // 期间部分重叠严格拒绝
+    assert(arePeriodsStrictlyIdentical('2026年1至4月', '2026年3至6月') === false, 'K.1.18: 2026年1至4月 与 2026年3至6月 部分重叠拒绝判定为一致');
+    assert(arePeriodsStrictlyIdentical('2026年2至5月', '2026年1至3月') === false, 'K.1.19: 2026年2至5月 与 2026年1至3月 部分重叠拒绝判定为一致');
+
+    // 期间完全不相交严格拒绝
+    assert(arePeriodsStrictlyIdentical('2026年1至3月', '2026年4至6月') === false, 'K.1.20: 2026年1至3月 与 2026年4至6月 完全不相交拒绝判定为一致');
+    assert(arePeriodsStrictlyIdentical('2025年', '2026年') === false, 'K.1.21: 2025年 与 2026年 跨年份完全不相交拒绝判定为一致');
+
+    // 独立复测场景：核准事实“2026年1至3月”与材料正文及片段“2026年1至9月”重叠但不完全一致
+    const taskPeriodDiscrepancy: Task = {
+      ...createTestTaskWithCases(),
+      facts: [
+        ...createTestTaskWithCases().facts.filter((f) => f.id !== 'FACT-APPOINT-01'),
+        {
+          id: 'FACT-APPOINT-01',
+          metric: '便民预约办理',
+          period: '2026年1至3月', // 核准事实仅一季度
+          value: '1500',
+          unit: '人次',
+          metricScope: '政务大厅便民预约口径',
+          primaryEvidenceId: 'SNIP-APPOINT-01',
+          evidenceIds: ['SNIP-APPOINT-01'],
+          sourceDocId: 'DOC-APPOINT-01',
+          hasConflict: false,
+          status: 'confirmed',
+        },
+      ],
+    };
+    const snipAppoint1To9 = taskPeriodDiscrepancy.snippets.find((s) => s.id === 'SNIP-APPOINT-01')!;
+    // 片段与文档期间为 2026年1至9月
+    const periodDiscrepancyQuantCheck = validateSelectedMaterialsQuantitativeClaims(taskPeriodDiscrepancy, [snipAppoint1To9]);
+    assert(periodDiscrepancyQuantCheck.valid === false, 'K.1.22: 核准事实期间(1至3月)与材料片段期间(1至9月)重叠但不完全一致，准入校验安全阻断');
+
+    const draftPeriodDiscrepancy = taskPeriodDiscrepancy.drafts[0];
+    const suggestionPeriodDiscrepancy = generateMaterialSupplementation(
+      draftPeriodDiscrepancy.blocks[1],
+      [snipAppoint1To9],
+      { task: taskPeriodDiscrepancy, currentDraft: draftPeriodDiscrepancy }
+    );
+    assert(suggestionPeriodDiscrepancy.isUnsupportedPrompt === true, 'K.1.23: 期间重叠但不一致时生成被安全阻断，保留原文');
+
+    const checkPeriodDiscrepancyAdoption = validateParagraphSuggestionAcceptance({
+      task: taskPeriodDiscrepancy,
+      currentDraft: draftPeriodDiscrepancy,
+      suggestion: {
+        ...suggestionPeriodDiscrepancy,
+        selectedSnippetIds: [snipAppoint1To9.id],
+        adoptedEvidences: [
+          {
+            evidenceId: snipAppoint1To9.id,
+            sourceDocId: snipAppoint1To9.sourceDocId,
+            sourceDocName: snipAppoint1To9.docName,
+            snippetLocation: snipAppoint1To9.location,
+            snippetText: snipAppoint1To9.text,
+            period: '2026年1至9月',
+            usage: 'current_fact',
+            associatedFactId: 'FACT-APPOINT-01',
+            contentFingerprint: 'MAT-FP-TEST',
+            capturedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      pendingTextToAdopt: suggestionPeriodDiscrepancy.suggestedText,
+      activeCompletedRunId: suggestionPeriodDiscrepancy.runId,
+      activeRole: '主笔甲',
+    });
+    assert(checkPeriodDiscrepancyAdoption.valid === false, 'K.1.24: 期间重叠但不一致时采纳校验安全阻断');
+
     // K.2: 采纳前完整重验依据
     console.log('--- K.2 采纳前完整重验依据 ---');
     const taskBase = createTestTaskWithCases();
@@ -1180,15 +1260,23 @@ async function runTask20Tests() {
       />
     );
 
-    // 实际勾选材料并提交表单触发异步生成请求
-    const checkboxA = modalMount.container.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    if (checkboxA) {
+    // 实际选择材料：data-testid="checkbox-select-snippet-SNIP-APPOINT-01"
+    const checkboxA = modalMount.container.querySelector('[data-testid="checkbox-select-snippet-SNIP-APPOINT-01"]') as HTMLButtonElement;
+    assert(Boolean(checkboxA), 'K.3: 存在材料选择入口 checkbox-select-snippet-SNIP-APPOINT-01');
+    act(() => {
       checkboxA.click();
-    }
-    const formA = modalMount.container.querySelector('form');
-    if (formA) {
-      formA.dispatchEvent(new (window as any).Event('submit', { bubbles: true, cancelable: true }));
-    }
+    });
+
+    // 点击生成：data-testid="btn-submit-material-supplement"
+    const submitBtnA = modalMount.container.querySelector('[data-testid="btn-submit-material-supplement"]') as HTMLButtonElement;
+    assert(Boolean(submitBtnA), 'K.3: 存在补写生成按钮 btn-submit-material-supplement');
+    act(() => {
+      submitBtnA.click();
+    });
+
+    // 确认运行：data-testid="supplement-generating-indicator"
+    const generatingIndicator = modalMount.container.querySelector('[data-testid="supplement-generating-indicator"]');
+    assert(Boolean(generatingIndicator), 'K.3: 确认进入运行中状态 supplement-generating-indicator');
 
     // 在请求进行中立即切换为 Task B
     modalMount.rerender(
@@ -1206,8 +1294,10 @@ async function runTask20Tests() {
       />
     );
 
-    // 等待原异步请求超时完成
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    // 等待原异步请求在异步 act 中完成
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
 
     assert(taskASuccessCalled === false, 'K.3.1: Task A 的进行中请求已安全中止');
     assert(taskBSuccessCalled === false, 'K.3.2: 任务切换后未发生跨任务回填，Task A 补写未回填至 Task B');
