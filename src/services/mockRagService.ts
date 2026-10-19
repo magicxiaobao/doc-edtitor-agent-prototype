@@ -59,7 +59,7 @@ export async function queryMockRag(
             id: 'CLUE-01',
             sourceDocId: 'CLUE-01',
             docName: '知识库RAG模型概括 (无原文具体段落)',
-            location: '检索模型生成答案',
+            location: '检索线索（无原文具体出处）',
             period: '2026年度',
             text: '服务满意度明显提升。（提示：该答案为模型总结线索，暂无具体单位材料出处与量化百分比，不可直接确认为已核验事实）',
           },

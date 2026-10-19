@@ -478,61 +478,13 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   baseTask.facts[0].conflictResolutionReason = '经核实采纳科室乙汇总口径128项。';
   baseTask.factSnapshot = {
     confirmedAt: '2026-10-07T08:30:00.000Z',
-    factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04', 'FACT-06'],
-    items: [
-      {
-        factId: 'FACT-01',
-        metric: '累计完成重点任务',
-        value: '128',
-        unit: '项',
-        period: '2026年1至9月',
-        metricScope: '科室乙汇总口径：完成128项',
-        primaryEvidenceId: 'EVD-02',
-        selectedConflictValue: '128',
-        conflictResolutionReason: '采信科室乙汇总口径128项',
-        hasConflict: true,
-        conflictCandidates: [
-          { value: '120', description: '科室甲直报口径：完成120项', evidenceId: 'EVD-01' },
-          { value: '128', description: '科室乙汇总口径：完成128项', evidenceId: 'EVD-02' },
-        ],
-      },
-      {
-        factId: 'FACT-02',
-        metric: '组织专题培训',
-        value: '16',
-        unit: '场',
-        period: '2026年1至9月',
-        metricScope: '全系统干部职工专题业务培训台账',
-        primaryEvidenceId: 'EVD-03',
-      },
-      {
-        factId: 'FACT-03',
-        metric: '专题培训参训规模',
-        value: '800',
-        unit: '人次',
-        period: '2026年1至9月',
-        metricScope: '专题培训实名参训人次统计（注：单位为人次，非人数）',
-        primaryEvidenceId: 'EVD-03',
-      },
-      {
-        factId: 'FACT-04',
-        metric: '开展专题调研',
-        value: '12',
-        unit: '次',
-        period: '2026年1至9月',
-        metricScope: '深入基层专项调研工作记录',
-        primaryEvidenceId: 'EVD-05',
-      },
-      {
-        factId: 'FACT-06',
-        metric: '服务满意度明显提升',
-        value: '定性提升',
-        unit: '定性',
-        period: '2026年1至9月',
-        metricScope: '仅作为定性检索线索（缺少量化测评报告支撑）',
-        primaryEvidenceId: 'EVD-06',
-      },
-    ],
+    factIds: baseTask.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map(f => f.id),
+    items: baseTask.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map(f => ({
+      factId: f.id, metric: f.metric, value: f.selectedConflictValue || f.value,
+      unit: f.unit, period: f.period, metricScope: f.metricScope,
+      primaryEvidenceId: f.primaryEvidenceId, selectedConflictValue: f.selectedConflictValue,
+      conflictResolutionReason: f.conflictResolutionReason,
+    })),
     hash: 'SNAPSHOT-HASH-CONFIRMED-128',
   };
   baseTask.styleConfirmed = true;

@@ -45,17 +45,21 @@ export const CANONICAL_PERIOD_REGEX = new RegExp(CANONICAL_PERIOD_PATTERN, 'g');
 export function extractClausePeriod(
   fullText: string,
   matchClause: string,
-  fallbackYear?: string
+  fallbackYear?: string,
+  matchIndex?: number
 ): { period: string | null; isAmbiguous: boolean; reason?: string } {
   if (!fullText) return { period: null, isAmbiguous: false };
 
-  // First, extract sentences
-  const sentences = fullText.split(/[。；\n]+/).filter(Boolean);
-  const targetSentence = sentences.find((s) => s.includes(matchClause)) || matchClause;
-
-  // Find sub-clause in targetSentence
-  const subClauses = targetSentence.split(/[，,]+/).filter(Boolean);
-  const targetSubClause = subClauses.find((sc) => sc.includes(matchClause)) || targetSentence;
+  // Locate this occurrence, not the first equal number in another sentence.
+  const offset = matchIndex ?? Math.max(0, fullText.indexOf(matchClause));
+  const sentenceStart = Math.max(...['。', '；', ';', '\n'].map(c => fullText.lastIndexOf(c, offset - 1))) + 1;
+  const tail = fullText.slice(offset).search(/[。；;\n]/);
+  const sentenceEnd = tail < 0 ? fullText.length : offset + tail;
+  const targetSentence = fullText.slice(sentenceStart, sentenceEnd);
+  const relative = offset - sentenceStart;
+  const clauseStart = Math.max(targetSentence.lastIndexOf('，', relative - 1), targetSentence.lastIndexOf(',', relative - 1)) + 1;
+  const clauseTail = targetSentence.slice(relative).search(/[，,]/);
+  const targetSubClause = targetSentence.slice(clauseStart, clauseTail < 0 ? undefined : relative + clauseTail);
 
   const matchPeriods = (text: string): string[] => {
     const re = new RegExp(CANONICAL_PERIOD_PATTERN, 'g');
@@ -106,7 +110,7 @@ export function extractClausePeriod(
 }
 
 function normalizeExtractedPeriod(raw: string, fallbackYear?: string): { period: string; isAmbiguous: boolean } {
-  if (/^\d{4}/.test(raw) || raw.includes('年')) {
+  if (/^\d{4}/.test(raw)) {
     return { period: raw, isAmbiguous: false };
   }
   if (fallbackYear) {
@@ -382,13 +386,13 @@ export function createFactCandidate(
         error: `片段【${snippet.id}】所属的来源文档不存在，严禁凭失效出处登记事实！`,
       };
     }
-    if (sourceDoc.usage === 'style_ref' || sourceDoc.period.includes('2025') || factData.isHistoricOnly) {
+    if (sourceDoc.excluded || sourceDoc.usage === 'style_ref' || sourceDoc.usage === 'history_bg' || factData.isHistoricOnly) {
       return {
         success: false,
         error: `材料【${sourceDoc.name}】为历史文风参考材料（非本期履职数据），严禁转化为本期量化事实依据！`,
       };
     }
-    if (sourceDoc.usage === 'rag_clue' || snippet.id === 'EVD-06' || snippet.location === '无原文') {
+    if (sourceDoc.usage === 'rag_clue' || snippet.id === 'EVD-06' || /无原文|线索|摘要/.test(snippet.location)) {
       // Textless RAG clue cannot be confirmed as quantitative fact
       return {
         success: false,
@@ -459,10 +463,10 @@ export function confirmFact(
     if (!sourceDoc) {
       return { success: false, error: `依据片段【${snippet.id}】所属来源文件不存在，严禁凭失效出处确认为事实！` };
     }
-    if (sourceDoc.usage === 'style_ref' || sourceDoc.period.includes('2025')) {
+    if (sourceDoc.excluded || sourceDoc.usage === 'style_ref' || sourceDoc.usage === 'history_bg') {
       return { success: false, error: `来源材料【${sourceDoc.name}】为历史文风参考材料，严禁确认为本期量化履职事实！` };
     }
-    if (sourceDoc.usage === 'rag_clue' || snippet.id === 'EVD-06' || snippet.location === '无原文') {
+    if (sourceDoc.usage === 'rag_clue' || snippet.id === 'EVD-06' || /无原文|线索|摘要/.test(snippet.location)) {
       return { success: false, error: `【${sourceDoc.name}】仅为定性问答线索，无原文位置与量化指标，不可作为量化事实入库！` };
     }
   }

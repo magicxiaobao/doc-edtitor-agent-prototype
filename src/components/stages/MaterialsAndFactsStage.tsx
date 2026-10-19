@@ -9,7 +9,8 @@ import {
 } from '../../types';
 import { 
   queryMockRag, 
-  RagScenario 
+  RagScenario,
+  RagQueryResult
 } from '../../services/mockRagService';
 import { 
   checkPermission, 
@@ -84,7 +85,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const [showAddMaterialModal, setShowAddMaterialModal] = useState(false);
   const [matName, setMatName] = useState('');
   const [matSource, setMatSource] = useState('科室处室');
-  const [matPeriod, setMatPeriod] = useState('2026年1-9月');
+  const [matPeriod, setMatPeriod] = useState(formatDefaultPeriodForTask(task.startDate, task.endDate));
   const [matUsage, setMatUsage] = useState<MaterialUsage>('current_fact');
   const [matFileType, setMatFileType] = useState<'txt' | 'docx' | 'pdf' | 'pasted'>('txt');
   const [matContent, setMatContent] = useState('');
@@ -93,21 +94,28 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const [ragQuery, setRagQuery] = useState('2026年前三季度单位各项重点任务完成及队伍培训指标情况');
   const [ragScenario, setRagScenario] = useState<RagScenario>('normal');
   const [isRagLoading, setIsRagLoading] = useState(false);
-  const [ragResult, setRagResult] = useState<any>(null);
+  const [ragResult, setRagResult] = useState<RagQueryResult | null>(null);
   const [ragError, setRagError] = useState<string | null>(null);
   const [activeRagRunId, setActiveRagRunId] = useState<string | null>(null);
-  const ragCancelledRef = useRef(false);
+  const ragControllerRef = useRef<AbortController | null>(null);
 
   // Requirement 8: Cancel running RAG and isolate late results if task changes or unmounts
   useEffect(() => {
-    ragCancelledRef.current = true;
+    ragControllerRef.current?.abort();
     setIsRagLoading(false);
     setActiveRagRunId(null);
     setRagResult(null);
     setRagError(null);
-    return () => {
-      ragCancelledRef.current = true;
-    };
+    setResolvingFact(null);
+    setConflictChoice('');
+    setConflictReason('');
+    setSnippetForFact(null);
+    setShowAddFactModal(false);
+    setShowAddMaterialModal(false);
+    setMatName(''); setMatContent('');
+    setNewFactMetric(''); setNewFactValue(''); setNewFactUnit(''); setNewFactScope(''); setNewFactNotes('');
+    setMatPeriod(formatDefaultPeriodForTask(task.startDate, task.endDate));
+    return () => ragControllerRef.current?.abort();
   }, [task.id]);
 
   // Filters for materials & facts
@@ -223,11 +231,14 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     }
 
     const confirmedFacts = task.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly);
+    if (!confirmedFacts.length) { alert('请先核准至少一项本期事实，再确认清单。'); return; }
+    const invalidFact = confirmedFacts.find(f => !confirmFact(task, f.id, activeRole).success);
+    if (invalidFact) { alert(`事实【${invalidFact.metric}】依据尚不合格，请重新核准或排除。`); return; }
 
     const snapshotItems = confirmedFacts.map((f) => ({
       factId: f.id,
       metric: f.metric,
-      value: f.value,
+      value: f.selectedConflictValue || f.value,
       unit: f.unit,
       period: f.period,
       metricScope: f.metricScope,
@@ -250,33 +261,25 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   };
 
   const handleRunRag = async () => {
-    const runId = `RAG-RUN-${Date.now().toString(36)}`;
-    const startingTaskId = task.id;
-    setActiveRagRunId(runId);
-    ragCancelledRef.current = false;
-    setIsRagLoading(true);
-    setRagError(null);
-    setRagResult(null);
-
+    ragControllerRef.current?.abort();
+    const controller = new AbortController();
+    ragControllerRef.current = controller;
+    setActiveRagRunId(`RAG-RUN-${Date.now()}`);
+    setIsRagLoading(true); setRagError(null); setRagResult(null);
+    const isCurrent = () => !controller.signal.aborted && ragControllerRef.current === controller;
     try {
-      const res = await queryMockRag(ragQuery, ragScenario);
-      if (ragCancelledRef.current || task.id !== startingTaskId) {
-        // Late result isolated or cancelled; do not update
-        return;
-      }
-      setRagResult(res);
+      const res = await queryMockRag(ragQuery, ragScenario, controller.signal);
+      if (isCurrent()) setRagResult(res);
     } catch (err: any) {
-      if (ragCancelledRef.current || task.id !== startingTaskId) return;
-      setRagError(err.message || '检索发生异常');
+      if (isCurrent()) setRagError(err.message || '检索发生异常');
     } finally {
-      setIsRagLoading(false);
+      if (isCurrent()) { setIsRagLoading(false); setActiveRagRunId(null); }
     }
   };
 
   const handleCancelRag = () => {
-    ragCancelledRef.current = true;
-    setIsRagLoading(false);
-    setActiveRagRunId(null);
+    ragControllerRef.current?.abort();
+    setIsRagLoading(false); setActiveRagRunId(null);
   };
 
   const handleCreateSupplementFact = (e: React.FormEvent) => {
@@ -296,7 +299,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
         value: newFactValue.trim(),
         unit: newFactUnit.trim(),
         metricScope: newFactScope.trim() || `${activeRole}手工补充业务台账`,
-        primaryEvidenceId: 'EVD-SUPP',
+        primaryEvidenceId: '',
         evidenceIds: [],
         hasConflict: false,
         isAuthorSupplemented: true,
@@ -310,13 +313,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       return;
     }
 
-    const createdFact = res.fact;
-    // 主笔自补事实可直接置为confirmed，供稿丙提交保持pending
-    if (activeRole === '主笔甲') {
-      createdFact.status = 'confirmed';
-    } else {
-      createdFact.status = 'pending';
-    }
+    const createdFact = { ...res.fact, status: 'pending' as const };
 
     onUpdateTask({
       facts: [...task.facts, createdFact],
@@ -460,7 +457,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={handleConfirmAllFacts}
-            disabled={pendingConflictsCount > 0}
+            disabled={pendingConflictsCount > 0 || !canConfirmFacts(activeRole)}
             className={`px-4 py-2 rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
               pendingConflictsCount > 0
                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
@@ -559,15 +556,15 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
             <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r text-xs text-amber-900 space-y-2">
               <div className="flex items-center gap-2 font-bold text-amber-900">
                 <AlertTriangle className="w-4 h-4 text-amber-600" />
-                <span>发现同指标口径冲突：重点任务完成数 (120项 vs 128项)</span>
+                <span>发现 {pendingConflictsCount} 项待裁决的事实冲突</span>
               </div>
               <p className="text-amber-800">
-                科室甲材料申报完成120项，科室乙汇总口径记载完成128项（统计范围相同）。系统不会随意取大值或平均值，必须由主笔人工裁决采纳口径或明确排除。
+                查看当前事实的候选数值与出处，由主笔选择采信口径或明确排除。
               </p>
               <button
                 onClick={() => {
-                  const conflictFact = task.facts.find((f) => f.hasConflict);
-                  if (conflictFact) setResolvingFact(conflictFact);
+                  const conflictFact = task.facts.find((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded');
+                  if (conflictFact) handleOpenConflictModal(conflictFact);
                 }}
                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold shadow-xs transition-colors cursor-pointer"
               >
@@ -621,7 +618,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                   .filter((f) => {
                     if (factFilter === 'confirmed') return f.status === 'confirmed';
                     if (factFilter === 'pending') return f.status === 'pending';
-                    if (factFilter === 'conflict') return f.hasConflict;
+                    if (factFilter === 'conflict') return f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded';
                     if (factFilter === 'gap') return f.status === 'gap';
                     return true;
                   })
@@ -635,7 +632,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                             <span>{fact.metric}</span>
                             {fact.isAuthorSupplemented && (
                               <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded">
-                                主笔补充
+                                人工补充说明
                               </span>
                             )}
                             {fact.isHistoricOnly && (
@@ -680,7 +677,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                               <ExternalLink className="w-3 h-3" />
                             </button>
                           ) : fact.isAuthorSupplemented ? (
-                            <span className="text-slate-400">主笔核验备注</span>
+                            <span className="text-slate-500" title={fact.supplementNotes}>人工补充说明：{fact.supplementNotes || "待补充说明"}</span>
                           ) : (
                             <span className="text-amber-600">待补充原文出处</span>
                           )}
