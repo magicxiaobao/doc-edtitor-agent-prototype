@@ -1613,6 +1613,8 @@ export function validateUndoEligibility(
     return { canUndo: false, reason: '未找到指定的修改记录' };
   }
 
+  if (log.undoUnavailableReason) return { canUndo: false, reason: log.undoUnavailableReason };
+
   if (log.draftId !== currentDraft.id) {
     return { canUndo: false, reason: '稿件版本已切换（该修改属于其他版本），不支持跨版本撤销' };
   }

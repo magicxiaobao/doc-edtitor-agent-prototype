@@ -161,12 +161,12 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           >
             <span className="whitespace-nowrap">审阅意见</span>
             {activeReviewComments.filter(
-              (c) => c.status === 'pending' || c.status === 'accepted_pending_implementation'
+              (c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)
             ).length > 0 && (
               <span className="bg-amber-100 text-amber-800 px-1 py-0.2 rounded-full text-xs font-bold shrink-0">
                 {
                   activeReviewComments.filter(
-                    (c) => c.status === 'pending' || c.status === 'accepted_pending_implementation'
+                    (c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)
                   ).length
                 }
               </span>
@@ -250,7 +250,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
               activeReviewComments.some(
                 (c) =>
                   (c.id === 'CMT-01' || c.id === 'CMT-02') &&
-                  (c.status === 'pending' || c.status === 'accepted_pending_implementation')
+                  (['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status))
               ) && (
                 <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-950 space-y-2">
                   <div className="flex items-center gap-1 font-bold text-amber-800">
@@ -321,7 +321,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
               >
                 <option value="all">全部状态 ({activeReviewComments.length})</option>
                 <option value="pending">
-                  待处理 ({activeReviewComments.filter((c) => c.status === 'pending').length})
+                  待处理 ({activeReviewComments.filter((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length})
                 </option>
                 <option value="accepted_pending_implementation">
                   决定采纳·待落实 ({activeReviewComments.filter((c) => c.status === 'accepted_pending_implementation').length})
@@ -368,7 +368,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
                     const loc = currentDraft
                       ? getReviewCommentLocation(cmt, currentDraft)
                       : { isLocated: false, isOutdatedVersion: false };
-                    const isLocationOutdated = !loc.isLocated || !loc.targetBlock || Boolean(loc.hasTextModified);
+                    const isLocationOutdated = cmt.type === 'paragraph' && (!loc.isLocated || !loc.targetBlock || Boolean(loc.hasTextModified));
                     const isSelectedComment = selectedCommentId === cmt.id;
 
                     return (
@@ -561,7 +561,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
                         {/* Action Buttons for Author */}
                         {!isCurrentDraftImmutable &&
                           canUserEdit &&
-                          (cmt.status === 'pending' || cmt.status === 'accepted_pending_implementation') && (
+                          (['pending', 'accepted_pending_implementation', 'need_discussion'].includes(cmt.status)) && (
                             <div className="pt-2 border-t border-slate-200/70 flex flex-wrap justify-end gap-1.5 text-xs">
                               {cmt.type === 'overall' ? (
                                 <button

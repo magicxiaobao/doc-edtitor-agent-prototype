@@ -64,7 +64,7 @@ export function runDocumentAudit(
       };
     });
   } else if (task.facts && task.facts.length > 0) {
-    activeFacts = task.facts.map((f) => ({
+    activeFacts = task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map((f) => ({
       id: f.id,
       metric: f.metric,
       value: f.selectedConflictValue || f.value,
@@ -128,9 +128,9 @@ export function runDocumentAudit(
               const rejectedPattern = `${cand.value}${fact.unit}`;
               const rejectedAlone = cand.value;
 
-              const hasRejectedMetric = block.content.includes(rejectedPattern);
+              const hasRejectedMetric = new RegExp(`(?<!\\d)${escapeRegExp(rejectedPattern)}`).test(block.content);
               const hasRejectedInContext =
-                block.content.includes(rejectedAlone) &&
+                new RegExp(`(?<!\\d)${escapeRegExp(rejectedAlone)}(?!\\d)`).test(block.content) &&
                 (block.content.includes(fact.metric) || block.content.includes(fact.unit) || linkedFactIds.includes(fact.id));
 
               if (hasRejectedMetric || hasRejectedInContext) {
@@ -165,11 +165,11 @@ export function runDocumentAudit(
     // Check 2: Metric Unit Confusion (e.g. 人次 vs 人)
     // Identifies every instance of "800人" not followed by "次"
     // -------------------------------------------------------------
-    const personTimesFacts = activeFacts.filter((f) => f.unit === '人次');
+    const personTimesFacts = blockFacts.filter((f) => f.unit === '人次');
     personTimesFacts.forEach((fact) => {
       const factNum = fact.value;
       if (factNum) {
-        const unitConfusionRegex = new RegExp(`(${escapeRegExp(factNum)})\\s*人(?!次)`, 'g');
+        const unitConfusionRegex = new RegExp(`(?<!\\d)(${escapeRegExp(factNum)})\\s*人(?!次)`, 'g');
         let match: RegExpExecArray | null;
         while ((match = unitConfusionRegex.exec(block.content)) !== null) {
           const issueId = makeIssueId('UNIT', block.id, `${match[1]}_ren_${match.index}`);
@@ -202,7 +202,7 @@ export function runDocumentAudit(
     blockFacts.forEach((fact) => {
       if (fact.value && fact.unit) {
         // Look for any number associated with this fact's unit in this block
-        const unitRegex = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(${escapeRegExp(fact.unit)})`, 'g');
+        const unitRegex = new RegExp(`(?<![\\d.])(\\d+(?:\\.\\d+)?)\\s*(${escapeRegExp(fact.unit)})(?![次])`, 'g');
         let match: RegExpExecArray | null;
         while ((match = unitRegex.exec(block.content)) !== null) {
           const foundNum = match[1];
@@ -213,10 +213,13 @@ export function runDocumentAudit(
             continue;
           }
 
+          const prefix = block.content.slice(0, matchIndex).split(/[，,。；;\n]/).at(-1) || '';
+          const namedFact = blockFacts.filter(f => f.unit === foundUnit && prefix.includes(f.metric)).sort((a,b) => prefix.lastIndexOf(b.metric) - prefix.lastIndexOf(a.metric))[0];
+          if (namedFact && namedFact.id !== fact.id) continue;
           // If foundNum does not match fact value or conflict candidates
           const matchesFact = foundNum === fact.value || foundNum === fact.selectedConflictValue;
           const matchesCandidate = fact.conflictCandidates?.some((c) => c.value === foundNum);
-          const matchesOtherBlockFact = blockFacts.some((bf) => bf.unit === foundUnit && (bf.value === foundNum || bf.selectedConflictValue === foundNum));
+          const matchesOtherBlockFact = !namedFact && blockFacts.some((bf) => bf.unit === foundUnit && (bf.value === foundNum || bf.selectedConflictValue === foundNum));
 
           if (!matchesFact && !matchesCandidate && !matchesOtherBlockFact) {
             // VALUE MISMATCH DETECTED (e.g. 799人次 instead of 800人次)

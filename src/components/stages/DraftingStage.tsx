@@ -1,3 +1,4 @@
+import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
 import { DecisionNoteModal } from '../DecisionNoteModal';
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -177,6 +178,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Contradiction resolution panel
   const [showContradictionModal, setShowContradictionModal] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
+  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
   const [strategyReason, setStrategyReason] = useState(
     '综合两位审阅领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研代表性成效，控制全篇在2500字左右。'
   );
@@ -1319,6 +1321,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
         reviewComments: updatedTask.reviewComments,
+        modificationLogs: updatedTask.modificationLogs,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -1429,6 +1432,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Resolve contradiction between CMT-01 and CMT-02
   const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
+    if (coordinationCommentIds.length < 2) { alert('请明确选择至少两条需要协调的意见'); return; }
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可裁决审阅矛盾意见');
@@ -1445,7 +1449,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
     if (mode === 'strategy_only') {
       const updatedComments = task.reviewComments.map((c) => {
-        if (c.id === 'CMT-01' || c.id === 'CMT-02') {
+        if (coordinationCommentIds.includes(c.id)) {
           return {
             ...c,
             status: 'accepted_pending_implementation' as const,
@@ -1472,15 +1476,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       const { updatedTask, workingDraft } = applyCoordinationDecision(
         task,
         currentDraft.id,
-        diff,
+        { ...diff, strategyExplanation: strategyReason.trim() || diff.strategyExplanation },
         activeRole,
-        ['CMT-01', 'CMT-02']
+        coordinationCommentIds
       );
 
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
         reviewComments: updatedTask.reviewComments,
+        modificationLogs: updatedTask.modificationLogs,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -1592,7 +1597,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
     if (mode === 'strategy_only') {
       const updatedComments = task.reviewComments.map((c) => {
-        if (c.id === 'CMT-01' || c.id === 'CMT-02') {
+        if (coordinationCommentIds.includes(c.id)) {
           return {
             ...c,
             status: 'accepted_pending_implementation' as const,
@@ -1612,14 +1617,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       const { updatedTask, workingDraft } = applyCoordinationDecision(
         task,
         currentDraft.id,
-        currentCoordinationDiff,
+        { ...currentCoordinationDiff, strategyExplanation: strategyReason.trim() || currentCoordinationDiff.strategyExplanation },
         activeRole,
-        ['CMT-01', 'CMT-02']
+        coordinationCommentIds
       );
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
         reviewComments: updatedTask.reviewComments,
+        modificationLogs: updatedTask.modificationLogs,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -3580,16 +3586,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 bg-slate-50 rounded border border-slate-200 space-y-1">
-                  <div className="font-bold text-slate-800">审阅乙（分管领导）：</div>
-                  <p className="text-slate-600">“篇幅建议压缩到2000字以内，主要汇报面向领导，需精炼紧凑。”</p>
-                </div>
-                <div className="p-2.5 bg-slate-50 rounded border border-slate-200 space-y-1">
-                  <div className="font-bold text-slate-800">审阅丁（业务处长）：</div>
-                  <p className="text-slate-600">“第二部分成效偏薄弱，建议补充两个详细案例以丰富基层说服力。”</p>
-                </div>
-              </div>
+              <CoordinationOpinionSelector comments={task.reviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
 
               <div className="space-y-2">
                 <label className="font-semibold text-slate-700 block">选择协调裁决策略：</label>

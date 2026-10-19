@@ -36,7 +36,6 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
   activeRole,
   onUndo,
 }) => {
-  if (!isOpen) return null;
 
   const isCurrentDraftImmutable = Boolean(currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal);
 
@@ -45,6 +44,8 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
     if (!currentDraft) return [];
     return getRecentModificationLogs(task, currentDraft.id);
   }, [task.modificationLogs, currentDraft?.id]);
+
+  if (!isOpen) return null;
 
   return (
     <div
@@ -160,6 +161,8 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                           <Sliders className="w-2.5 h-2.5 text-indigo-700" />
                           审阅替换稿微调采纳
                         </span>
+                      ) : log.source === 'review_implementation' ? (
+                        <span data-testid={`badge-log-source-${log.id}`} className="text-xs bg-emerald-100 px-2 rounded">审阅意见落实</span>
                       ) : log.isFineTuned ? (
                         <span
                           data-testid={`badge-log-source-${log.id}`}

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
+import React, { useState, useEffect } from 'react';
 import { 
   Task, 
   ReviewComment, 
@@ -15,6 +16,7 @@ import {
 import { 
   generateCoordinationDiff, 
   applyCoordinationDecision,
+  updateReviewCommentDecision,
   implementReviewCommentWithText,
   getReviewCommentLocation,
   rebindReviewCommentTargetBlock,
@@ -95,6 +97,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   // Contradiction resolution panel state (Compress to 2000 words vs Add 2 cases)
   const [showContradictionModal, setShowContradictionModal] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
+  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
   const [strategyReason, setStrategyReason] = useState(
     '综合两位审阅领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研代表性成效，控制全篇在2500字左右。'
   );
@@ -102,6 +105,12 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   const isAuthor = activeRole === '主笔甲';
   const isReviewer = activeRole === '审阅乙' || activeRole === '审阅丁';
 
+  useEffect(() => {
+    setSelectedBlockId(reviewBaseDraft?.blocks[0]?.id || currentDraft?.blocks[0]?.id || '');
+    setShowAddCommentModal(false); setReplyingComment(null); setImplementingComment(null); setRebindingComment(null); setShowContradictionModal(false);
+    setNewCommentContent(''); setNewCommentSuggestion(''); setReplyText('');
+    setCoordinationCommentIds(task.reviewComments.filter(c => ['pending','accepted_pending_implementation','need_discussion'].includes(c.status)).slice(0,2).map(c => c.id));
+  }, [task.id, reviewBaseDraft?.id, activeRole]);
   // Counts calculated dynamically from reviewComments
   const totalComments = task.reviewComments.length;
   const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending').length;
@@ -122,6 +131,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     const baseDraft = reviewBaseDraft || currentDraft;
     const targetBlock = baseDraft?.blocks.find((b) => b.id === selectedBlockId);
 
+    if (commentType === 'paragraph' && !targetBlock) { alert('请重新选择当前基准稿中的目标段落'); return; }
+
     const hasSuggestion = Boolean(newCommentSuggestion.trim());
     const newComment: ReviewComment = {
       id: `CMT-${Date.now().toString(36)}`,
@@ -131,7 +142,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       targetVersionId: baseDraft?.id || 'DRAFT-DEFAULT',
       targetVersionNumber: baseDraft?.versionNumber,
       baseParagraphText: commentType === 'paragraph' ? targetBlock?.content : undefined,
-      reviewer: activeRole === '主笔甲' ? '审阅乙' : activeRole,
+      reviewer: activeRole,
       content: newCommentContent.trim(),
       suggestedChange: hasSuggestion ? newCommentSuggestion.trim() : undefined,
       suggestionType: hasSuggestion ? newCommentSuggestionType : undefined,
@@ -160,20 +171,10 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     }
     if (!replyingComment) return;
 
-    const updatedComments = task.reviewComments.map((c) => {
-      if (c.id === replyingComment.id) {
-        return {
-          ...c,
-          status: replyAction,
-          authorReply: replyText.trim() || (replyAction === 'accepted_pending_implementation' ? '主笔决定采纳，待后续统筹落实' : '主笔已核实并答复'),
-          decisionReason: replyText.trim(),
-          resolutionType: replyAction === 'accepted_pending_implementation' ? ('strategy_decided' as const) : replyAction === 'rejected' ? ('rejected' as const) : ('communicated' as const),
-        };
-      }
-      return c;
-    });
-
-    onUpdateTask({ reviewComments: updatedComments });
+    try {
+      const {updatedTask} = updateReviewCommentDecision(task, replyingComment.id, replyAction, replyText.trim(), activeRole);
+      onUpdateTask({reviewComments: updatedTask.reviewComments});
+    } catch (err: any) { alert(err.message); return; }
     setReplyingComment(null);
     setReplyText('');
   };
@@ -191,6 +192,11 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       return;
     }
 
+    if (currentDraft.isFinal || currentDraft.isHistoricalSnapshot) { alert('请返回当前工作稿落实修改'); return; }
+    if (cmt.type === 'overall') {
+      setImplementingComment(cmt); setImplTargetBlockId(''); setImplOriginalText('');
+      setImplSuggestedText(interpretReviewCommentSuggestion(cmt).replacementText || ''); setImplAuthorReply('按全局意见落实选定段落'); return;
+    }
     // STRICT LOCATION CHECK: NEVER fallback to blocks[0]!
     const loc = getReviewCommentLocation(cmt, currentDraft);
     if (!loc.isLocated || !loc.targetBlock) {
@@ -235,6 +241,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         activeRole,
         {
           expectedBaseContent: implOriginalText,
+          targetBlockId: implTargetBlockId,
         }
       );
 
@@ -242,6 +249,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
         reviewComments: updatedTask.reviewComments,
+        modificationLogs: updatedTask.modificationLogs,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -278,6 +286,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
   // Reconcile contradictory comments (CMT-01 & CMT-02)
   const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
+    if (coordinationCommentIds.length < 2) { alert('请明确选择至少两条需要协调的意见'); return; }
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可裁决审阅矛盾意见');
@@ -289,7 +298,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     if (mode === 'strategy_only') {
       // Record strategy decision only; status remains accepted_pending_implementation
       const updatedComments = task.reviewComments.map((c) => {
-        if (c.id === 'CMT-01' || c.id === 'CMT-02') {
+        if (coordinationCommentIds.includes(c.id)) {
           return {
             ...c,
             status: 'accepted_pending_implementation' as const,
@@ -316,15 +325,16 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       const { updatedTask, workingDraft } = applyCoordinationDecision(
         task,
         currentDraft.id,
-        currentCoordinationDiff,
+        { ...currentCoordinationDiff, strategyExplanation: strategyReason.trim() || currentCoordinationDiff.strategyExplanation },
         activeRole,
-        ['CMT-01', 'CMT-02']
+        coordinationCommentIds
       );
 
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentDraftId: workingDraft.id,
         reviewComments: updatedTask.reviewComments,
+        modificationLogs: updatedTask.modificationLogs,
         isFinalized: updatedTask.isFinalized,
         status: updatedTask.status,
       });
@@ -423,7 +433,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       </div>
 
       {/* Contradictory comments banner */}
-      {task.reviewComments.some((c) => (c.id === 'CMT-01' || c.id === 'CMT-02') && c.status === 'pending') && (
+      {task.reviewComments.some((c) => (coordinationCommentIds.includes(c.id)) && c.status === 'pending') && (
         <div className="bg-amber-50 border-2 border-amber-400 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
           <div className="space-y-1">
             <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
@@ -940,7 +950,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setReplyAction('accepted_pending_implementation')}
+                    onClick={() => { setReplyAction('accepted_pending_implementation'); setReplyText(''); }}
                     className={`flex-1 py-1.5 rounded border text-xs font-medium cursor-pointer ${
                       replyAction === 'accepted_pending_implementation'
                         ? 'bg-blue-50 border-blue-500 text-blue-800'
@@ -951,7 +961,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setReplyAction('need_discussion')}
+                    onClick={() => { setReplyAction('need_discussion'); setReplyText(''); }}
                     className={`flex-1 py-1.5 rounded border text-xs font-medium cursor-pointer ${
                       replyAction === 'need_discussion'
                         ? 'bg-purple-50 border-purple-500 text-purple-800'
@@ -962,7 +972,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setReplyAction('rejected')}
+                    onClick={() => { setReplyAction('rejected'); setReplyText(''); }}
                     className={`flex-1 py-1.5 rounded border text-xs font-medium cursor-pointer ${
                       replyAction === 'rejected'
                         ? 'bg-slate-200 border-slate-400 text-slate-800'
@@ -1045,14 +1055,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
               <div className="space-y-1">
                 <label className="font-semibold text-slate-700">落实目标段落：</label>
                 <select
+                  required
+                  disabled={implementingComment.type === 'paragraph'}
                   value={implTargetBlockId}
                   onChange={(e) => {
                     setImplTargetBlockId(e.target.value);
                     const b = currentDraft?.blocks.find((blk) => blk.id === e.target.value);
-                    if (b) setImplOriginalText(b.content);
+                    if (b) { setImplOriginalText(b.content); if (!interpretReviewCommentSuggestion(implementingComment).isReplacement) setImplSuggestedText(b.content); }
                   }}
                   className="w-full p-2 border border-slate-300 rounded bg-white"
                 >
+                  <option value="">请选择本次落实的段落</option>
                   {currentDraft?.blocks.map((b) => (
                     <option key={b.id} value={b.id}>
                       第{b.order}段 ({b.id})：{b.content.slice(0, 30)}...
@@ -1061,6 +1074,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 </select>
               </div>
 
+              {implementingComment.type === 'paragraph' && <button type="button" className="text-blue-700 underline" onClick={() => { setRebindingComment(implementingComment); setRebindTargetBlockId(implTargetBlockId); setImplementingComment(null); }}>重新指定目标段落</button>}
               {/* Side-by-side comparison */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
@@ -1141,14 +1155,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              <div className="space-y-2">
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                  <strong>审阅乙要求：</strong>面向主要领导，建议压缩到2000字以内，精简铺垫。
-                </div>
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded">
-                  <strong>审阅丁要求：</strong>增加两个详细案例以丰富成效，展现亮点。
-                </div>
-              </div>
+              <CoordinationOpinionSelector comments={task.reviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
 
               <div className="space-y-1">
                 <label className="font-semibold text-slate-700">请选择协调策略：</label>

@@ -9,10 +9,41 @@ import {
   ReviewComment,
   ReviewCommentStatus,
   ReviewNavigationIntent,
-  ReviewSuggestionType
+  ReviewSuggestionType,
+  ParagraphModificationLog
 } from '../types';
 import { applyDraftContentChange } from './draftLifecycleService';
 import { checkPermission } from './permissionService';
+
+function commentState(c: ReviewComment) {
+  return { status: c.status, authorReply: c.authorReply, decisionReason: c.decisionReason,
+    resolutionType: c.resolutionType, implementationDraftId: c.implementationDraftId,
+    implementationVersionNumber: c.implementationVersionNumber, implementationBlockId: c.implementationBlockId,
+    implementedAt: c.implementedAt, currentBlockId: c.currentBlockId, targetBlockId: c.targetBlockId,
+    reboundAt: c.rebindRecord?.reboundAt };
+}
+function recordReviewChanges(beforeTask: Task, afterTask: Task, before: DraftVersion, after: DraftVersion, commentId?: string): Task {
+  const entries: ParagraphModificationLog[] = [];
+  for (const block of after.blocks) {
+    const old = before.blocks.find(b => b.id === block.id);
+    if (!old || old.content === block.content) continue;
+    const previous = beforeTask.reviewComments.find(c => c.id === commentId);
+    const current = afterTask.reviewComments.find(c => c.id === commentId);
+    entries.push({ id: `MOD-REVIEW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, taskId: afterTask.id,
+      draftId: after.id, blockId: block.id, blockOrder: block.order, timestamp: new Date().toISOString(),
+      source: 'review_implementation', sourceDescription: commentId ? '主笔直接落实审阅意见' : '主笔落实冲突协调方案',
+      beforeContent: old.content, afterContent: block.content, status: 'applied',
+      previousReferencedFactIds: [...old.referencedFactIds], postAdoptedReferencedFactIds: [...block.referencedFactIds],
+      previousAdoptedEvidences: JSON.parse(JSON.stringify(old.adoptedEvidences || [])), postAdoptedEvidences: JSON.parse(JSON.stringify(block.adoptedEvidences || [])),
+      associatedCommentId: commentId, associatedCommentReviewer: previous?.reviewer,
+      previousCommentState: previous ? commentState(previous) : undefined,
+      postAdoptionCommentState: current ? commentState(current) : undefined,
+      appliedBlockUpdatedAt: block.updatedAt, appliedRevisionSeq: block.revisionSeq,
+      undoUnavailableReason: commentId ? undefined : '协调方案涉及整组意见，请通过版本记录回溯，不支持单段安全撤销',
+    });
+  }
+  return { ...afterTask, modificationLogs: [...entries, ...(afterTask.modificationLogs || [])].slice(0, 20) };
+}
 
 /**
  * Resolves the suggestion type of a review comment:
@@ -147,7 +178,7 @@ export function generateCoordinationDiff(
   let targetWordCount = originalWordCount;
 
   if (strategy === 'compress') {
-    strategyExplanation = '采纳审阅乙压缩意见：精简第一部分铺垫表述与泛泛修饰词，突出核心数据指标。';
+    strategyExplanation = '采纳压缩篇幅方案：精简第一部分铺垫表述与泛泛修饰词，突出核心数据指标。';
     candidateBlocks = originalBlocks.map((b, idx) => {
       if (idx === 0) {
         // Streamline paragraph 1
@@ -337,7 +368,7 @@ export function applyCoordinationDecision(
     updatedAt: new Date().toISOString(),
   };
 
-  return { updatedTask: finalTask, workingDraft };
+  return { updatedTask: recordReviewChanges(task, finalTask, currentDraft, workingDraft), workingDraft };
 }
 
 export interface ReviewCommentLocationResult {
@@ -500,6 +531,7 @@ export function implementReviewCommentWithText(
   activeRole: UserRole,
   options?: {
     expectedBaseContent?: string;
+    targetBlockId?: string;
   }
 ): { updatedTask: Task; workingDraft: DraftVersion; implementedComment: ReviewComment } {
   const perm = checkPermission(activeRole, 'resolve_comment');
@@ -526,7 +558,7 @@ export function implementReviewCommentWithText(
   }
 
   // Determine target block (uses rebound block if present, otherwise original target block)
-  const targetBlockId = getEffectiveTargetBlockId(comment);
+  const targetBlockId = comment.type === 'overall' ? options?.targetBlockId : getEffectiveTargetBlockId(comment);
   if (!targetBlockId) {
     throw new Error('该意见属于整稿综合意见，请在正文具体段落中针对性落实，或通过审阅协调处理。');
   }
@@ -537,7 +569,7 @@ export function implementReviewCommentWithText(
   }
 
   // Base content conflict check if expectedBaseContent is passed
-  if (options?.expectedBaseContent && targetBlock.content !== options.expectedBaseContent) {
+  if (options?.expectedBaseContent !== undefined && targetBlock.content !== options.expectedBaseContent) {
     throw new Error('采纳冲突：检测到目标段落自建议生成后已被人工编辑修改，基准内容已变动。为防止直接覆盖人工文本，建议已失效，请重新生成建议。');
   }
 
@@ -553,7 +585,7 @@ export function implementReviewCommentWithText(
     (blocks) =>
       blocks.map((b) =>
         b.id === targetBlockId
-          ? { ...b, content: updatedContent.trim(), updatedAt: new Date().toISOString() }
+          ? { ...b, content: updatedContent, updatedAt: new Date().toISOString() }
           : b
       ),
     `落实【${comment.reviewer}】意见（${comment.content.slice(0, 20)}...）`,
@@ -588,7 +620,7 @@ export function implementReviewCommentWithText(
   };
 
   return {
-    updatedTask: finalTask,
+    updatedTask: recordReviewChanges(task, finalTask, currentDraft, workingDraft, commentId),
     workingDraft,
     implementedComment: updatedCommentObj!,
   };
@@ -683,7 +715,7 @@ export function rebindReviewCommentTargetBlock(
       // Save current effective block location, rebound baseline text, and rebind audit record separately.
       updatedCommentObj = {
         ...cmt,
-        type: 'paragraph' as const,
+        type: cmt.type,
         currentBlockId: newBlock.id,
         currentBlockOrder: newBlock.order,
         reboundParagraphText: newBlock.content,

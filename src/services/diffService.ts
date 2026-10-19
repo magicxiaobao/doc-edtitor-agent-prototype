@@ -69,7 +69,7 @@ export function computeTextDiff(original: string, suggested: string): DiffSegmen
 }
 
 function computeClauseDiff(original: string, suggested: string): DiffSegment[] {
-  const regex = /([^，。；！？\n]+[，。；！？\n]?)/g;
+  const regex = /[^，。；！？\n]+[，。；！？\n]*|[，。；！？\n]+/g;
   const clausesA = original.match(regex) || [original];
   const clausesB = suggested.match(regex) || [suggested];
 
