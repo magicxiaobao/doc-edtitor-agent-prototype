@@ -142,7 +142,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           <button
             type="button"
             onClick={() => onSelectInspectorTab('ai_suggestions')}
-            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-xs font-semibold ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-sm font-semibold ${
               inspectorTab === 'ai_suggestions'
                 ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -153,7 +153,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           <button
             type="button"
             onClick={() => onSelectInspectorTab('review_comments')}
-            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1 text-center text-xs font-semibold ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1 text-center text-sm font-semibold ${
               inspectorTab === 'review_comments'
                 ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -175,7 +175,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           <button
             type="button"
             onClick={() => onSelectInspectorTab('material_evidence')}
-            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-xs font-semibold ${
+            className={`flex-1 shrink-0 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors cursor-pointer text-center text-sm font-semibold ${
               inspectorTab === 'material_evidence'
                 ? 'bg-white text-blue-800 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'

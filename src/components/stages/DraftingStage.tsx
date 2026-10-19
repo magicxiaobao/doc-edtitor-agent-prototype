@@ -1,3 +1,4 @@
+import { DecisionNoteModal } from '../DecisionNoteModal';
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Task, 
@@ -160,6 +161,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [implAuthorReply, setImplAuthorReply] = useState<string>('');
 
   // Reject comment modal
+  const [acceptingComment, setAcceptingComment] = useState<ReviewComment | null>(null);
+  const [showMaterialSupplementModal, setShowMaterialSupplementModal] = useState<boolean>(false);
   const [rejectingComment, setRejectingComment] = useState<ReviewComment | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
 
@@ -232,7 +235,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         // If an inner/nested modal is open, let that inner modal handle Escape
         if (
           document.querySelector('[data-nested-modal="true"]') ||
-          showCandidateComparisonModal ||
+          showCandidateComparisonModal || showMaterialSupplementModal || acceptingComment ||
           showSaveVersionModal ||
           showVersionHistory ||
           showRecentModificationsModal ||
@@ -273,7 +276,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     showTabletInspectorDrawer,
     showTabletOutlineDrawer,
     selectedBlockId,
-    showCandidateComparisonModal,
+    showCandidateComparisonModal, showMaterialSupplementModal, acceptingComment,
     showSaveVersionModal,
     showVersionHistory,
     showRecentModificationsModal,
@@ -391,7 +394,6 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const completedRevisionRunIdRef = useRef<string | null>(null);
 
   // Task 20: Material Supplementation Modal state & handler
-  const [showMaterialSupplementModal, setShowMaterialSupplementModal] = useState<boolean>(false);
   const handleOpenMaterialSupplement = () => {
     setShowMaterialSupplementModal(true);
   };
@@ -468,6 +470,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     return () => {
       isUnmountedRef.current = true;
       activeDraftRunIdRef.current = null;
+      activeRevisionRunIdRef.current = null;
+      completedRevisionRunIdRef.current = null;
       if (generateTimerRef.current) {
         clearTimeout(generateTimerRef.current);
         generateTimerRef.current = null;
@@ -548,13 +552,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     : '刚刚';
 
   // Task & Version switch cleanup effect: cancel in-flight requests, clear suggestions and stale location
+  const previousRoleRef = useRef(activeRole);
   const previousTaskIdRef = useRef<string>(task.id);
   const previousDraftIdRef = useRef<string | undefined>(currentDraft?.id);
   useEffect(() => {
     const isTaskChanged = previousTaskIdRef.current !== task.id;
     const isDraftChanged = previousDraftIdRef.current && previousDraftIdRef.current !== currentDraft?.id;
 
-    if (isTaskChanged || isDraftChanged) {
+    const isRoleChanged = previousRoleRef.current !== activeRole;
+    if (isTaskChanged || isDraftChanged || isRoleChanged) {
+      activeDraftRunIdRef.current = null; completedCandidateRunIdRef.current = null;
+      if (generateTimerRef.current) clearTimeout(generateTimerRef.current);
+      setIsGenerating(false); setPendingCandidate(null); setShowCandidateComparisonModal(false);
+      setShowSaveVersionModal(false); setShowVersionHistory(false); setShowRecentModificationsModal(false);
+      setShowSubmitReviewModal(false); setShowContradictionModal(false);
+      setImplementingComment(null); setRejectingComment(null); setDiscussingComment(null); setReboundingComment(null); setAcceptingComment(null);
+      setAdoptFeedback(null); setInspectingFactId(null);
+
       // 1. Cancel in-flight revision request & supplementation
       if (revisionAbortControllerRef.current) {
         revisionAbortControllerRef.current.abort();
@@ -588,9 +602,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         }
       }
     }
+    previousRoleRef.current = activeRole;
     previousTaskIdRef.current = task.id;
     previousDraftIdRef.current = currentDraft?.id;
-  }, [task.id, currentDraft?.id, currentDraft?.blocks, activeReviewComments, selectedBlockId, selectedCommentId]);
+  }, [task.id, currentDraft?.id, activeRole, currentDraft?.blocks, activeReviewComments, selectedBlockId, selectedCommentId]);
 
   // Requirement 1, 2, 3, 8: Handle navigation intent from ReviewStage
   const lastProcessedNavRef = useRef<string | null>(null);
@@ -744,9 +759,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         isUnmountedRef.current ||
         draftCancelledRef.current ||
         activeDraftRunIdRef.current !== runId ||
-        currentTaskIdRef.current !== startingTaskId
+        currentTaskIdRef.current !== startingTaskId ||
+        currentDraftIdRef.current !== baseDraftId
       ) {
-        setIsGenerating(false);
         return;
       }
 
@@ -981,6 +996,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
       // Strict validation against current task boundary, current draft version boundary, and active runId (Requirement P2)
       if (
+        abortController.signal.aborted || isUnmountedRef.current ||
         currentTaskIdRef.current !== task.id ||
         currentDraftIdRef.current !== requestedDraftId ||
         currentDraft.id !== requestedDraftId ||
@@ -1082,7 +1098,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
     const matchingComment = revisionSuggestion.sourceCommentId
-      ? task.reviewComments.find((c) => c.id === revisionSuggestion.sourceCommentId)
+      ? activeReviewComments.find((c) => c.id === revisionSuggestion.sourceCommentId)
       : undefined;
     executeRevisionRequest(targetBlock, revisionSuggestion.action, revisionSuggestion.customPrompt, matchingComment);
   };
@@ -1175,11 +1191,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   };
 
   // Copy suggestion text only to clipboard (does not modify draft)
-  const handleCopyRevision = () => {
+  const handleCopyRevision = async () => {
     if (!revisionSuggestion) return;
     try {
       if (navigator?.clipboard?.writeText) {
-        navigator.clipboard.writeText(revisionSuggestion.suggestedText);
+        await navigator.clipboard.writeText(revisionSuggestion.suggestedText);
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = revisionSuggestion.suggestedText;
@@ -1248,30 +1264,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Accept comment decision only (marks as accepted_pending_implementation, does not mark implemented!)
   const handleAcceptCommentDecisionOnly = (cmt: ReviewComment) => {
-    const perm = checkPermission(activeRole, 'resolve_comment');
-    if (!perm.allowed) {
-      alert(perm.reason || '权限受限：仅主笔甲可处理审阅意见');
-      return;
-    }
-
-    const note = prompt(
-      '请输入采纳处理决定说明（此操作仅记录决定为【决定采纳，待落实】，在正文中实际修改前不会标记为已落实）：',
-      cmt.authorReply || '主笔决定采纳此意见方向，待后续统筹落实篇幅与正文'
-    );
-    if (note === null) return;
-
+    if (!checkPermission(activeRole, 'resolve_comment').allowed || isCurrentDraftImmutable) return;
+    setAcceptingComment(cmt);
+  };
+  const handleConfirmAcceptDecision = (note: string) => {
+    if (!acceptingComment || isCurrentDraftImmutable) return;
     try {
-      const { updatedTask } = updateReviewCommentDecision(
-        task,
-        cmt.id,
-        'accepted_pending_implementation',
-        note.trim(),
-        activeRole
-      );
-      onUpdateTask({ reviewComments: updatedTask.reviewComments });
-    } catch (err: any) {
-      alert(err.message || '记录采纳决定失败');
-    }
+      const { updatedTask } = updateReviewCommentDecision(task, acceptingComment.id, 'accepted_pending_implementation', note.trim(), activeRole);
+      onUpdateTask({ reviewComments: updatedTask.reviewComments }); setAcceptingComment(null);
+    } catch (err: any) { alert(err.message || '记录采纳决定失败'); }
   };
 
   // Open direct implement modal
@@ -1705,7 +1706,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           )}
 
           {isGenerating && (
-            <button
+            <button data-testid="btn-close-tablet-outline"
               onClick={handleCancelGenerate}
               className="px-2.5 py-1.5 bg-rose-50 text-rose-700 border border-rose-300 rounded text-xs hover:bg-rose-100 cursor-pointer font-medium"
               title="取消当前起草生成并保持现有内容"
@@ -3257,12 +3258,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       )}
 
       {/* Candidate Comparison & Difference Modal */}
+      {acceptingComment && <DecisionNoteModal initialNote={acceptingComment.authorReply || '主笔决定采纳此意见方向，待落实正文'} onCancel={() => setAcceptingComment(null)} onConfirm={handleConfirmAcceptDecision} />}
+
       <CandidateComparisonModal
         isOpen={showCandidateComparisonModal}
         onClose={() => setShowCandidateComparisonModal(false)}
         task={task}
         currentDraft={currentDraft}
         candidate={pendingCandidate}
+      activeCompletedRunId={completedCandidateRunIdRef.current}
         onAccept={() => {
           handleAcceptCandidate();
           setShowCandidateComparisonModal(false);

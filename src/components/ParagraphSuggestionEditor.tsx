@@ -826,7 +826,7 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 id="wide-review-title" className="font-bold text-base text-slate-900">
-                      局部AI建议宽屏评审 · 仅修改第 {targetOrderDisplay} 段
+                      {suggestion.isMaterialSupplementation ? '材料补写' : isReviewerReplacement ? '审阅替换稿' : '局部AI建议'}宽屏评审 · 仅修改第 {targetOrderDisplay} 段
                     </h3>
                     {isFineTuned && (
                       <span className="bg-amber-100 text-amber-900 border border-amber-300 text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1">

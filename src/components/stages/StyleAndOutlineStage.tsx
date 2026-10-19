@@ -38,11 +38,21 @@ interface StyleAndOutlineStageProps {
 
 export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
   task,
-  onUpdateTask,
+  onUpdateTask: updateTask,
   onViewSnippet,
   onProceedToNextStage,
   activeRole,
 }) => {
+  const onUpdateTask = (updated: Partial<Task>) => {
+    if (!checkPermission(activeRole, 'confirm_outline').allowed) { alert('仅主笔可修改文风与大纲'); return; }
+    const next = { ...updated };
+    if (next.outline) {
+      next.outline = next.outline.map(section => ({ ...section, assignedFactIds: section.assignedFactIds.filter(id => task.facts.some(f => f.id === id && f.status === 'confirmed' && !f.isHistoricOnly)) }));
+      if (!next.outlineConfirmed) next.outlineSnapshot = undefined;
+    }
+    if (next.styleRules && !next.styleConfirmed) next.styleSnapshot = undefined;
+    updateTask(next);
+  };
   const [activeTab, setActiveTab] = useState<'outline' | 'style'>('outline');
   const [selectedStructureTemplate, setSelectedStructureTemplate] = useState<'standard' | 'problem_driven'>('standard');
 
@@ -77,7 +87,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
       alert(perm.reason || '权限受限：仅主笔甲可调整大纲章节');
       return;
     }
-    const newOutline = [...task.outline];
+    const newOutline = task.outline.map(section => ({ ...section }));
     const targetIdx = direction === 'up' ? index - 1 : index + 1;
     if (targetIdx < 0 || targetIdx >= newOutline.length) return;
 
@@ -558,6 +568,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
                       </span>
                       <input
                         type="text"
+                        disabled={activeRole !== '主笔甲'}
                         value={sec.title}
                         onChange={(e) => {
                           const updated = task.outline.map((s) => (s.id === sec.id ? { ...s, title: e.target.value } : s));
@@ -572,6 +583,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
                         <span>建议字数:</span>
                         <input
                           type="number"
+                          disabled={activeRole !== '主笔甲'}
                           value={sec.suggestedWordCount}
                           onChange={(e) => {
                             const updated = task.outline.map((s) =>
@@ -617,6 +629,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
                     <span className="font-semibold text-slate-700">章节目标：</span>
                     <input
                       type="text"
+                      disabled={activeRole !== '主笔甲'}
                       value={sec.purpose}
                       onChange={(e) => {
                         const updated = task.outline.map((s) => (s.id === sec.id ? { ...s, purpose: e.target.value } : s));
@@ -639,7 +652,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
                           >
                             <span className="font-medium">{fact.metric}:</span>
                             <span className="font-bold">
-                              {fact.value} {fact.unit}
+                              {fact.selectedConflictValue || fact.value} {fact.unit}
                             </span>
                             {snippet && (
                               <button
@@ -915,7 +928,7 @@ export const StyleAndOutlineStage: React.FC<StyleAndOutlineStageProps> = ({
                           <div className="flex items-center justify-between">
                             <span className="font-semibold text-slate-800">{fact.metric}</span>
                             <span className="font-bold text-blue-800">
-                              {fact.value} {fact.unit}
+                              {fact.selectedConflictValue || fact.value} {fact.unit}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-slate-500">
