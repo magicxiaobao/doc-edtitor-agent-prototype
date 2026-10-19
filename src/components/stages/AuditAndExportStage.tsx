@@ -208,6 +208,8 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const handleConfirmIgnore = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ignoringIssue || !currentDraft) return;
+    if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || !checkPermission(activeRole, 'edit_draft').allowed || ignoringIssue.isBlocking || ignoringIssue.draftId !== currentDraft.id) { setIgnoreError('当前版本只读、无处理权限或该问题不可忽略，请返回工作稿处理'); return; }
+
 
     if (!ignoreReasonInput.trim()) {
       setIgnoreError('请填写忽略此提示的具体业务理由（必填，随公文版本归档存证）。');

@@ -504,6 +504,14 @@ export function validateFinalizationConditions(
 
   // 6. Review comments closed:
   // Requirement 2: 待处理(pending)、待落实(accepted_pending_implementation)和待沟通(need_discussion)按版本关联检查，都不能定稿！
+  const applicableDraftIds = new Set<string>();
+  let lineage: DraftVersion | undefined = targetDraft;
+  while (lineage && !applicableDraftIds.has(lineage.id)) {
+    applicableDraftIds.add(lineage.id);
+    lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
+  }
+  const reviewBase = task.drafts.find(d => d.id === task.reviewBaseDraftId);
+  if (reviewBase && (applicableDraftIds.has(reviewBase.id) || (reviewBase.sourceDraftId && applicableDraftIds.has(reviewBase.sourceDraftId)))) applicableDraftIds.add(reviewBase.id);
   const unclosedComments = task.reviewComments.filter((c) => {
     const isUnclosed =
       c.status === 'pending' ||
@@ -511,19 +519,12 @@ export function validateFinalizationConditions(
       c.status === 'need_discussion';
     if (!isUnclosed) return false;
 
-    // Check version association
-    if (c.type === 'overall') return true;
-    if (!c.targetVersionId) return true;
-    if (targetDraft) {
-      if (c.targetVersionId === targetDraft.id) return true;
-      if (targetDraft.sourceDraftId && c.targetVersionId === targetDraft.sourceDraftId) {
-        // If proposed on ancestor draft, and not implemented/rejected, still applies
-        return true;
-      }
-      // If comment was proposed on current draft lineage
-      return true;
-    }
-    return true;
+    if (!c.targetVersionId || !targetDraft) return true;
+    if (applicableDraftIds.has(c.targetVersionId) || (c.rebindRecord?.targetDraftId && applicableDraftIds.has(c.rebindRecord.targetDraftId))) return true;
+    // Legacy opinions with unknown provenance remain blocking; only known unrelated versions are excluded.
+    if (!task.drafts.some(d => d.id === c.targetVersionId)) return true;
+    if (!targetDraft.sourceDraftId && !task.reviewBaseDraftId) return true;
+    return false;
   });
 
   const commentsClosed = unclosedComments.length === 0;
@@ -601,8 +602,8 @@ export function finalizeDraft(
     }
   }
   const finalDraft: DraftVersion = {
-    id: `DRAFT-FINAL-${Date.now()}`,
-    versionNumber: '定稿 v2.0 (最终核定版)',
+    id: `DRAFT-FINAL-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    versionNumber: `定稿 ${currentDraft.versionNumber}`,
     createdAt: new Date().toISOString(),
     author: activeRole,
     summary: '经主笔核定、审阅意见全部闭环并完成事实口径核校后的正式定稿文件',
@@ -612,8 +613,8 @@ export function finalizeDraft(
     isWorkingDraft: false,
     finalizedAt: new Date().toISOString(),
     sourceDraftId: currentDraft.id,
-    snapshotMetadata: currentDraft.snapshotMetadata,
-    auditRecords: currentDraft.auditRecords,
+    snapshotMetadata: currentDraft.snapshotMetadata ? JSON.parse(JSON.stringify(currentDraft.snapshotMetadata)) : undefined,
+    auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
     frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结定稿时刻的审阅记录快照
   };
 

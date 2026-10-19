@@ -618,6 +618,16 @@ export interface ResolvedDraftFactEvidence {
  * Unifies the resolution of statistical period, metric scope, and primary evidence ID
  * so historical drafts strictly display frozen values while latest values are explicitly labeled.
  */
+export function findDraftFact(task: Task, draft: DraftVersion | undefined, id: string): Fact | undefined {
+  const latest = task.facts.find(f => f.id === id);
+  if (latest) return latest;
+  const frozen = draft?.snapshotMetadata?.factSnapshot?.items?.find(f => f.factId === id);
+  if (!frozen) return undefined;
+  return { ...frozen, id, status: 'excluded', hasConflict: frozen.hasConflict || false,
+    conflictCandidates: frozen.conflictCandidates?.map(c => ({...c, evidenceId:c.evidenceId || '', sourceDocId:''})),
+    evidenceIds: frozen.primaryEvidenceId ? [frozen.primaryEvidenceId] : [], value: frozen.selectedConflictValue || frozen.value };
+}
+
 export function resolveDraftFactEvidence(
   fact: Fact,
   draft: DraftVersion | undefined,
@@ -630,14 +640,15 @@ export function resolveDraftFactEvidence(
   const hasFrozenItem = Boolean(snapItem);
 
   const adoptedValue = snapItem
-    ? `${snapItem.value} ${snapItem.unit}`
+    ? `${snapItem.selectedConflictValue || snapItem.value} ${snapItem.unit}`
     : isHistoricalOrFinal
     ? '历史快照未收录此事实'
-    : `${fact.value} ${fact.unit}`;
+    : `${fact.selectedConflictValue || fact.value} ${fact.unit}`;
 
-  const currentConfirmedValue = `${fact.value} ${fact.unit}`;
+  const latestFact = task.facts.find(f => f.id === fact.id);
+  const currentConfirmedValue = latestFact?.status === 'confirmed' ? `${latestFact.selectedConflictValue || latestFact.value} ${latestFact.unit}` : latestFact ? '当前未核准' : '任务中已删除此事实';
 
-  const currentSnippet = task.snippets.find((s) => s.id === fact.primaryEvidenceId) || null;
+  const currentSnippet = latestFact ? task.snippets.find((s) => s.id === latestFact.primaryEvidenceId) || null : null;
   const currentDoc = currentSnippet ? task.documents.find((d) => d.id === currentSnippet.sourceDocId) : undefined;
   const currentDocName = currentSnippet?.docName || currentDoc?.name || '未知材料文档';
   const currentLocation = currentSnippet?.location || '段落索引';

@@ -1,3 +1,4 @@
+import { isPeriodWithinTaskPeriod } from './factLifecycleService';
 import { Task, ParagraphBlock, Fact, OutlineSection, DraftVersion, type RevisionAction, type RevisionSuggestion, type ReviewComment } from '../types';
 import { computeTextDiff } from './diffService';
 import { isValidAuthenticCase, interpretReviewCommentSuggestion } from './reviewCoordinationService';
@@ -79,13 +80,7 @@ export function isValidFactForDraft(fact: Fact, task: Task): boolean {
   }
 
   // Must belong to current statistical period (e.g. 2025 historic data cannot enter 2026 or 2027 draft)
-  if (task.startDate && fact.period) {
-    const taskYear = task.startDate.split('-')[0];
-    const factYearMatch = fact.period.match(/(\d{4})年/);
-    if (factYearMatch && factYearMatch[1] !== taskYear) {
-      return false;
-    }
-  }
+  if (!isPeriodWithinTaskPeriod(fact.period, task.startDate, task.endDate)) return false;
 
   // Must have original evidence snippet or explicit author supplementation
   if (!fact.primaryEvidenceId && !fact.isAuthorSupplemented) {
@@ -167,7 +162,7 @@ export function generateDraftFromFactsAndOutline(
     // Filter only valid confirmed facts assigned to this section
     const validAssignedFacts = task.facts.filter(
       (f) => assignedFactIds.includes(f.id) && isValidFactForDraft(f, task)
-    );
+    ).map(f => ({ ...f, value: f.selectedConflictValue || f.value }));
 
     // Case 1: No valid confirmed facts assigned to this section
     if (validAssignedFacts.length === 0) {
@@ -268,7 +263,7 @@ function buildSingleFactParagraph(
   instructionPrompt?: string
 ): ParagraphBlock {
   const fPeriod = fact.period || periodStr;
-  const val = fact.value;
+  const val = fact.selectedConflictValue || fact.value;
   const unit = fact.unit;
   const metric = fact.metric;
 
@@ -399,7 +394,7 @@ export function generateParagraphRevision(
   let unsupportedPromptNotice: string | undefined;
 
   // Extract all numbers with their following Chinese units (e.g. 25场, 800人次, 128项, 12次)
-  const numbersWithUnits = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+  const numbersWithUnits = originalText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
 
   const sourceComment = options?.sourceComment;
   const interpretation = interpretReviewCommentSuggestion(sourceComment);
@@ -409,8 +404,8 @@ export function generateParagraphRevision(
   // Case 1: Reviewer explicitly provided a replacement draft
   if (interpretation.isReplacement && interpretation.replacementText) {
     suggestedText = interpretation.replacementText;
-    const origNumbers = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
-    const replNumbers = interpretation.replacementText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    const origNumbers = originalText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
+    const replNumbers = interpretation.replacementText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
     const hasDataDiff = origNumbers.join(',') !== replNumbers.join(',');
 
     if (hasDataDiff) {

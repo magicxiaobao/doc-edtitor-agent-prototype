@@ -17,7 +17,7 @@ import {
   Fact,
   ReviewNavigationIntent
 } from '../../types';
-import { resolveDraftFactEvidence } from '../../services/factLifecycleService';
+import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
   computeContentHash,
@@ -691,8 +691,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       if (!fact) return true;
       if (fact.status !== 'confirmed') return true;
       if (fact.isHistoricOnly) return true;
-      if (task.factSnapshot) {
-        const snapItem = task.factSnapshot.items?.find((item) => item.factId === fId);
+      if (currentDraft?.snapshotMetadata?.factSnapshot) {
+        const snapItem = currentDraft.snapshotMetadata.factSnapshot.items?.find((item) => item.factId === fId);
         if (snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)) {
           return true;
         }
@@ -1550,7 +1550,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       );
       onUpdateTask({
         drafts: updatedTask.drafts,
-        currentDraftId: updatedTask.drafts[0].id,
+        currentDraftId: currentDraft.id,
       });
 
       setShowSaveVersionModal(false);
@@ -2828,7 +2828,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               </span>
                             )}
                             {block.referencedFactIds.map((factId) => {
-                              const fact = task.facts.find((f) => f.id === factId);
+                              const fact = findDraftFact(task, currentDraft, factId);
                               if (!fact) return null;
                               return (
                                 <button
@@ -2836,13 +2836,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    const snippet = task.snippets.find((s) => s.id === fact.primaryEvidenceId);
-                                    if (snippet) onViewSnippet(snippet);
+                                    const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
+                                    onViewSnippet(resolved.effectiveSnippet || { id: resolved.effectiveEvidenceId || '', sourceDocId: '', docName: '出处已不可用', location: '', period: resolved.effectivePeriod, text: '' }, fact);
                                   }}
                                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-100/90 text-blue-900 hover:bg-blue-200 font-medium cursor-pointer transition-colors text-xs"
                                   title={`点击反查材料出处：${fact.metric}`}
                                 >
-                                  <span>{fact.metric}: {fact.value}{fact.unit}</span>
+                                  <span>{currentDraft?.snapshotMetadata?.factSnapshot?.items?.find(f => f.factId === factId)?.metric || fact.metric}: {resolveDraftFactEvidence(fact, currentDraft, task).adoptedValue}</span>
                                   <ExternalLink className="w-3 h-3 opacity-70" />
                                 </button>
                               );

@@ -26,10 +26,11 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
   const doc = snippet ? documents.find((d) => d.id === snippet.sourceDocId) : undefined;
 
+  const adoptedEvidence = !fact && snippet ? currentDraft?.blocks.flatMap(b => b.adoptedEvidences || []).find(e => e.evidenceId === snippet.id && e.snippetText === snippet.text) : undefined;
   // Retrieve fact object if snippet passed without fact
   const resolvedFact =
     fact ||
-    (snippet && task
+    (!adoptedEvidence && doc?.usage !== 'style_ref' && snippet && task
       ? task.facts.find(
           (f) => f.primaryEvidenceId === snippet.id || f.evidenceIds.includes(snippet.id)
         )
@@ -70,16 +71,20 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   // If viewing historical or final snapshot, STRICTLY select snippet matching frozenEvidenceId!
   // If frozenEvidenceId is not found or not recorded, DO NOT show latest snippet as frozen evidence!
   const resolvedSnippet: EvidenceSnippet | null = (() => {
+    if (adoptedEvidence) return { id: adoptedEvidence.evidenceId, sourceDocId: adoptedEvidence.sourceDocId,
+      docName: adoptedEvidence.sourceDocName, location: adoptedEvidence.snippetLocation || '采纳冻结片段',
+      period: adoptedEvidence.period, text: adoptedEvidence.snippetText };
     if (resolvedData) {
       return resolvedData.effectiveSnippet;
     }
-    if (isHistoricalOrFinal) {
+    if (isHistoricalOrFinal && resolvedFact) {
       return null;
     }
     return snippet || (resolvedFact && task ? task.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
   })();
 
-  const resolvedDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
+  const liveDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
+  const resolvedDoc = adoptedEvidence && liveDoc ? { ...liveDoc, name: adoptedEvidence.sourceDocName, period: adoptedEvidence.period, usage: adoptedEvidence.usage } : liveDoc;
 
   return (
     <div
@@ -89,6 +94,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
       className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200"
     >
       <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col border-l border-slate-200">
+        {isHistoricalOrFinal && !adoptedEvidence && resolvedSnippet && <p className="p-3 text-sm bg-amber-50 text-amber-900">此版本保留了依据标识；下方为材料库现存原文，未保存原文快照时无法保证与采用当时完全一致。</p>}
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div className="flex items-center space-x-2">

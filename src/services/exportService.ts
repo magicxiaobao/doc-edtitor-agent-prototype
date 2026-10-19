@@ -1,3 +1,4 @@
+import { isPeriodWithinTaskPeriod } from './factLifecycleService';
 import { 
   Document, 
   Packer, 
@@ -12,7 +13,15 @@ import {
   BorderStyle,
   convertInchesToTwip
 } from 'docx';
-import { Task, DraftVersion, ExportOptions, ReviewComment } from '../types';
+import { Task, DraftVersion, ExportOptions, ReviewComment, FactItemSnapshot } from '../types';
+
+export function safeDownloadName(name: string): string { return name.replace(/[\\/:*?"<>|]+/g, '_'); }
+function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
+  const frozen = draft.snapshotMetadata?.factSnapshot?.items;
+  if (frozen) return frozen.map(f => ({ ...f, value: f.selectedConflictValue || f.value }));
+  if (draft.isHistoricalSnapshot || draft.isFinal) return [];
+  return task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly && (!f.hasConflict || f.selectedConflictValue) && isPeriodWithinTaskPeriod(f.period, task.startDate, task.endDate)).map(f => ({ ...f, factId: f.id, value: f.selectedConflictValue || f.value }));
+}
 
 /**
  * Normalizes boolean or ExportOptions
@@ -46,6 +55,7 @@ export function exportDocumentAsTxt(
 ): string {
   const opts = normalizeExportOptions(options);
   const meta = draft.snapshotMetadata;
+  const exportFacts = exportFactsFor(task, draft);
   const exportTitle = meta?.taskTitle || task.title;
   const exportStartDate = meta?.startDate || task.startDate;
   const exportEndDate = meta?.endDate || task.endDate;
@@ -67,7 +77,7 @@ export function exportDocumentAsTxt(
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
         metric: item.metric,
-        value: item.value,
+        value: item.selectedConflictValue || item.value,
         unit: item.unit,
         metricScope: item.metricScope,
         period: item.period,
@@ -93,7 +103,7 @@ export function exportDocumentAsTxt(
           .map((fId) => {
             const snapF = snapshotFactMap.get(fId);
             if (snapF) return `[事实依据: ${snapF.metric} ${snapF.value}${snapF.unit} (口径: ${snapF.metricScope})]`;
-            const taskF = task.facts.find((f) => f.id === fId);
+            const taskF = exportFacts.find((f) => f.factId === fId);
             if (taskF) return `[事实依据: ${taskF.metric} ${taskF.value}${taskF.unit} (口径: ${taskF.metricScope})]`;
             return null;
           })
@@ -123,9 +133,9 @@ export function exportDocumentAsTxt(
       meta.factSnapshot.items.forEach((item, idx) => {
         content += `${idx + 1}. [${item.factId}] ${item.metric}：${item.value}${item.unit} | 期间：${item.period} | 口径：${item.metricScope} (主出处：${item.primaryEvidenceId || '台账'})\n`;
       });
-    } else if (task.facts.length > 0) {
-      task.facts.forEach((f, idx) => {
-        content += `${idx + 1}. [${f.id}] ${f.metric}：${f.selectedConflictValue || f.value}${f.unit} | 期间：${f.period} | 口径：${f.metricScope} (主出处：${f.primaryEvidenceId || '台账'})\n`;
+    } else if (exportFacts.length > 0) {
+      exportFacts.forEach((f, idx) => {
+        content += `${idx + 1}. [${f.factId}] ${f.metric}：${f.selectedConflictValue || f.value}${f.unit} | 期间：${f.period} | 口径：${f.metricScope} (主出处：${f.primaryEvidenceId || '台账'})\n`;
       });
     } else {
       content += `暂无已核准的事实依据。\n`;
@@ -227,16 +237,16 @@ export function exportDocumentAsTxt(
   }
 
   // Trigger download if running in DOM browser
-  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${exportTitle}_${draft.versionNumber}_${Date.now()}.txt`;
+    a.download = safeDownloadName(`${exportTitle}_${draft.versionNumber}_${Date.now()}.txt`);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return content;
@@ -256,6 +266,7 @@ export async function exportDocumentAsDocx(
 ): Promise<Blob | Buffer> {
   const opts = normalizeExportOptions(options);
   const meta = draft.snapshotMetadata;
+  const exportFacts = exportFactsFor(task, draft);
   const exportTitle = meta?.taskTitle || task.title;
   const exportStartDate = meta?.startDate || task.startDate;
   const exportEndDate = meta?.endDate || task.endDate;
@@ -335,7 +346,7 @@ export async function exportDocumentAsDocx(
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
         metric: item.metric,
-        value: item.value,
+        value: item.selectedConflictValue || item.value,
         unit: item.unit,
         metricScope: item.metricScope,
         period: item.period,
@@ -387,7 +398,7 @@ export async function exportDocumentAsDocx(
           .map((fId) => {
             const snapF = snapshotFactMap.get(fId);
             if (snapF) return `【依据】${snapF.metric}: ${snapF.value}${snapF.unit} (${snapF.metricScope})`;
-            const taskF = task.facts.find((f) => f.id === fId);
+            const taskF = exportFacts.find((f) => f.factId === fId);
             if (taskF) return `【依据】${taskF.metric}: ${taskF.value}${taskF.unit} (${taskF.metricScope})`;
             return null;
           })
@@ -468,15 +479,7 @@ export async function exportDocumentAsDocx(
       })
     );
 
-    const itemsToRender = meta?.factSnapshot?.items || task.facts.map((f) => ({
-      factId: f.id,
-      metric: f.metric,
-      value: f.selectedConflictValue || f.value,
-      unit: f.unit,
-      period: f.period,
-      metricScope: f.metricScope,
-      primaryEvidenceId: f.primaryEvidenceId,
-    }));
+    const itemsToRender = exportFacts;
 
     itemsToRender.forEach((item) => {
       factTableRows.push(
@@ -738,16 +741,16 @@ export async function exportDocumentAsDocx(
 
   // Support both browser (Blob) and Node (Buffer) environments
   let result: Blob | Buffer;
-  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
     result = await Packer.toBlob(doc);
     const url = URL.createObjectURL(result as Blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${exportTitle}_${draft.versionNumber}_${Date.now()}.docx`;
+    a.download = safeDownloadName(`${exportTitle}_${draft.versionNumber}_${Date.now()}.docx`);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } else {
     result = await Packer.toBuffer(doc);
     (result as any).size = result.length;
