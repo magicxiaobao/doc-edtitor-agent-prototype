@@ -9,6 +9,7 @@ import {SnippetDrawer} from './src/components/SnippetDrawer';
 import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft,submitDraftForReview,restoreDraftVersion,applyDraftContentChange} from './src/services/draftLifecycleService';
 import {generateParagraphRevision} from './src/services/mockDraftService';
 import {exportDocumentAsTxt,safeDownloadName} from './src/services/exportService';
+import {rebindReviewCommentTargetBlock} from './src/services/reviewCoordinationService';
 import type {DraftVersion,EvidenceSnippet,Fact,AdoptedEvidenceRecord} from './src/types';
 const task=createPresetTask('under_review');
 const working=task.drafts.find(d=>d.id===task.currentDraftId)!;
@@ -47,6 +48,12 @@ task.snippets.find(s=>s.id==='EVD-03')!.text='后来修改的材料原文。';
 show();const open=[...host.querySelectorAll('button')].filter(b=>b.textContent?.includes('在抽屉中核验全文')).at(-1);assert(open);act(()=>open.click());assert.equal(opened?.text,evidence.snippetText);
 act(()=>root.render(<SnippetDrawer snippet={opened!} adoptedEvidence={openedAdopted} documents={task.documents} task={task} currentDraft={history} onClose={()=>{}}/>));
 assert(host.textContent?.includes(evidence.snippetText));assert(!host.textContent?.includes('后来修改的材料原文'));
+const sourceDocument=task.documents.find(d=>d.id===evidence.sourceDocId)!;
+sourceDocument.name='当前材料名称';sourceDocument.period='2027年度';sourceDocument.content='采纳之后修改的全文，仅属于当前材料库。';
+act(()=>root.render(<SnippetDrawer snippet={opened!} adoptedEvidence={openedAdopted} documents={task.documents} task={task} currentDraft={history} onClose={()=>{}}/>));
+assert(!host.textContent?.includes(sourceDocument.content),'frozen evidence must not present current full text as adopted material');
+assert(host.textContent?.includes('仅保存采纳时片段，未保存当时全文'),'explain the frozen full-text limit');
+assert(host.textContent?.includes(evidence.sourceDocName));assert(host.textContent?.includes(evidence.snippetText));
 // Identical evidence ID and text in two paragraphs must still open the clicked record.
 const laterEvidence={...evidence,sourceDocName:'第二次采纳的材料',period:'2027年上半年',snippetLocation:'第9段',usage:'history_bg' as const};
 history.blocks[1].adoptedEvidences=[laterEvidence];
@@ -84,6 +91,35 @@ const restoredA=restoreDraftVersion({...submittedB.updatedTask,reviewComments:[s
 assert.equal(validateFinalizationConditions(restoredA.updatedTask,restoredA.workingDraft.id,'主笔甲').checks.commentsClosed,true,'later sibling B must not block restored A');
 const restoredB=restoreDraftVersion({...submittedB.updatedTask,reviewComments:[siblingOpinion]},submittedB.baselineSnapshot!.id,'主笔甲');
 assert.equal(validateFinalizationConditions(restoredB.updatedTask,restoredB.workingDraft.id,'主笔甲').checks.commentsClosed,false,'B opinions still block restored B');
+// Rebind A's opinion onto B through the real action; the original target is audit history only.
+const rebindInput={...restoredB.updatedTask,reviewComments:[{...siblingOpinion,type:'paragraph' as const,targetVersionId:savedA.snapshotDraft.id,targetBlockId:draft.blocks[0].id}]};
+const rebound=rebindReviewCommentTargetBlock(rebindInput,siblingOpinion.id,restoredB.workingDraft.blocks[0].id,'主笔甲');
+assert.equal(rebound.updatedComment.targetVersionId,savedA.snapshotDraft.id,'original target remains intact');
+assert.equal(rebound.updatedComment.rebindRecord?.targetDraftId,restoredB.workingDraft.id);
+const afterRebindA=restoreDraftVersion(rebound.updatedTask,savedA.snapshotDraft.id,'主笔甲');
+assert.equal(validateFinalizationConditions(afterRebindA.updatedTask,afterRebindA.workingDraft.id,'主笔甲').checks.commentsClosed,true,'rebound B opinion must not gate restored A');
+assert.equal(validateFinalizationConditions(rebound.updatedTask,restoredB.workingDraft.id,'主笔甲').checks.commentsClosed,false,'rebound opinion must still gate B');
+// Snapshots and exports use the same branch scope for both pending and closed comments.
+const scopedTask=structuredClone(restoredA.updatedTask);
+const ownOpinion={...oldOpinion,id:'OWN-REVIEW',targetVersionId:scopedTask.currentDraftId,status:'implemented' as const,content:'本分支已落实意见'};
+const unknownOpinion={...oldOpinion,id:'LEGACY-REVIEW',targetVersionId:'MISSING-LEGACY-VERSION',status:'rejected' as const,content:'未知旧关联意见'};
+scopedTask.reviewComments=[{...siblingOpinion,id:'SIBLING-PENDING',content:'旁支待处理意见'},{...siblingOpinion,id:'SIBLING-CLOSED',status:'implemented',content:'旁支已落实意见'},ownOpinion,unknownOpinion];
+const scopedDraft=scopedTask.drafts.find(d=>d.id===scopedTask.currentDraftId)!;
+const scopedSaved=createDraftSnapshot(scopedTask,scopedDraft.id,'分支隔离快照','主笔甲');
+const scopedReview=submitDraftForReview(scopedTask,scopedDraft.id,'主笔甲');
+scopedDraft.blocks=[{...scopedDraft.blocks[0],content:'累计完成重点任务128项。',referencedFactIds:['FACT-01']}];
+const scopedFinal=finalizeDraft(scopedTask,scopedDraft.id,'主笔甲');assert(scopedFinal.success,scopedFinal.error);
+for(const snapshot of [scopedSaved.snapshotDraft,scopedReview.baselineSnapshot!,scopedFinal.finalDraft!]) {
+ assert.deepEqual(snapshot.frozenReviewComments?.map(c=>c.id),[ownOpinion.id,unknownOpinion.id],'freeze only applicable opinions, including closed and unknown legacy records');
+ assert.notEqual(snapshot.frozenReviewComments?.[0],ownOpinion,'freeze an independent copy');
+}
+const originalDownloadURL=URL.createObjectURL;URL.createObjectURL=undefined as unknown as typeof URL.createObjectURL;
+try {
+ for(const version of [scopedDraft,scopedSaved.snapshotDraft,scopedReview.baselineSnapshot!,scopedFinal.finalDraft!]) {
+  const log=exportDocumentAsTxt(scopedTask,version,{includeBody:false,includeEvidence:false,includeReviewLog:true});
+  assert(log.includes(ownOpinion.content));assert(log.includes(unknownOpinion.content));assert(!log.includes('旁支'),'export must not mix sibling reviews');
+ }
+} finally {URL.createObjectURL=originalDownloadURL;}
 // Review rounds that actually preceded a saved snapshot remain inherited after restore.
 const savedAfterRound=createDraftSnapshot(roundTwo.updatedTask,draft.id,'已有审阅的快照','主笔甲');
 const inheritedRestore=restoreDraftVersion({...savedAfterRound.updatedTask,reviewComments:[oldOpinion]},savedAfterRound.snapshotDraft.id,'主笔甲');

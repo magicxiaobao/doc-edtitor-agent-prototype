@@ -85,7 +85,8 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   })();
 
   const liveDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
-  const resolvedDoc = adoptedEvidence && liveDoc ? { ...liveDoc, name: adoptedEvidence.sourceDocName, period: adoptedEvidence.period, usage: adoptedEvidence.usage } : liveDoc;
+  // Adoption freezes the excerpt, not the source document's entire content.
+  const resolvedDoc = adoptedEvidence ? undefined : liveDoc;
 
   return (
     <div
@@ -207,9 +208,9 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
           <div className="p-4 bg-blue-50/70 border-b border-blue-100">
             <div className="text-xs font-semibold uppercase tracking-wider text-blue-800 mb-1 flex items-center justify-between">
               <span className="flex items-center gap-1">
-                <Tag className="w-3.5 h-3.5" /> 关联证据片段
+                <Tag className="w-3.5 h-3.5" /> {adoptedEvidence ? '采纳时冻结片段' : '关联证据片段'}
               </span>
-              {isHistoricalOrFinal && (
+              {isHistoricalOrFinal && !adoptedEvidence && (
                 <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-normal font-sans">
                   基于快照冻结证据ID追溯
                 </span>
@@ -252,13 +253,17 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
         {/* Document Full Text Context */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-slate-700">材料上下文全文核验</h4>
+            <h4 className="text-sm font-semibold text-slate-700">{adoptedEvidence ? '采纳材料存证范围' : '材料上下文全文核验'}</h4>
             <span className="text-xs text-slate-400">
               {resolvedDoc ? `来源：${resolvedDoc.source} (${resolvedDoc.period})` : '登记文本出处'}
             </span>
           </div>
 
-          {resolvedDoc ? (
+          {adoptedEvidence ? (
+            <p className="p-4 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-900">
+              仅保存采纳时片段，未保存当时全文。上方展示采纳时冻结的原文、材料名称、位置和期间。
+            </p>
+          ) : resolvedDoc ? (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-700 leading-relaxed space-y-3 font-normal">
               {resolvedDoc.content.split('\n\n').map((paragraph, idx) => {
                 const isTarget =

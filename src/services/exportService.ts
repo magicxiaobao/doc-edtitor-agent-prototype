@@ -1,4 +1,5 @@
 import { isPeriodWithinTaskPeriod } from './factLifecycleService';
+import { getApplicableReviewComments } from './draftLifecycleService';
 import { 
   Document, 
   Packer, 
@@ -192,9 +193,9 @@ export function exportDocumentAsTxt(
       // 缺少冻结记录的历史或定稿版本，明确标记“无法还原当时审阅状态”，避免把当前记录当成历史记录
       content += `【提示】此历史/定稿版本未包含冻结审阅记录快照，无法还原当时审阅状态；为防止后续意见混入，不直接采用当前审阅记录。\n`;
     } else {
-      // 当前活动工作稿：输出当前全部审阅意见与落实处理
-      if (task.reviewComments.length > 0) {
-        task.reviewComments.forEach((cmt, idx) => {
+      const applicableComments = getApplicableReviewComments(task, draft);
+      if (applicableComments.length > 0) {
+        applicableComments.forEach((cmt, idx) => {
           const statusLabel = 
             cmt.status === 'implemented' ? '已修改落实' :
             cmt.status === 'accepted_pending_implementation' ? '决定采纳待落实' :
@@ -595,7 +596,7 @@ export async function exportDocumentAsDocx(
     } else if (draft.isHistoricalSnapshot || draft.isFinal) {
       isMissingHistoricalReviewSnapshot = true;
     } else {
-      reviewCommentsToExport = task.reviewComments;
+      reviewCommentsToExport = getApplicableReviewComments(task, draft);
     }
 
     if (isMissingHistoricalReviewSnapshot) {

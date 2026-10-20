@@ -33,6 +33,34 @@ function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
     (d.id.startsWith('DRAFT-SNAP-REV-') || d.id === task.reviewBaseDraftId)).map(d => d.id);
 }
 
+/** One scope for finalization, frozen review records and working-draft exports. */
+export function getApplicableReviewComments(task: Task, draft: DraftVersion): ReviewComment[] {
+  const applicableDraftIds = new Set<string>(getReviewBaselineIds(task, draft));
+  const visited = new Set<string>();
+  let lineage: DraftVersion | undefined = draft;
+  while (lineage && !visited.has(lineage.id)) {
+    visited.add(lineage.id);
+    applicableDraftIds.add(lineage.id);
+    lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
+  }
+  return task.reviewComments.filter(comment => {
+    // A rebind replaces the active target; targetVersionId remains original evidence.
+    const targetId = comment.rebindRecord?.targetDraftId || comment.targetVersionId;
+    if (!targetId || applicableDraftIds.has(targetId)) return true;
+    // Preserve unresolved provenance in old data rather than silently discarding it.
+    if (!task.drafts.some(d => d.id === targetId)) return true;
+    return !draft.sourceDraftId && !task.reviewBaseDraftId && !Array.isArray(draft.reviewBaselineIds);
+  });
+}
+
+function freezeReviewComments(task: Task, draft: DraftVersion): ReviewComment[] | undefined {
+  // Re-saving a read-only version must preserve its original time boundary.
+  const comments = draft.isHistoricalSnapshot || draft.isFinal
+    ? draft.frozenReviewComments
+    : getApplicableReviewComments(task, draft);
+  return comments === undefined ? undefined : JSON.parse(JSON.stringify(comments));
+}
+
 /**
  * Compares two adopted evidence records for exact semantic equivalence.
  * Detects modifications to snippet text, documents, periods, usage, or metrics
@@ -190,7 +218,7 @@ export function acceptDraftCandidate(
         summary: currentDraft.summary
           ? `${currentDraft.summary}（采纳新候选前自动归档历史快照）`
           : '采纳新候选前系统自动归档的历史快照',
-        frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+        frozenReviewComments: freezeReviewComments(task, currentDraft),
       };
     }
   }
@@ -514,28 +542,12 @@ export function validateFinalizationConditions(
 
   // 6. Review comments closed:
   // Requirement 2: 待处理(pending)、待落实(accepted_pending_implementation)和待沟通(need_discussion)按版本关联检查，都不能定稿！
-  const applicableDraftIds = new Set<string>();
-  let lineage: DraftVersion | undefined = targetDraft;
-  while (lineage && !applicableDraftIds.has(lineage.id)) {
-    applicableDraftIds.add(lineage.id);
-    lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
-  }
-  // Content branches retain their own review history. Shared mutable ancestors
-  // do not prove that later sibling snapshots belong to the restored content.
-  if (targetDraft) getReviewBaselineIds(task, targetDraft).forEach(id => applicableDraftIds.add(id));
-  const unclosedComments = task.reviewComments.filter((c) => {
+  const unclosedComments = (targetDraft ? getApplicableReviewComments(task, targetDraft) : task.reviewComments).filter((c) => {
     const isUnclosed =
       c.status === 'pending' ||
       c.status === 'accepted_pending_implementation' ||
       c.status === 'need_discussion';
-    if (!isUnclosed) return false;
-
-    if (!c.targetVersionId || !targetDraft) return true;
-    if (applicableDraftIds.has(c.targetVersionId) || (c.rebindRecord?.targetDraftId && applicableDraftIds.has(c.rebindRecord.targetDraftId))) return true;
-    // Legacy opinions with unknown provenance remain blocking; only known unrelated versions are excluded.
-    if (!task.drafts.some(d => d.id === c.targetVersionId)) return true;
-    if (!targetDraft.sourceDraftId && !task.reviewBaseDraftId) return true;
-    return false;
+    return isUnclosed;
   });
 
   const commentsClosed = unclosedComments.length === 0;
@@ -627,7 +639,7 @@ export function finalizeDraft(
     reviewBaselineIds: getReviewBaselineIds(task, currentDraft),
     snapshotMetadata: currentDraft.snapshotMetadata ? JSON.parse(JSON.stringify(currentDraft.snapshotMetadata)) : undefined,
     auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
-    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结定稿时刻的审阅记录快照
+    frozenReviewComments: freezeReviewComments(task, currentDraft),
   };
 
   const updatedTask: Task = {
@@ -686,7 +698,7 @@ export function createDraftSnapshot(
     reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
     snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
     auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
-    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+    frozenReviewComments: freezeReviewComments(task, targetDraft),
   };
 
   const updatedTask: Task = {
@@ -792,7 +804,7 @@ export function submitDraftForReview(
       reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
       snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
-      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+      frozenReviewComments: freezeReviewComments(task, targetDraft),
     };
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }
