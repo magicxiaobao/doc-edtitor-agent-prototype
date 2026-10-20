@@ -80,6 +80,7 @@ export interface DraftingInspectorContentProps {
   onPendingFineTuneTextChange?: (text: string) => void;
   // Drawer mode & close handler
   isDrawer?: boolean;
+  panelId?: string;
   onClose: () => void;
   // Material Supplementation
   onOpenMaterialSupplement?: () => void;
@@ -133,6 +134,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
   onPendingFineTuneTextChange,
   isDrawer = false,
   onClose,
+  panelId,
   onOpenMaterialSupplement,
 }) => {
   return (
@@ -193,6 +195,8 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
           className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer shrink-0"
           title={isDrawer ? '关闭辅助面板' : '折叠辅助面板'}
           aria-label={isDrawer ? '关闭辅助面板' : '折叠辅助面板'}
+          aria-expanded={isDrawer ? undefined : true}
+          aria-controls={isDrawer ? undefined : panelId}
         >
           {isDrawer ? <X className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
         </button>

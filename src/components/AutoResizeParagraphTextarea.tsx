@@ -6,6 +6,7 @@ const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffec
 interface AutoResizeParagraphTextareaProps {
   id?: string;
   value: string;
+  layoutKey?: string;
   readOnly?: boolean;
   disabled?: boolean;
   onChange?: (value: string) => void;
@@ -18,6 +19,7 @@ interface AutoResizeParagraphTextareaProps {
 export const AutoResizeParagraphTextarea: React.FC<AutoResizeParagraphTextareaProps> = ({
   id,
   value,
+  layoutKey,
   readOnly,
   disabled,
   onChange,
@@ -44,7 +46,7 @@ export const AutoResizeParagraphTextarea: React.FC<AutoResizeParagraphTextareaPr
   // Update on value change immediately before repaint
   useIsomorphicLayoutEffect(() => {
     adjustHeight();
-  }, [value, adjustHeight]);
+  }, [value, layoutKey, adjustHeight]);
 
   // Respond to window resize and container width changes (e.g. sidebar toggle / screen resize)
   useEffect(() => {

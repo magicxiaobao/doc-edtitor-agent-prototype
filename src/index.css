@@ -35,6 +35,46 @@
 }
 
 /* Custom scrollbars for desktop document workbench */
+.drafting-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.drafting-panel-sticky {
+  position: sticky;
+  top: calc(var(--app-header-height, 64px) + 8px);
+  max-height: calc(100dvh - var(--app-header-height, 64px) - 16px);
+}
+
+@media (min-width: 1024px) {
+  .drafting-workspace {
+    --outline-column: minmax(0, 3fr);
+    --editor-column: minmax(0, 6fr);
+    --inspector-column: minmax(0, 3fr);
+    grid-template-columns: var(--outline-column) var(--editor-column) var(--inspector-column);
+  }
+  .drafting-workspace[data-outline-collapsed="true"] {
+    --outline-column: 44px;
+    --editor-column: minmax(0, 8fr);
+  }
+  .drafting-workspace[data-inspector-collapsed="true"] {
+    --inspector-column: 44px;
+    --editor-column: minmax(0, 9fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .drafting-workspace {
+    --outline-column: minmax(0, 2fr);
+    --editor-column: minmax(0, 7fr);
+  }
+  .drafting-workspace[data-inspector-collapsed="true"] {
+    --editor-column: minmax(0, 10fr);
+  }
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

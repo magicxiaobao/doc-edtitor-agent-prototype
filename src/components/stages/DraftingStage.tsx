@@ -1,6 +1,6 @@
 import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
 import { DecisionNoteModal } from '../DecisionNoteModal';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useId, useRef, useMemo } from 'react';
 import { 
   Task, 
   TaskStage,
@@ -139,6 +139,44 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Collapsible panels
   const [showLeftNav, setShowLeftNav] = useState(true);
   const [showRightInspector, setShowRightInspector] = useState(true);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const outlinePanelId = useId();
+  const inspectorPanelId = useId();
+  const panelTransitionRef = useRef<{
+    anchor: HTMLElement | null;
+    top: number;
+    side: 'outline' | 'inspector';
+  } | null>(null);
+
+  const toggleDesktopPanel = (side: 'outline' | 'inspector', expanded: boolean) => {
+    const workspace = workspaceRef.current;
+    const stickyTop = workspace
+      ? parseFloat(window.getComputedStyle(workspace).getPropertyValue('--app-header-height')) || 64
+      : 64;
+    // Anchor the paragraph currently being read, which can differ from the selected one.
+    const anchor = Array.from(workspace?.querySelectorAll<HTMLElement>('[data-testid^="textarea-block-"]') || [])
+      .find(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.bottom > stickyTop + 8 && rect.top < window.innerHeight;
+      }) || workspace?.querySelector<HTMLElement>('[data-testid="document-editor-canvas"]') || null;
+    panelTransitionRef.current = { anchor, top: anchor?.getBoundingClientRect().top || 0, side };
+    if (side === 'outline') setShowLeftNav(expanded);
+    else setShowRightInspector(expanded);
+  };
+
+  useLayoutEffect(() => {
+    const transition = panelTransitionRef.current;
+    if (!transition) return;
+    panelTransitionRef.current = null;
+    if (transition.anchor?.isConnected) {
+      const delta = transition.anchor.getBoundingClientRect().top - transition.top;
+      if (delta) window.scrollBy(0, delta);
+    }
+    const label = transition.side === 'outline'
+      ? showLeftNav ? '折叠导航栏' : '展开章节导航'
+      : showRightInspector ? '折叠辅助面板' : '展开辅助面板';
+    workspaceRef.current?.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.focus({ preventScroll: true });
+  }, [showLeftNav, showRightInspector]);
 
   // Inspector tab: 'ai_suggestions' | 'review_comments' | 'material_evidence'
   const [inspectorTab, setInspectorTab] = useState<'ai_suggestions' | 'review_comments' | 'material_evidence'>(() => {
@@ -2431,20 +2469,28 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
 
       {/* 3-Column Document Workspace */}
-      <div className="grid grid-cols-12 gap-4 items-start min-h-[640px]">
+      <div
+        ref={workspaceRef}
+        data-testid="drafting-workspace"
+        data-outline-collapsed={!showLeftNav}
+        data-inspector-collapsed={!showRightInspector}
+        className="drafting-workspace min-h-[640px]"
+      >
         {/* Left: Collapsible Outline Navigation */}
         {showLeftNav ? (
-          <div className="hidden lg:block lg:col-span-3 xl:col-span-2 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 space-y-3 sticky top-18 max-h-[82vh] overflow-y-auto">
+          <div id={outlinePanelId} className="drafting-panel-sticky hidden lg:block min-w-0 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 space-y-3 overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 text-blue-700" />
                 章节大纲导航
               </span>
               <button
-                onClick={() => setShowLeftNav(false)}
+                onClick={() => toggleDesktopPanel('outline', false)}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
                 title="折叠导航栏"
                 aria-label="折叠导航栏"
+                aria-expanded={true}
+                aria-controls={outlinePanelId}
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -2496,14 +2542,18 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             </div>
           </div>
         ) : (
-          <div className="col-span-1 hidden lg:block">
+          <div id={outlinePanelId} className="drafting-panel-sticky hidden lg:block">
             <button
-              onClick={() => setShowLeftNav(true)}
-              className="p-2 bg-white border border-slate-200 rounded shadow-xs text-slate-600 hover:text-slate-900 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+              type="button"
+              onClick={() => toggleDesktopPanel('outline', true)}
+              className="w-full min-h-20 py-3 flex flex-col items-center gap-2 bg-white border border-slate-200 rounded-lg shadow-xs text-slate-600 hover:text-blue-800 hover:bg-blue-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
               title="展开章节导航"
               aria-label="展开章节导航"
+              aria-expanded={false}
+              aria-controls={outlinePanelId}
             >
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="w-4 h-4" aria-hidden="true" />
+              <span className="text-xs font-medium">大纲</span>
             </button>
           </div>
         )}
@@ -2511,15 +2561,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         {/* Center: White Document Editor Canvas */}
         <div
           data-testid="document-editor-canvas"
-          className={`${
-            showLeftNav && showRightInspector
-              ? 'col-span-12 lg:col-span-6 xl:col-span-7'
-              : !showLeftNav && showRightInspector
-              ? 'col-span-12 lg:col-span-8 xl:col-span-8'
-              : showLeftNav && !showRightInspector
-              ? 'col-span-12 lg:col-span-9 xl:col-span-10'
-              : 'col-span-12 max-w-4xl mx-auto'
-          } bg-white rounded-lg border border-slate-200 shadow-sm p-5 sm:p-8 xl:p-10 min-h-[640px] flex flex-col justify-between`}
+          className={`${!showLeftNav && !showRightInspector ? 'max-w-4xl mx-auto' : ''} min-w-0 w-full bg-white rounded-lg border border-slate-200 shadow-sm p-5 sm:p-8 xl:p-10 min-h-[640px] flex flex-col justify-between`}
         >
           {currentDraft ? (
             <div className="space-y-6">
@@ -2749,6 +2791,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                           id={`paragraph-textarea-${block.id}`}
                           data-testid={`textarea-block-${block.id}`}
                           value={block.content}
+                          layoutKey={`${showLeftNav}-${showRightInspector}`}
                           readOnly={isCurrentDraftImmutable || !canUserEdit}
                           disabled={!canUserEdit && !isReviewerOnly}
                           onChange={(val) => handleUpdateBlockContent(block.id, val)}
@@ -2914,7 +2957,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
         {/* Right: Collapsible Inspector with "AI修改建议" and "材料依据" Tabs */}
         {showRightInspector ? (
-          <div className="hidden lg:flex lg:col-span-3 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 sticky top-18 max-h-[82vh] overflow-hidden flex-col">
+          <div id={inspectorPanelId} className="drafting-panel-sticky hidden lg:flex min-w-0 bg-white rounded-lg border border-slate-200 shadow-2xs p-4 overflow-hidden flex-col">
             <DraftingInspectorContent
               task={task}
               currentDraft={currentDraft}
@@ -2966,19 +3009,24 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 }
               }}
               isDrawer={false}
-              onClose={() => setShowRightInspector(false)}
+              panelId={inspectorPanelId}
+              onClose={() => toggleDesktopPanel('inspector', false)}
               onOpenMaterialSupplement={handleOpenMaterialSupplement}
             />
           </div>
         ) : (
-          <div className="col-span-1 hidden lg:block">
+          <div id={inspectorPanelId} className="drafting-panel-sticky hidden lg:block">
             <button
-              onClick={() => setShowRightInspector(true)}
-              className="p-2 bg-white border border-slate-200 rounded shadow-xs text-slate-600 hover:text-slate-900 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
+              type="button"
+              onClick={() => toggleDesktopPanel('inspector', true)}
+              className="w-full min-h-20 py-3 flex flex-col items-center gap-2 bg-white border border-slate-200 rounded-lg shadow-xs text-slate-600 hover:text-blue-800 hover:bg-blue-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:outline-hidden"
               title="展开辅助面板"
               aria-label="展开辅助面板"
+              aria-expanded={false}
+              aria-controls={inspectorPanelId}
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+              <span className="text-xs font-medium">辅助</span>
             </button>
           </div>
         )}
