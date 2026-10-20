@@ -22,7 +22,7 @@ import {
   rebindReviewCommentTargetBlock,
   interpretReviewCommentSuggestion
 } from '../../services/reviewCoordinationService';
-import { applyDraftContentChange, getDraftReviewComments, resolveCurrentReviewBase } from '../../services/draftLifecycleService';
+import { applyDraftContentChange, getApplicableReviewComments, resolveCurrentReviewBase } from '../../services/draftLifecycleService';
 import { 
   MessageSquare, 
   UserCheck, 
@@ -64,7 +64,8 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const reviewBaseDraft = resolveCurrentReviewBase(task, currentDraft);
-  const activeReviewComments = useMemo(() => getDraftReviewComments(task, currentDraft), [task, currentDraft]);
+  // This is the live review workspace; frozen history remains in the version views.
+  const activeReviewComments = useMemo(() => currentDraft ? getApplicableReviewComments(task, currentDraft) : [], [task, currentDraft]);
   const ensureApplicableComment = (id: string) => {
     if (activeReviewComments.some(c => c.id === id)) return true;
     alert('该意见不适用于当前版本，请返回当前分支处理');

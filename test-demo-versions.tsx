@@ -165,6 +165,13 @@ const originalAlert=globalThis.alert;let scopeWarning='';globalThis.alert=messag
 try {act(()=>decisionForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));}
 finally {globalThis.alert=originalAlert;}
 assert(scopeWarning.includes('不适用于当前版本'));assert.equal(reviewUpdates,0,'stale modal must not change a comment moved onto another branch');
+// Reviewing a baseline snapshot uses live opinions without rewriting its frozen history.
+const liveBaseline=structuredClone(submittedA.baselineSnapshot!);liveBaseline.frozenReviewComments=[];
+const baselineOpinion={...ownOpinion,id:'NEW-BASELINE-REVIEW',targetVersionId:liveBaseline.id,content:'基准快照新增的实时审阅意见',status:'pending' as const};
+const liveReviewTask={...reviewTask,currentDraftId:liveBaseline.id,reviewBaseDraftId:liveBaseline.id,drafts:[liveBaseline,...reviewTask.drafts.filter(d=>d.id!==liveBaseline.id)],reviewComments:[baselineOpinion,...reviewTask.reviewComments]};
+renderReview(liveReviewTask,'live-baseline');
+assert(host.textContent?.includes(baselineOpinion.content),'new baseline opinions must stay visible in live review workspace');
+assert.deepEqual(liveBaseline.frozenReviewComments,[],'live review must not replace frozen history');
 // Review rounds that actually preceded a saved snapshot remain inherited after restore.
 const savedAfterRound=createDraftSnapshot(roundTwo.updatedTask,draft.id,'已有审阅的快照','主笔甲');
 const inheritedRestore=restoreDraftVersion({...savedAfterRound.updatedTask,reviewComments:[oldOpinion]},savedAfterRound.snapshotDraft.id,'主笔甲');
