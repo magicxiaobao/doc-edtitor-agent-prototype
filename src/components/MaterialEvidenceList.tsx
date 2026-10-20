@@ -342,7 +342,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                     }
                     className="text-sm text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"
                   >
-                    <span>在抽屉中核验全文</span>
+                    <span>在抽屉中核验冻结片段</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </button>
                 </div>

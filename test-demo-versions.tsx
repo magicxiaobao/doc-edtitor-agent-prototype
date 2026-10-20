@@ -45,7 +45,7 @@ assert(orphanResolution.currentConfirmedValue.includes('已删除'));
 const evidence:AdoptedEvidenceRecord={evidenceId:'EVD-03',sourceDocId:task.snippets.find(s=>s.id==='EVD-03')!.sourceDocId,sourceDocName:'采用时材料名称',snippetLocation:'第1段',period:'2026年1至9月',usage:'current_fact',snippetText:'采用时保存的原文。',contentFingerprint:'DEMO-FROZEN',capturedAt:new Date().toISOString()};
 history.blocks[0].adoptedEvidences=[evidence];
 task.snippets.find(s=>s.id==='EVD-03')!.text='后来修改的材料原文。';
-show();const open=[...host.querySelectorAll('button')].filter(b=>b.textContent?.includes('在抽屉中核验全文')).at(-1);assert(open);act(()=>open.click());assert.equal(opened?.text,evidence.snippetText);
+show();const open=[...host.querySelectorAll('button')].filter(b=>b.textContent?.includes('在抽屉中核验冻结片段')).at(-1);assert(open);act(()=>open.click());assert.equal(opened?.text,evidence.snippetText);
 act(()=>root.render(<SnippetDrawer snippet={opened!} adoptedEvidence={openedAdopted} documents={task.documents} task={task} currentDraft={history} onClose={()=>{}}/>));
 assert(host.textContent?.includes(evidence.snippetText));assert(!host.textContent?.includes('后来修改的材料原文'));
 const sourceDocument=task.documents.find(d=>d.id===evidence.sourceDocId)!;
@@ -58,7 +58,7 @@ assert(host.textContent?.includes(evidence.sourceDocName));assert(host.textConte
 const laterEvidence={...evidence,sourceDocName:'第二次采纳的材料',period:'2027年上半年',snippetLocation:'第9段',usage:'history_bg' as const};
 history.blocks[1].adoptedEvidences=[laterEvidence];
 act(()=>root.render(<MaterialEvidenceList task={task} currentDraft={history} activeBlock={history.blocks[1]} isCurrentDraftImmutable inspectingFactId={null} onViewSnippet={(s,_f,ev)=>{opened=s;openedAdopted=ev;}}/>));
-const laterOpen=[...host.querySelectorAll('button')].filter(b=>b.textContent?.includes('在抽屉中核验全文')).at(-1);assert(laterOpen);
+const laterOpen=[...host.querySelectorAll('button')].filter(b=>b.textContent?.includes('在抽屉中核验冻结片段')).at(-1);assert(laterOpen);
 act(()=>laterOpen.click());assert.equal(openedAdopted,laterEvidence);
 act(()=>root.render(<SnippetDrawer snippet={opened!} adoptedEvidence={openedAdopted} documents={task.documents} task={task} currentDraft={history} onClose={()=>{}}/>));
 assert(host.textContent?.includes(laterEvidence.sourceDocName));assert(host.textContent?.includes(laterEvidence.period));assert(host.textContent?.includes(laterEvidence.snippetLocation));
