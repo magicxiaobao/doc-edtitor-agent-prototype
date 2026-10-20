@@ -243,18 +243,22 @@ export const ParagraphSuggestionEditor: React.FC<ParagraphSuggestionEditorProps>
   const isDifferentBlockSelected = Boolean(activeBlock && activeBlock.id !== suggestion.targetBlockId);
 
   // Handle Copy
-  const handleCopyText = () => {
+  const handleCopyText = async () => {
+    setCopyFeedback(null);
     try {
       const textToCopy = viewMode === 'ai_original' ? suggestion.suggestedText : pendingText;
       if (navigator?.clipboard?.writeText) {
-        navigator.clipboard.writeText(textToCopy);
+        await navigator.clipboard.writeText(textToCopy);
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = textToCopy;
         document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
+        try {
+          textarea.select();
+          if (!document.execCommand('copy')) throw new Error('Copy command failed');
+        } finally {
+          document.body.removeChild(textarea);
+        }
       }
       setCopyFeedback('已复制文本到剪贴板！');
       setTimeout(() => setCopyFeedback(null), 2000);

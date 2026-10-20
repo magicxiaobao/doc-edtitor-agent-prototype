@@ -1,0 +1,67 @@
+import './test-jsdom-env';
+import React, {act} from 'react';
+import {createRoot} from 'react-dom/client';
+import assert from 'node:assert/strict';
+import {StageBreadcrumbs} from './src/components/StageBreadcrumbs';
+import {ReviewStage} from './src/components/stages/ReviewStage';
+import {ParagraphSuggestionEditor} from './src/components/ParagraphSuggestionEditor';
+import {createPresetTask} from './src/services/mockData';
+import {createDraftSnapshot, restoreDraftVersion, submitDraftForReview} from './src/services/draftLifecycleService';
+import {generateParagraphRevision} from './src/services/mockDraftService';
+
+const host = document.createElement('div'); document.body.append(host);
+const root = createRoot(host);
+const task = createPresetTask('under_review');
+const draft = task.drafts.find(d => d.id === task.currentDraftId)!;
+const savedA = createDraftSnapshot(task, draft.id, 'A', '主笔甲');
+const submittedB = submitDraftForReview(savedA.updatedTask, draft.id, '主笔甲');
+const restoredA = restoreDraftVersion(submittedB.updatedTask, savedA.snapshotDraft.id, '主笔甲');
+const working = restoredA.workingDraft;
+const template = task.reviewComments[0];
+const own = {...template, id:'OWN', targetVersionId:working.id, status:'pending' as const};
+const sibling = {...template, id:'SIBLING', targetVersionId:submittedB.baselineSnapshot!.id, status:'pending' as const};
+const scoped = {...restoredA.updatedTask, reviewComments:[own, sibling]};
+act(() => root.render(<StageBreadcrumbs task={scoped} currentStage="review" onSelectStage={() => {}}/>));
+const reviewBadge = () => [...host.querySelectorAll('button')].find(b => b.textContent?.includes('审阅协作'))!.textContent;
+assert(reviewBadge()?.includes('1条待处理'), 'navigation must exclude the sibling review just like the live review page');
+act(() => root.render(<ReviewStage task={scoped} activeRole="主笔甲" onUpdateTask={() => {}} onProceedToNextStage={() => {}}/>));
+assert(host.textContent?.includes('意见总数：1 条（待处理 1 条）'));
+const liveBaseline = {...working, isHistoricalSnapshot:true, frozenReviewComments:[]};
+const liveTask = {...scoped, drafts:[liveBaseline, ...scoped.drafts.filter(d => d.id !== working.id)]};
+act(() => root.render(<StageBreadcrumbs task={liveTask} currentStage="review" onSelectStage={() => {}}/>));
+assert(reviewBadge()?.includes('1条待处理'), 'live baseline opinions must not disappear behind an empty frozen list');
+act(() => root.render(<StageBreadcrumbs task={{...scoped,reviewComments:[{...own,status:'implemented'},sibling]}} currentStage="review" onSelectStage={() => {}}/>));
+assert(reviewBadge()?.includes('已阅'), 'a pending sibling must not keep the navigation in a pending state');
+
+const suggestion = generateParagraphRevision(working.blocks[0], 'formal', task.id, working.id, 'COPY-DEMO', {task:scoped,currentDraft:working});
+const renderEditor = () => act(() => root.render(<ParagraphSuggestionEditor task={scoped} currentDraft={working} suggestion={suggestion} activeRole="主笔甲" activeCompletedRunId={suggestion.runId} isGenerating={false} pendingText="主笔微调后的待采纳正文。" onAdopt={() => {}} onDiscard={() => {}} onRegenerate={() => {}}/>));
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+const originalExec = document.execCommand;
+try {
+  let failCopy!: (reason: Error) => void;
+  Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:() => new Promise<void>((_, reject) => {failCopy=reject;})}});
+  renderEditor();
+  const copyButton = () => host.querySelector<HTMLButtonElement>('[data-testid="btn-copy-suggestion"]')!;
+  await act(async () => {copyButton().click();});
+  assert(!copyButton().textContent?.includes('已复制'), 'pending clipboard write must not claim success');
+  await act(async () => {failCopy(new Error('permission denied'));});
+  assert(copyButton().textContent?.includes('复制失败'), 'rejected clipboard write must show failure');
+  let copied = '';
+  Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:async (value: string) => {copied=value;}}});
+  await act(async () => {copyButton().click();});
+  assert.equal(copied, '主笔微调后的待采纳正文。');
+  assert(copyButton().textContent?.includes('已复制'));
+  Object.defineProperty(navigator, 'clipboard', {configurable:true, value:undefined});
+  document.execCommand = () => false;
+  const countBefore = document.querySelectorAll('textarea').length;
+  await act(async () => {copyButton().click();});
+  assert(copyButton().textContent?.includes('复制失败'), 'false fallback result must not claim success');
+  assert.equal(document.querySelectorAll('textarea').length, countBefore);
+} finally {
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+  else Reflect.deleteProperty(navigator, 'clipboard');
+  if (originalExec) document.execCommand=originalExec;
+  else Reflect.deleteProperty(document, 'execCommand');
+  act(() => root.unmount()); host.remove();
+}
+console.log('PASS: navigation review scope and truthful clipboard feedback');
