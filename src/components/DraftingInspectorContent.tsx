@@ -138,9 +138,9 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
   onOpenMaterialSupplement,
 }) => {
   return (
-    <div className="flex flex-col h-full space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       {/* Header with Tabs and Close / Collapse toggle */}
-      <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+      <div className="flex shrink-0 items-center justify-between pb-2 border-b border-slate-200">
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-medium flex-1 mr-2 overflow-x-auto min-w-0 no-scrollbar">
           <button
             type="button"
@@ -203,7 +203,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
       </div>
 
       {/* Inspector Body */}
-      <div className="flex-1 overflow-y-auto space-y-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain space-y-4">
         {inspectorTab === 'review_comments' ? (
           <div className="space-y-3.5">
             {/* Review Comments Header & Conflict Banner */}

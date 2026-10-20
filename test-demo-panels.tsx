@@ -3,6 +3,7 @@ import React, { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import assert from 'node:assert/strict';
 import { DraftingStage } from './src/components/stages/DraftingStage';
+import { AutoResizeParagraphTextarea } from './src/components/AutoResizeParagraphTextarea';
 import { createPresetTask } from './src/services/mockData';
 import type { Task } from './src/types';
 
@@ -87,4 +88,46 @@ dom.window.HTMLElement.prototype.getBoundingClientRect = originalRect;
 window.scrollBy = originalScrollBy;
 act(() => root.unmount());
 host.remove();
+
+// Model a long paragraph's measured height without a real browser. Reading its
+// size must never temporarily shorten the live paragraph/document.
+const resizeHost = document.createElement('div');
+document.body.append(resizeHost);
+const resizeRoot = createRoot(resizeHost);
+let measuredWidth = 600;
+const heightsDuringMeasurement: string[] = [];
+const originalTextareaScrollHeight = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'scrollHeight');
+dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+  return { x: 0, y: -51, top: -51, bottom: 677, left: 0, right: measuredWidth, width: measuredWidth, height: 728, toJSON() {} };
+};
+Object.defineProperty(dom.window.HTMLTextAreaElement.prototype, 'scrollHeight', {
+  configurable: true,
+  get() {
+    const live = resizeHost.querySelector<HTMLTextAreaElement>('#resize-probe')!;
+    heightsDuringMeasurement.push(live.style.height);
+    assert.notEqual(live.style.height, 'auto', 'measurement must not collapse the live paragraph');
+    const width = parseFloat(this.style.width) || measuredWidth;
+    return Math.ceil(this.value.length / (width / 10)) * 24;
+  },
+});
+const renderResize = (value: string, layoutKey: string) => act(() => resizeRoot.render(
+  <AutoResizeParagraphTextarea id="resize-probe" value={value} layoutKey={layoutKey} />
+));
+renderResize('长'.repeat(1200), 'panels-open');
+const liveParagraph = resizeHost.querySelector<HTMLTextAreaElement>('#resize-probe')!;
+assert.equal(liveParagraph.style.height, '480px');
+measuredWidth = 960;
+renderResize('长'.repeat(1200), 'panels-closed');
+assert.equal(heightsDuringMeasurement.at(-1), '480px', 'keep previous height until replacement is measured');
+assert.equal(liveParagraph.style.height, '312px');
+renderResize('短'.repeat(120), 'panels-closed');
+assert.equal(heightsDuringMeasurement.at(-1), '312px');
+assert.equal(liveParagraph.style.height, '48px', 'deleting content still shrinks the paragraph');
+assert.equal(resizeHost.querySelectorAll('textarea').length, 1, 'temporary measurement nodes are removed');
+if (originalTextareaScrollHeight) Object.defineProperty(dom.window.HTMLTextAreaElement.prototype, 'scrollHeight', originalTextareaScrollHeight);
+else delete (dom.window.HTMLTextAreaElement.prototype as any).scrollHeight;
+dom.window.HTMLElement.prototype.getBoundingClientRect = originalRect;
+act(() => resizeRoot.unmount());
+resizeHost.remove();
 console.log('PASS: desktop panel combinations, focus, visible paragraph anchoring, prompt/fine-tune/target retention; real grid/sticky layout requires browser verification');
+console.log('PASS: long paragraph measurement preserves the live height during reflow and still shrinks after deletion');
