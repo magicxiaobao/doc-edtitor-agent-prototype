@@ -56,6 +56,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const [activeTab, setActiveTab] = useState<'audit' | 'export'>('audit');
   const [isExportingDocx, setIsExportingDocx] = useState(false);
   const [showFinalizeConfirm, setShowFinalizeConfirm] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [exportVersionId, setExportVersionId] = useState<string>(task.currentDraftId || task.drafts[0]?.id || '');
 
   // Synchronize exportVersionId when task or currentDraftId changes
@@ -81,6 +82,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   useEffect(() => {
     setIgnoringIssue(null); setIgnoreReasonInput(''); setIgnoreError(null);
     setShowFinalizeConfirm(false);
+    setFinalizeError(null);
   }, [task.id, currentDraft?.id, activeRole]);
 
   // Target draft for export
@@ -326,16 +328,16 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       return;
     }
 
-    setShowFinalizeConfirm(true);
+    setFinalizeError(null); setShowFinalizeConfirm(true);
   };
 
   const handleConfirmFinalize = () => {
     // Recheck the current task and draft, even if an audit changed while the dialog was open.
     const latest = validateFinalizationConditions(task, currentDraft?.id, activeRole);
-    if (!latest.canFinalize) { setShowFinalizeConfirm(false); alert(latest.reasons.join('；')); return; }
+    if (!latest.canFinalize) { setFinalizeError(latest.reasons.join('；')); return; }
     const res = finalizeDraft(task, currentDraft.id, activeRole);
     if (!res.success) {
-      alert(res.error || '定稿执行失败');
+      setFinalizeError(res.error || '定稿执行失败');
       return;
     }
 
@@ -1041,7 +1043,8 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
         </div>
       )}
       {showFinalizeConfirm && <ConfirmActionModal title="确认最终定稿" confirmLabel="确认定稿并归档" onCancel={() => setShowFinalizeConfirm(false)} onConfirm={handleConfirmFinalize}>
-        当前版本【{currentDraft?.versionNumber}】将保存为只读定稿快照。后续修改会另建工作稿，已归档定稿继续保留。
+        <p>当前版本【{currentDraft?.versionNumber}】将保存为只读定稿快照。后续修改会另建工作稿，已归档定稿继续保留。</p>
+        {finalizeError && <p role="alert" className="mt-3 rounded border border-rose-200 bg-rose-50 p-3 text-rose-800">{finalizeError}</p>}
       </ConfirmActionModal>}
     </div>
   );

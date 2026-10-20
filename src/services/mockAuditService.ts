@@ -282,8 +282,8 @@ export function runDocumentAudit(
     // -------------------------------------------------------------
     // Only flag a positive outcome claim, never a statement that evidence is still missing.
     const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause =>
-      /满意度(?:明显|显著|持续|稳步|有所)?(?:提升|提高|改善|上升)/.test(clause) &&
-      !/尚未|并未|没有|未能|不作|不据此|待补|暂缺|缺乏|缺少|尚待/.test(clause)
+      /满意度[^。！？；，,\n]{0,16}(?:提升|提高|改善|上升)/.test(clause) &&
+      !/尚未|并未|没有|未能|未见|未有|不作|不据此|待补|暂缺|缺乏|缺少|尚待|满意度[^，,]{0,8}(?:未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(clause)
     )?.trim();
     if (satisfactionClaim) {
       const hasQuantitativeEvidence = activeFacts.some(
