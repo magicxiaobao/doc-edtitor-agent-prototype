@@ -192,7 +192,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       )}
       {showResetConfirm && <ConfirmActionModal title="重置演示数据" confirmLabel="确认重置" onCancel={() => setShowResetConfirm(false)} onConfirm={() => {setShowResetConfirm(false); onResetData();}}>
-        将恢复系统预置场景，当前演示改动会被重置，并保留重置前备份。是否继续？
+        重置将清除当前演示改动，恢复系统预置场景。请先导出需要保留的内容，本操作不会自动备份当前改动。是否继续？
       </ConfirmActionModal>}
     </header>
   );

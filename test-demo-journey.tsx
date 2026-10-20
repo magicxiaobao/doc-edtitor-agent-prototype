@@ -72,6 +72,9 @@ assert.equal(warning?.originalText,'服务满意度显著提升');
 const qualified={...gapBlock,content:'服务满意度虽然定性感受有所提升，但目前尚缺少定量数据测评体系支撑。'};
 assert.equal(runDocumentAudit(task(),[qualified],workingId).find(i=>i.type==='unverified_sentence')?.originalText,'服务满意度虽然定性感受有所提升');
 assert(!runDocumentAudit(task(),[{...gapBlock,content:'服务满意度未见提升。'}],workingId).some(i=>i.type==='unverified_sentence'));
+for(const content of ['服务满意度仍有提升空间。','服务满意度亟待提升。','服务满意度有待提高。','服务满意度将进一步提升。']) {
+  assert(!runDocumentAudit(task(),[{...gapBlock,content}],workingId).some(i=>i.type==='unverified_sentence'),`goal is not an achieved outcome: ${content}`);
+}
 click('提交本轮审阅');click('确认提交并进入审阅');
 click('审阅乙');click('提出审阅意见');
 act(()=>{(host.querySelectorAll<HTMLInputElement>('input[name="cmtType"]')[1]).click();});
@@ -101,7 +104,9 @@ assert(working().isFinal);
 const finalizedTaskId=task().id;
 click('重置数据');click('取消',host.querySelector('[role="dialog"]')!);
 assert(task().isFinalized,'cancelling reset must preserve the final version');
-click('重置数据');click('确认重置');
+click('重置数据');
+assert(host.querySelector('[role="dialog"]')?.textContent?.includes('不会自动备份当前改动'));
+click('确认重置');
 assert(!state().tasks.find(t=>t.id===finalizedTaskId)?.isFinalized,'confirmed reset must restore the preset');
 let unexpectedUpdates=0;
 const renderAudit=(data:typeof readyForFinalization)=>act(()=>root.render(<AuditAndExportStage task={data} activeRole="主笔甲" onUpdateTask={()=>unexpectedUpdates++}/>));
