@@ -698,7 +698,10 @@ export function resolveDraftFactEvidence(
   const effectiveLocation = effectiveSnippet?.location || '段落索引';
 
   const hasSnapshotDiff = Boolean(
-    snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)
+    snapItem && latestFact && (
+      (snapItem.selectedConflictValue || snapItem.value) !== (latestFact.selectedConflictValue || latestFact.value) ||
+      snapItem.unit !== latestFact.unit
+    )
   );
   const hasPeriodDiff = Boolean(
     snapItem && snapItem.period && snapItem.period !== fact.period

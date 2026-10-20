@@ -510,8 +510,20 @@ export function validateFinalizationConditions(
     applicableDraftIds.add(lineage.id);
     lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
   }
-  const reviewBase = task.drafts.find(d => d.id === task.reviewBaseDraftId);
-  if (reviewBase && (applicableDraftIds.has(reviewBase.id) || (reviewBase.sourceDraftId && applicableDraftIds.has(reviewBase.sourceDraftId)))) applicableDraftIds.add(reviewBase.id);
+  // Every submitted review baseline on this lineage remains applicable after a
+  // later round is opened. A new round must not silently discard open opinions.
+  let addedReviewBase = true;
+  while (addedReviewBase) {
+    addedReviewBase = false;
+    for (const version of task.drafts) {
+      if ((version.isHistoricalSnapshot || version.id === task.reviewBaseDraftId) &&
+          version.sourceDraftId && applicableDraftIds.has(version.sourceDraftId) &&
+          !applicableDraftIds.has(version.id)) {
+        applicableDraftIds.add(version.id);
+        addedReviewBase = true;
+      }
+    }
+  }
   const unclosedComments = task.reviewComments.filter((c) => {
     const isUnclosed =
       c.status === 'pending' ||

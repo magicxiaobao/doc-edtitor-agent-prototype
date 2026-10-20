@@ -12,6 +12,20 @@ export interface ParagraphRevisionOptions {
   sourceComment?: ReviewComment;
 }
 
+// Include units supplied by facts as well as common demo metrics. Longest units
+// come first so e.g. 人次 is not truncated to 人, and custom units stay visible.
+function extractRevisionMetrics(text: string, options?: ParagraphRevisionOptions): string[] {
+  const units = [...new Set([
+    '人次', '场次', '万元', '亿元', '分钟', '小时', '公里', '平方米', '吨',
+    '项', '场', '次', '人', '个', '家', '件', '条', '篇', '套', '户', '台', '元', '名', '宗', '起', '%', '％',
+    ...(options?.task?.facts.map(f => f.unit) || []),
+    ...(options?.currentDraft?.snapshotMetadata?.factSnapshot?.items?.map(f => f.unit) || []),
+  ].map(unit => unit.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+  const pattern = units.map(unit => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return [...text.matchAll(new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:${pattern})`, 'g'))]
+    .map(match => match[0].replace(/\s+/g, ''));
+}
+
 /**
  * Deterministic hash/fingerprint of paragraph content to detect manual modifications
  */
@@ -394,7 +408,7 @@ export function generateParagraphRevision(
   let unsupportedPromptNotice: string | undefined;
 
   // Extract all numbers with their following Chinese units (e.g. 25场, 800人次, 128项, 12次)
-  const numbersWithUnits = originalText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
+  const numbersWithUnits = extractRevisionMetrics(originalText, options);
 
   const sourceComment = options?.sourceComment;
   const interpretation = interpretReviewCommentSuggestion(sourceComment);
@@ -404,8 +418,8 @@ export function generateParagraphRevision(
   // Case 1: Reviewer explicitly provided a replacement draft
   if (interpretation.isReplacement && interpretation.replacementText) {
     suggestedText = interpretation.replacementText;
-    const origNumbers = originalText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
-    const replNumbers = interpretation.replacementText.match(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|项|场|次|人|个|家|件|条|篇|套|户|台|元|%)/g) || [];
+    const origNumbers = numbersWithUnits;
+    const replNumbers = extractRevisionMetrics(interpretation.replacementText, options);
     const hasDataDiff = origNumbers.join(',') !== replNumbers.join(',');
 
     if (hasDataDiff) {
@@ -601,8 +615,9 @@ export function generateParagraphRevision(
 
   // Safety invariant check: every single number + unit from original must remain in suggestedText!
   if (!isUnsupportedPrompt && !interpretation.isReplacement) {
+    const suggestedMetrics = extractRevisionMetrics(suggestedText, options);
     numbersWithUnits.forEach((nu) => {
-      if (!suggestedText.includes(nu)) {
+      if (!suggestedMetrics.includes(nu)) {
         // If regex or replacement accidentally dropped it, restore original
         suggestedText = originalText;
         diffExplanation = `核验发现改写可能会丢失关键指标“${nu}”，已自动保护原始数据口径。本次正文未变化。`;

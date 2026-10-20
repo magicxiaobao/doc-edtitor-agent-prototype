@@ -6,7 +6,8 @@ import {createPresetTask} from './src/services/mockData';
 import {findDraftFact,resolveDraftFactEvidence} from './src/services/factLifecycleService';
 import {MaterialEvidenceList} from './src/components/MaterialEvidenceList';
 import {SnippetDrawer} from './src/components/SnippetDrawer';
-import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft} from './src/services/draftLifecycleService';
+import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft,submitDraftForReview} from './src/services/draftLifecycleService';
+import {generateParagraphRevision} from './src/services/mockDraftService';
 import {exportDocumentAsTxt,safeDownloadName} from './src/services/exportService';
 import type {DraftVersion,EvidenceSnippet,Fact,AdoptedEvidenceRecord} from './src/types';
 const task=createPresetTask('under_review');
@@ -23,6 +24,13 @@ show();
 const value=(label:string)=>[...host.querySelectorAll('span')].find(el=>el.textContent===label)?.parentElement?.textContent;
 assert(value('稿件冻结采用值')?.includes('120 项'));
 assert(value('任务最新核准值')?.includes('999 项'));
+fact.value=frozen.value;fact.selectedConflictValue='128';show();
+assert(value('稿件冻结采用值')?.includes('120 项'));
+assert(value('任务最新核准值')?.includes('128 项'));
+assert(host.textContent?.includes('版本差异提示'));
+assert.equal(resolveDraftFactEvidence(fact,history,task).hasSnapshotDiff,true);
+fact.selectedConflictValue=frozen.selectedConflictValue;
+assert.equal(resolveDraftFactEvidence(fact,history,task).hasSnapshotDiff,false);
 task.facts=task.facts.filter(f=>f.id!==fact.id);show();
 assert(value('稿件冻结采用值')?.includes('120 项'));
 assert(host.textContent?.includes('任务中已删除此事实'));
@@ -48,6 +56,24 @@ fresh.reviewComments=[{id:'OLD-OPINION',type:'overall',targetVersionId:unrelated
 assert.equal(validateFinalizationConditions(fresh,draft.id,'主笔甲').checks.commentsClosed,true);
 fresh.reviewComments[0].targetVersionId=draft.id;
 assert.equal(validateFinalizationConditions(fresh,draft.id,'主笔甲').checks.commentsClosed,false);
+const roundOne=submitDraftForReview({...fresh,reviewComments:[]},draft.id,'主笔甲');
+const oldOpinion={...fresh.reviewComments[0],targetVersionId:roundOne.baselineSnapshot!.id};
+const roundTwo=submitDraftForReview({...roundOne.updatedTask,reviewComments:[oldOpinion]},draft.id,'主笔甲');
+assert.notEqual(roundTwo.updatedTask.reviewBaseDraftId,oldOpinion.targetVersionId);
+for(const status of ['pending','accepted_pending_implementation','need_discussion'] as const) {
+ const reviewTask={...roundTwo.updatedTask,reviewComments:[{...oldOpinion,status}]};
+ assert.equal(validateFinalizationConditions(reviewTask,draft.id,'主笔甲').checks.commentsClosed,false,`earlier round ${status} must block`);
+}
+assert.equal(validateFinalizationConditions({...roundTwo.updatedTask,reviewComments:[{...oldOpinion,status:'rejected',decisionReason:'已经核实无需修改'}]},draft.id,'主笔甲').checks.commentsClosed,true);
+const metricTask=structuredClone(fresh);
+metricTask.facts[0].unit='亩';
+for(const [unit,before,after] of [['公里','100','200'],['吨','50','80'],['名','30','40'],['亩','3','5']] as const) {
+ const block={...draft.blocks[0],content:`本期完成${before}${unit}。`};
+ const replacement={...oldOpinion,type:'paragraph' as const,suggestionType:'replacement' as const,suggestedChange:`本期完成${after}${unit}。`};
+ const suggestion=generateParagraphRevision(block,'custom',fresh.id,draft.id,'METRIC-RUN',{task:metricTask,currentDraft:draft,sourceComment:replacement});
+ assert.equal(suggestion.suggestedText,replacement.suggestedChange);
+ assert(suggestion.needsVerificationNotes?.some(n=>n.includes(`${before}${unit}`)&&n.includes(`${after}${unit}`)),`must warn on ${unit}`);
+}
 fresh.reviewComments=[];draft.blocks=[{...draft.blocks[0],content:'累计完成重点任务128项。',referencedFactIds:['FACT-01']}];
 const finalized=finalizeDraft(fresh,draft.id,'主笔甲');assert(finalized.success,finalized.error);
 const finalHash=finalized.finalDraft!.snapshotMetadata!.factSnapshot!.hash;
