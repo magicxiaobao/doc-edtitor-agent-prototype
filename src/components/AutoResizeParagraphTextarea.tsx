@@ -34,12 +34,30 @@ export const AutoResizeParagraphTextarea: React.FC<AutoResizeParagraphTextareaPr
     const el = textareaRef.current;
     if (!el) return;
 
-    // Reset height to let scrollHeight accurately calculate based on container width & wrapping
-    el.style.height = 'auto';
-    const scrollHeight = el.scrollHeight;
+    const width = el.getBoundingClientRect().width;
+    if (!width || !el.parentElement) return;
 
-    if (scrollHeight > 0) {
-      el.style.height = `${scrollHeight}px`;
+    // Never collapse the visible paragraph just to measure it: that can clamp
+    // the document scroll position before its final height is restored.
+    const measurement = el.cloneNode(false) as HTMLTextAreaElement;
+    measurement.removeAttribute('id');
+    measurement.removeAttribute('data-testid');
+    measurement.setAttribute('aria-hidden', 'true');
+    measurement.tabIndex = -1;
+    measurement.value = el.value;
+    Object.assign(measurement.style, {
+      position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
+      top: '0', left: '0', width: `${width}px`, height: '0',
+      minHeight: '0', maxHeight: 'none', overflow: 'hidden',
+    });
+    el.parentElement.appendChild(measurement);
+    try {
+      const scrollHeight = measurement.scrollHeight;
+      if (scrollHeight > 0 && el.style.height !== `${scrollHeight}px`) {
+        el.style.height = `${scrollHeight}px`;
+      }
+    } finally {
+      measurement.remove();
     }
   }, []);
 

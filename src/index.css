@@ -40,6 +40,9 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
+  /* Panel toggles restore the visible paragraph explicitly; avoid a second
+     browser scroll-anchor adjustment during the same reflow. */
+  overflow-anchor: none;
 }
 
 .drafting-panel-sticky {
