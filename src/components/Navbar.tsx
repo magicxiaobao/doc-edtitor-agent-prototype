@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useLayoutEffect, useRef } from 'react';
 import { ConfirmActionModal } from './ConfirmActionModal';
 import { UserRole, Task } from '../types';
 import { 
@@ -36,9 +36,24 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [showSandboxBar, setShowSandboxBar] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const app = header?.parentElement;
+    if (!header || !app) return;
+    const updateHeight = () => app.style.setProperty('--app-header-height', `${header.getBoundingClientRect().height || 64}px`);
+    updateHeight();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateHeight) : null;
+    observer?.observe(header);
+    return () => {
+      observer?.disconnect();
+      app.style.removeProperty('--app-header-height');
+    };
+  }, [showSandboxBar]);
 
   return (
-    <header className="sticky top-0 z-40 shadow-sm border-b border-slate-800">
+    <header ref={headerRef} className="sticky top-0 z-40 shadow-sm border-b border-slate-800">
       {/* 1. Main Official Application Navigation Bar */}
       <div className="bg-slate-900 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
