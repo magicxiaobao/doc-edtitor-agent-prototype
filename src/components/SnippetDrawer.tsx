@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task } from '../types';
+import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task, AdoptedEvidenceRecord } from '../types';
 import { X, FileText, Calendar, MapPin, Tag, AlertTriangle, ChevronDown, CheckCircle2 } from 'lucide-react';
 import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 
@@ -8,6 +8,7 @@ interface SnippetDrawerProps {
   documents: SourceDocument[];
   onClose: () => void;
   fact?: Fact | null;
+  adoptedEvidence?: AdoptedEvidenceRecord | null;
   currentDraft?: DraftVersion | null;
   task?: Task | null;
 }
@@ -17,6 +18,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   documents,
   onClose,
   fact,
+  adoptedEvidence,
   currentDraft,
   task,
 }) => {
@@ -26,7 +28,6 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
   const doc = snippet ? documents.find((d) => d.id === snippet.sourceDocId) : undefined;
 
-  const adoptedEvidence = !fact && snippet ? currentDraft?.blocks.flatMap(b => b.adoptedEvidences || []).find(e => e.evidenceId === snippet.id && e.snippetText === snippet.text) : undefined;
   // Retrieve fact object if snippet passed without fact
   const resolvedFact =
     fact ||

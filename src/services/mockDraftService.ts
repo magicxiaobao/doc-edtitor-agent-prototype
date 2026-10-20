@@ -22,8 +22,9 @@ function extractRevisionMetrics(text: string, options?: ParagraphRevisionOptions
     ...(options?.currentDraft?.snapshotMetadata?.factSnapshot?.items?.map(f => f.unit) || []),
   ].map(unit => unit.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
   const pattern = units.map(unit => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return [...text.matchAll(new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:${pattern})`, 'g'))]
-    .map(match => match[0].replace(/\s+/g, ''));
+  const number = '[+\\-−]?\\s*(?:\\d{1,3}(?:[,，]\\d{3})+|\\d+)(?:\\.\\d+)?';
+  return [...text.matchAll(new RegExp(`(${number})\\s*(${pattern})`, 'g'))]
+    .map(match => `${Number(match[1].replace(/[,，\s]/g, '').replace('−', '-'))}${match[2].replace('％', '%')}`);
 }
 
 /**

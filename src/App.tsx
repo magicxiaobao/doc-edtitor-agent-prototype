@@ -5,6 +5,7 @@ import {
   UserRole, 
   EvidenceSnippet,
   Fact,
+  AdoptedEvidenceRecord,
   ReviewNavigationIntent 
 } from './types';
 import { createPresetTask } from './services/mockData';
@@ -42,11 +43,13 @@ export function App() {
 
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
   const [viewingFact, setViewingFact] = useState<Fact | null>(null);
+  const [viewingAdoptedEvidence, setViewingAdoptedEvidence] = useState<AdoptedEvidenceRecord | null>(null);
   const [reviewNavIntent, setReviewNavIntent] = useState<ReviewNavigationIntent | null>(null);
 
-  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact) => {
+  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => {
     setViewingSnippet(snippet);
     setViewingFact(fact || null);
+    setViewingAdoptedEvidence(adoptedEvidence || null);
   };
 
   // Requirement 8: Clear navigation intent ONLY when switching to a different task to prevent cross-task leakage
@@ -55,7 +58,7 @@ export function App() {
   useEffect(() => {
     if (previousTaskIdRef.current !== currentTaskId) {
       setReviewNavIntent(null);
-      setViewingSnippet(null); setViewingFact(null);
+      setViewingSnippet(null); setViewingFact(null); setViewingAdoptedEvidence(null);
       previousTaskIdRef.current = currentTaskId;
     }
   }, [currentTaskId]);
@@ -306,7 +309,7 @@ export function App() {
           <MaterialsAndFactsStage
             task={currentTask}
             onUpdateTask={handleUpdateCurrentTask}
-            onViewSnippet={setViewingSnippet}
+            onViewSnippet={handleOpenSnippetDrawer}
             onProceedToNextStage={() => handleProceedStage('style_outline')}
             activeRole={activeRole}
           />
@@ -360,10 +363,12 @@ export function App() {
       <SnippetDrawer
         snippet={viewingSnippet}
         fact={viewingFact}
+        adoptedEvidence={viewingAdoptedEvidence}
         documents={currentTask.documents}
         onClose={() => {
           setViewingSnippet(null);
           setViewingFact(null);
+          setViewingAdoptedEvidence(null);
         }}
         task={currentTask}
         currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId)}

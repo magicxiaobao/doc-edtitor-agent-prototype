@@ -10,7 +10,7 @@ export interface MaterialEvidenceListProps {
   isCurrentDraftImmutable: boolean;
   inspectingFactId: string | null;
   onClearInspectingFactId?: () => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
 }
 
 export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
@@ -337,7 +337,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                           location: ev.snippetLocation || '采纳冻结片段',
                           period: ev.period,
                           text: ev.snippetText,
-                        }
+                        }, undefined, ev
                       )
                     }
                     className="text-sm text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"

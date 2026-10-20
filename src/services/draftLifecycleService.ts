@@ -25,6 +25,14 @@ import {
   arePeriodsStrictlyIdentical
 } from './materialSupplementService';
 
+function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
+  if (Array.isArray(draft.reviewBaselineIds)) return [...draft.reviewBaselineIds];
+  // Compatibility for old drafts: only direct review rounds of this draft,
+  // never all descendants of a mutable ancestor shared with another branch.
+  return task.drafts.filter(d => d.sourceDraftId === draft.id &&
+    (d.id.startsWith('DRAFT-SNAP-REV-') || d.id === task.reviewBaseDraftId)).map(d => d.id);
+}
+
 /**
  * Compares two adopted evidence records for exact semantic equivalence.
  * Detects modifications to snippet text, documents, periods, usage, or metrics
@@ -200,6 +208,7 @@ export function acceptDraftCandidate(
     isHistoricalSnapshot: false,
     isWorkingDraft: true,
     sourceDraftId: currentDraft?.id,
+    reviewBaselineIds: currentDraft ? getReviewBaselineIds(task, currentDraft) : [],
     snapshotMetadata: candidate.snapshotMetadata || currentDraft?.snapshotMetadata,
     auditRecords: currentDraft?.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
   };
@@ -332,6 +341,7 @@ export function applyDraftContentChange(
       isHistoricalSnapshot: false,
       isWorkingDraft: true,
       sourceDraftId: targetDraft.id, // 记录来源版本ID
+      reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
       snapshotMetadata: newSnapshotMetadata || targetDraft.snapshotMetadata,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     };
@@ -510,20 +520,9 @@ export function validateFinalizationConditions(
     applicableDraftIds.add(lineage.id);
     lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
   }
-  // Every submitted review baseline on this lineage remains applicable after a
-  // later round is opened. A new round must not silently discard open opinions.
-  let addedReviewBase = true;
-  while (addedReviewBase) {
-    addedReviewBase = false;
-    for (const version of task.drafts) {
-      if ((version.isHistoricalSnapshot || version.id === task.reviewBaseDraftId) &&
-          version.sourceDraftId && applicableDraftIds.has(version.sourceDraftId) &&
-          !applicableDraftIds.has(version.id)) {
-        applicableDraftIds.add(version.id);
-        addedReviewBase = true;
-      }
-    }
-  }
+  // Content branches retain their own review history. Shared mutable ancestors
+  // do not prove that later sibling snapshots belong to the restored content.
+  if (targetDraft) getReviewBaselineIds(task, targetDraft).forEach(id => applicableDraftIds.add(id));
   const unclosedComments = task.reviewComments.filter((c) => {
     const isUnclosed =
       c.status === 'pending' ||
@@ -625,6 +624,7 @@ export function finalizeDraft(
     isWorkingDraft: false,
     finalizedAt: new Date().toISOString(),
     sourceDraftId: currentDraft.id,
+    reviewBaselineIds: getReviewBaselineIds(task, currentDraft),
     snapshotMetadata: currentDraft.snapshotMetadata ? JSON.parse(JSON.stringify(currentDraft.snapshotMetadata)) : undefined,
     auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
     frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结定稿时刻的审阅记录快照
@@ -683,6 +683,7 @@ export function createDraftSnapshot(
     isHistoricalSnapshot: true,
     isWorkingDraft: false,
     sourceDraftId: targetDraft.id,
+    reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
     snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
     auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
@@ -730,6 +731,7 @@ export function restoreDraftVersion(
     isHistoricalSnapshot: false,
     isWorkingDraft: true,
     sourceDraftId: sourceDraft.id,
+    reviewBaselineIds: getReviewBaselineIds(task, sourceDraft),
     snapshotMetadata: sourceDraft.snapshotMetadata ? JSON.parse(JSON.stringify(sourceDraft.snapshotMetadata)) : undefined,
     auditRecords: sourceDraft.auditRecords ? JSON.parse(JSON.stringify(sourceDraft.auditRecords)) : [],
   };
@@ -787,6 +789,7 @@ export function submitDraftForReview(
       isHistoricalSnapshot: true,
       isWorkingDraft: false,
       sourceDraftId: targetDraft.id,
+      reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
       snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
       frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
@@ -795,6 +798,11 @@ export function submitDraftForReview(
   }
 
   const reviewBaseId = baselineSnapshot?.id || targetDraft.id;
+  if (baselineSnapshot) {
+    const reviewBaselineIds = [...new Set([...getReviewBaselineIds(task, targetDraft), reviewBaseId])];
+    targetDraft = { ...targetDraft, reviewBaselineIds };
+    updatedDrafts = updatedDrafts.map(d => d.id === targetDraft!.id ? targetDraft! : d);
+  }
   const nextRound = (task.currentReviewRound || 0) + 1;
 
   const updatedTask: Task = {

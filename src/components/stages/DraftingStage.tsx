@@ -15,6 +15,7 @@ import {
   ReviewComment,
   ReviewCommentStatus,
   Fact,
+  AdoptedEvidenceRecord,
   ReviewNavigationIntent
 } from '../../types';
 import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
@@ -110,7 +111,7 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;

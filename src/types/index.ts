@@ -323,6 +323,7 @@ export interface DraftVersion {
   isHistoricalSnapshot?: boolean;
   isWorkingDraft?: boolean;
   sourceDraftId?: string; // 记录派生此工作稿的来源历史版本/定稿快照ID
+  reviewBaselineIds?: string[]; // 此内容分支实际经历的审阅基准，保存快照时一并冻结
   auditRecords?: AuditRecord[];
   snapshotMetadata?: SnapshotMetadata;
   frozenReviewComments?: ReviewComment[]; // 冻结的历史审阅记录快照（防止后续意见混入旧版本）
