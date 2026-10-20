@@ -675,7 +675,11 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                           issue.type === 'metric_unit' ? '计量单位口径不符（人次/人数）' :
                           issue.type === 'historic_data_leak' ? '历史年份数据外泄' :
                           issue.type === 'gap_missing' ? '定性线索缺乏正式量化出处' :
-                          '数值未登记匹配出处'
+                          issue.type === 'unverified_sentence' ? '表述缺少可核验依据' :
+                          issue.type === 'unreferenced_number' ? '数值未登记匹配出处' :
+                          issue.type === 'period_mismatch' ? '统计期间不一致' :
+                          issue.type === 'unit_inconsistency' ? '计量单位不一致' :
+                          issue.type === 'unverified_statement' ? '表述缺少可核验依据' : '其他核校提示'
                         }
                       </span>
                     </div>

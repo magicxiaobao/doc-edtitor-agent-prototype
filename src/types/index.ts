@@ -296,6 +296,7 @@ export interface ParagraphModificationLog {
   status: 'applied' | 'undone';        // 状态：已应用 / 已安全撤销
   undoneAt?: string;                   // 撤销时间
   undoneBy?: string;                   // 撤销操作人
+  undoUnavailableReason?: string;
   undoReason?: string;                 // 撤销原因/说明
 }
 

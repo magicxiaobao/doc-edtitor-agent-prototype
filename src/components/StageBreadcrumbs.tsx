@@ -22,11 +22,11 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
   task,
   onSelectStage,
 }) => {
-  const hasConflictPending = task.facts.some((f) => f.hasConflict && !f.selectedConflictValue);
+  const hasConflictPending = task.facts.some((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded');
   const factsConfirmed = !!task.factSnapshot;
   const outlineConfirmed = task.outlineConfirmed;
   const hasDraft = task.drafts.length > 0;
-  const hasPendingComments = task.reviewComments.some((c) => c.status === 'pending');
+  const hasPendingComments = task.reviewComments.some((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status));
 
   const stages: {
     id: TaskStage;
@@ -79,7 +79,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
       label: '审阅协作',
       icon: MessageSquare,
       isAccessible: true,
-      badgeText: hasPendingComments ? `${task.reviewComments.filter((c) => c.status === 'pending').length}条待处理` : '已阅',
+      badgeText: hasPendingComments ? `${task.reviewComments.filter((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length}条待处理` : '已阅',
       badgeType: hasPendingComments ? 'warning' : 'success',
     },
     {
@@ -146,7 +146,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
           {hasConflictPending && (
             <div className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-              <span>发现1项口径冲突需裁决 (120 vs 128)</span>
+              <span>发现 {task.facts.filter(f => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded').length} 项口径冲突需裁决</span>
             </div>
           )}
           <span className="text-slate-400 text-xs">
