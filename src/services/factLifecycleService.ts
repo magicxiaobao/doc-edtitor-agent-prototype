@@ -595,6 +595,7 @@ export interface ResolvedDraftFactEvidence {
 
   // Task current latest confirmed values
   currentConfirmedValue: string;
+  isCurrentFactDeleted: boolean;
   currentPeriod: string;
   currentMetricScope: string;
   currentEvidenceId?: string;
@@ -726,9 +727,10 @@ export function resolveDraftFactEvidence(
     effectiveDocName,
     effectiveLocation,
     currentConfirmedValue,
-    currentPeriod: fact.period,
-    currentMetricScope: fact.metricScope || '标准口径',
-    currentEvidenceId: fact.primaryEvidenceId,
+    isCurrentFactDeleted: !latestFact,
+    currentPeriod: latestFact ? latestFact.period : '当前事实已删除',
+    currentMetricScope: latestFact ? latestFact.metricScope || '标准口径' : '当前事实已删除',
+    currentEvidenceId: latestFact?.primaryEvidenceId,
     currentSnippet,
     currentDocName,
     currentLocation,

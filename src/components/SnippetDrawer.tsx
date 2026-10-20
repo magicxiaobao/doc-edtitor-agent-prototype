@@ -52,6 +52,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   const snapItem = resolvedData ? resolvedData.snapItem : null;
   const hasSnapshotDiff = resolvedData ? resolvedData.hasSnapshotDiff : false;
   const hasFrozenItem = resolvedData ? resolvedData.hasFrozenItem : false;
+  const isCurrentFactDeleted = resolvedData?.isCurrentFactDeleted || false;
   const adoptedValue = resolvedData
     ? resolvedData.adoptedValue
     : resolvedFact
@@ -133,7 +134,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                     : 'bg-amber-100 text-amber-800'
                 }`}
               >
-                {resolvedFact.status === 'confirmed' ? '当前已核准' : '待确认'}
+                {isCurrentFactDeleted ? '当前事实已删除' : resolvedFact.status === 'confirmed' ? '当前已核准' : '待确认'}
               </span>
             </div>
 
@@ -166,7 +167,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   {currentConfirmedValue}
                 </span>
                 <span className="text-xs text-slate-400 block font-normal">
-                  期间：{resolvedFact.period} · 口径：{resolvedFact.metricScope || '标准口径'}
+                    期间：{resolvedData?.currentPeriod || resolvedFact.period} · 口径：{resolvedData?.currentMetricScope || resolvedFact.metricScope || '标准口径'}
                 </span>
               </div>
             </div>
@@ -193,7 +194,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   冻结统计口径：<strong className="text-slate-700 font-medium">{frozenMetricScope}</strong>
                 </div>
               )}
-              {resolvedFact.metricScope && (
+              {!isCurrentFactDeleted && resolvedFact.metricScope && (
                 <div>
                   {isHistoricalOrFinal && frozenMetricScope ? '当前最新统计口径：' : '统计口径：'}
                   <strong className="text-slate-700 font-medium">{resolvedFact.metricScope}</strong>

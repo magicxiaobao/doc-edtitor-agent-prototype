@@ -13,7 +13,8 @@ import { checkPermission, canFinalize as canFinalizeRole } from '../../services/
 import { 
   validateFinalizationConditions, 
   finalizeDraft, 
-  applyDraftContentChange 
+  applyDraftContentChange,
+  getDraftReviewComments
 } from '../../services/draftLifecycleService';
 import { 
   CheckCircle2, 
@@ -92,7 +93,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const isAuthor = validation.checks.isAuthor;
   const isUpstreamValid = validation.checks.isUpstreamValid;
   const pendingConflictsCount = task.facts.filter((f) => f.hasConflict && !f.selectedConflictValue && f.status !== 'excluded').length;
-  const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation' || c.status === 'need_discussion').length;
+  const pendingCommentsCount = getDraftReviewComments(task, currentDraft).filter((c) => c.status === 'pending' || c.status === 'accepted_pending_implementation' || c.status === 'need_discussion').length;
   
   // Critical audit issues that are blocking and unresolved
   const criticalAuditIssuesCount = auditIssues.filter(
@@ -922,11 +923,9 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                   <h4 className="font-bold text-xs text-slate-700">【附：审阅意见与落实处理记录预览】</h4>
                   {(() => {
                     const isSnapshot = Boolean(selectedExportDraft?.isHistoricalSnapshot || selectedExportDraft?.isFinal);
-                    const commentsToShow: ReviewComment[] = isSnapshot
-                      ? (selectedExportDraft?.frozenReviewComments || (selectedExportDraft as any)?.snapshotMetadata?.reviewCommentsSnapshot?.items || [])
-                      : task.reviewComments;
+                    const commentsToShow = getDraftReviewComments(task, selectedExportDraft);
 
-                    if (isSnapshot && (!commentsToShow || commentsToShow.length === 0)) {
+                    if (isSnapshot && selectedExportDraft?.frozenReviewComments === undefined) {
                       return (
                         <div className="p-3 bg-amber-50 rounded border border-amber-200 text-xs text-amber-900 italic">
                           【提示】：该历史版本保存时未冻结审阅意见记录，无法还原当时审阅状态。

@@ -53,6 +53,13 @@ export function getApplicableReviewComments(task: Task, draft: DraftVersion): Re
   });
 }
 
+export function getDraftReviewComments(task: Task, draft: DraftVersion | undefined): ReviewComment[] {
+  if (!draft) return [];
+  return draft.isHistoricalSnapshot || draft.isFinal
+    ? draft.frozenReviewComments || []
+    : getApplicableReviewComments(task, draft);
+}
+
 function freezeReviewComments(task: Task, draft: DraftVersion): ReviewComment[] | undefined {
   // Re-saving a read-only version must preserve its original time boundary.
   const comments = draft.isHistoricalSnapshot || draft.isFinal

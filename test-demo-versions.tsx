@@ -6,6 +6,8 @@ import {createPresetTask} from './src/services/mockData';
 import {findDraftFact,resolveDraftFactEvidence} from './src/services/factLifecycleService';
 import {MaterialEvidenceList} from './src/components/MaterialEvidenceList';
 import {SnippetDrawer} from './src/components/SnippetDrawer';
+import {DraftingStage} from './src/components/stages/DraftingStage';
+import {AuditAndExportStage} from './src/components/stages/AuditAndExportStage';
 import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft,submitDraftForReview,restoreDraftVersion,applyDraftContentChange} from './src/services/draftLifecycleService';
 import {generateParagraphRevision} from './src/services/mockDraftService';
 import {exportDocumentAsTxt,safeDownloadName} from './src/services/exportService';
@@ -42,6 +44,16 @@ const orphanResolution=resolveDraftFactEvidence(orphanFact,orphanWorking,task);
 assert.equal(orphanResolution.effectiveSnippet?.id,'EVD-01');
 assert.equal(orphanResolution.currentSnippet,null);
 assert(orphanResolution.currentConfirmedValue.includes('已删除'));
+assert.equal(orphanResolution.isCurrentFactDeleted,true);
+assert.equal(orphanResolution.currentPeriod,'当前事实已删除');
+assert.equal(orphanResolution.currentMetricScope,'当前事实已删除');
+assert.equal(orphanResolution.currentEvidenceId,undefined);
+const latestInfo=[...host.querySelectorAll('span')].find(el=>el.textContent==='任务当前最新核准信息：')!.parentElement!;
+assert(latestInfo.textContent?.includes('已删除'));assert(!latestInfo.textContent?.includes(frozen.period));
+act(()=>root.render(<SnippetDrawer snippet={orphanResolution.effectiveSnippet} fact={orphanFact} documents={task.documents} task={task} currentDraft={orphanWorking} onClose={()=>{}}/>));
+assert(host.textContent?.includes('当前事实已删除'));assert(!host.textContent?.includes('待确认'));
+const drawerLatest=[...host.querySelectorAll('span')].find(el=>el.textContent==='任务最新核准值')!.parentElement!;
+assert(!drawerLatest.textContent?.includes(frozen.period));assert(!drawerLatest.textContent?.includes(frozen.metricScope||'标准口径'));
 const evidence:AdoptedEvidenceRecord={evidenceId:'EVD-03',sourceDocId:task.snippets.find(s=>s.id==='EVD-03')!.sourceDocId,sourceDocName:'采用时材料名称',snippetLocation:'第1段',period:'2026年1至9月',usage:'current_fact',snippetText:'采用时保存的原文。',contentFingerprint:'DEMO-FROZEN',capturedAt:new Date().toISOString()};
 history.blocks[0].adoptedEvidences=[evidence];
 task.snippets.find(s=>s.id==='EVD-03')!.text='后来修改的材料原文。';
@@ -120,6 +132,19 @@ try {
   assert(log.includes(ownOpinion.content));assert(log.includes(unknownOpinion.content));assert(!log.includes('旁支'),'export must not mix sibling reviews');
  }
 } finally {URL.createObjectURL=originalDownloadURL;}
+// Workbench counts, actions and preview must share the same scope as finalization/download.
+act(()=>root.render(<DraftingStage task={scopedTask} activeRole="主笔甲" initialInspectorTab="review_comments" onUpdateTask={()=>{}} onViewSnippet={()=>{}} onProceedToNextStage={()=>{}}/>));
+assert(host.textContent?.includes(ownOpinion.content));assert(!host.textContent?.includes('旁支'),'drafting must not expose sibling actions');
+act(()=>root.render(<AuditAndExportStage task={scopedTask} activeRole="主笔甲" onUpdateTask={()=>{}}/>));
+assert(!host.textContent?.includes('条待办(阻断)'),'sibling pending comments must not inflate finalization count');
+const exportTab=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('定稿文件真实导出'))!;assert(exportTab);act(()=>exportTab.click());
+assert(host.textContent?.includes(ownOpinion.content));assert(!host.textContent?.includes('旁支'),'working preview must match download scope');
+const emptyFrozen={...scopedSaved.snapshotDraft,id:'EMPTY-REVIEW-SNAPSHOT',frozenReviewComments:[]};
+const previewTask={...scopedTask,drafts:[...scopedTask.drafts,emptyFrozen]};
+act(()=>root.render(<AuditAndExportStage task={previewTask} activeRole="主笔甲" onUpdateTask={()=>{}}/>));
+const versionSelect=host.querySelector<HTMLSelectElement>('#export-version-select')!;assert(versionSelect);
+act(()=>{versionSelect.value=emptyFrozen.id;versionSelect.dispatchEvent(new Event('change',{bubbles:true}));});
+assert(!host.textContent?.includes('无法还原当时审阅状态'),'recorded empty review list is not missing provenance');
 // Review rounds that actually preceded a saved snapshot remain inherited after restore.
 const savedAfterRound=createDraftSnapshot(roundTwo.updatedTask,draft.id,'已有审阅的快照','主笔甲');
 const inheritedRestore=restoreDraftVersion({...savedAfterRound.updatedTask,reviewComments:[oldOpinion]},savedAfterRound.snapshotDraft.id,'主笔甲');

@@ -73,7 +73,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                       : 'bg-amber-100 text-amber-800'
                   }`}
                 >
-                  {!task.facts.some(f => f.id === fact.id) ? '当前事实已删除' : fact.status === 'confirmed' ? '当前已核准' : '待确认'}
+                  {resolved.isCurrentFactDeleted ? '当前事实已删除' : fact.status === 'confirmed' ? '当前已核准' : '待确认'}
                 </span>
               </div>
 
