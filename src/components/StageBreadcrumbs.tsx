@@ -1,5 +1,6 @@
 import React from 'react';
 import { Task, TaskStage } from '../types';
+import { getApplicableReviewComments } from '../services/draftLifecycleService';
 import { 
   FileEdit, 
   Database, 
@@ -26,7 +27,11 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
   const factsConfirmed = !!task.factSnapshot;
   const outlineConfirmed = task.outlineConfirmed;
   const hasDraft = task.drafts.length > 0;
-  const hasPendingComments = task.reviewComments.some((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status));
+  const currentDraft = task.drafts.find(d => d.id === task.currentDraftId) || task.drafts[0];
+  // This badge opens the live review workspace, including new baseline opinions.
+  const reviewComments = currentDraft ? getApplicableReviewComments(task, currentDraft) : [];
+  const pendingCommentsCount = reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length;
+  const hasPendingComments = pendingCommentsCount > 0;
 
   const stages: {
     id: TaskStage;
@@ -79,7 +84,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
       label: '审阅协作',
       icon: MessageSquare,
       isAccessible: true,
-      badgeText: hasPendingComments ? `${task.reviewComments.filter((c) => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length}条待处理` : '已阅',
+      badgeText: hasPendingComments ? `${pendingCommentsCount}条待处理` : '已阅',
       badgeType: hasPendingComments ? 'warning' : 'success',
     },
     {
