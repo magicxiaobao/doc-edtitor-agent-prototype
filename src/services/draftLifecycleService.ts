@@ -33,8 +33,7 @@ function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
     (d.id.startsWith('DRAFT-SNAP-REV-') || d.id === task.reviewBaseDraftId)).map(d => d.id);
 }
 
-/** One scope for finalization, frozen review records and working-draft exports. */
-export function getApplicableReviewComments(task: Task, draft: DraftVersion): ReviewComment[] {
+function getApplicableReviewDraftIds(task: Task, draft: DraftVersion): Set<string> {
   const applicableDraftIds = new Set<string>(getReviewBaselineIds(task, draft));
   const visited = new Set<string>();
   let lineage: DraftVersion | undefined = draft;
@@ -43,6 +42,12 @@ export function getApplicableReviewComments(task: Task, draft: DraftVersion): Re
     applicableDraftIds.add(lineage.id);
     lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
   }
+  return applicableDraftIds;
+}
+
+/** One scope for finalization, frozen review records and working-draft exports. */
+export function getApplicableReviewComments(task: Task, draft: DraftVersion): ReviewComment[] {
+  const applicableDraftIds = getApplicableReviewDraftIds(task, draft);
   return task.reviewComments.filter(comment => {
     // A rebind replaces the active target; targetVersionId remains original evidence.
     const targetId = comment.rebindRecord?.targetDraftId || comment.targetVersionId;
@@ -51,6 +56,12 @@ export function getApplicableReviewComments(task: Task, draft: DraftVersion): Re
     if (!task.drafts.some(d => d.id === targetId)) return true;
     return !draft.sourceDraftId && !task.reviewBaseDraftId && !Array.isArray(draft.reviewBaselineIds);
   });
+}
+
+export function resolveCurrentReviewBase(task: Task, draft: DraftVersion | undefined): DraftVersion | undefined {
+  if (!draft) return undefined;
+  const base = task.drafts.find(d => d.id === task.reviewBaseDraftId);
+  return base && getApplicableReviewDraftIds(task, draft).has(base.id) ? base : draft;
 }
 
 export function getDraftReviewComments(task: Task, draft: DraftVersion | undefined): ReviewComment[] {

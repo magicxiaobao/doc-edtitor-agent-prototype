@@ -8,7 +8,8 @@ import {MaterialEvidenceList} from './src/components/MaterialEvidenceList';
 import {SnippetDrawer} from './src/components/SnippetDrawer';
 import {DraftingStage} from './src/components/stages/DraftingStage';
 import {AuditAndExportStage} from './src/components/stages/AuditAndExportStage';
-import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft,submitDraftForReview,restoreDraftVersion,applyDraftContentChange} from './src/services/draftLifecycleService';
+import {ReviewStage} from './src/components/stages/ReviewStage';
+import {createDraftSnapshot,validateFinalizationConditions,finalizeDraft,submitDraftForReview,restoreDraftVersion,applyDraftContentChange,resolveCurrentReviewBase} from './src/services/draftLifecycleService';
 import {generateParagraphRevision} from './src/services/mockDraftService';
 import {exportDocumentAsTxt,safeDownloadName} from './src/services/exportService';
 import {rebindReviewCommentTargetBlock} from './src/services/reviewCoordinationService';
@@ -145,6 +146,25 @@ act(()=>root.render(<AuditAndExportStage task={previewTask} activeRole="主笔�
 const versionSelect=host.querySelector<HTMLSelectElement>('#export-version-select')!;assert(versionSelect);
 act(()=>{versionSelect.value=emptyFrozen.id;versionSelect.dispatchEvent(new Event('change',{bubbles:true}));});
 assert(!host.textContent?.includes('无法还原当时审阅状态'),'recorded empty review list is not missing provenance');
+assert.equal(resolveCurrentReviewBase(scopedTask,scopedDraft)?.id,scopedDraft.id,'stale sibling review base must not receive new A comments');
+const submittedA=submitDraftForReview(scopedTask,scopedDraft.id,'主笔甲');
+const reviewTask={...submittedA.updatedTask,reviewComments:[...submittedA.updatedTask.reviewComments.map(c=>c.id===ownOpinion.id?{...c,status:'pending' as const}:c),{...ownOpinion,id:'OWN-REVIEW-2',content:'本分支第二条意见',status:'pending' as const}]};
+let reviewUpdates=0;
+const renderReview=(data:typeof reviewTask,key='branch-review')=>act(()=>root.render(<ReviewStage key={key} task={data} activeRole="主笔甲" onUpdateTask={()=>reviewUpdates++} onProceedToNextStage={()=>{}}/>));
+renderReview(reviewTask);
+assert(host.textContent?.includes(ownOpinion.content));assert(!host.textContent?.includes('旁支'),'review feed must exclude sibling opinions after resubmitting A');
+assert(host.textContent?.includes('意见总数：3 条（待处理 2 条）'));
+const coordinate=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('协调裁决此冲突'))!;assert(coordinate);act(()=>coordinate.click());
+const selector=host.querySelector('fieldset')!;assert(selector);assert.equal(selector.querySelectorAll('input').length,2);assert(!selector.textContent?.includes('旁支'));
+renderReview(reviewTask,'reply-scope');
+const reject=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('拒绝并说明理由'))!;assert(reject);act(()=>reject.click());
+const movedTask={...reviewTask,reviewComments:reviewTask.reviewComments.map(c=>c.id===ownOpinion.id?{...c,targetVersionId:siblingOpinion.targetVersionId}:c)};
+renderReview(movedTask,'reply-scope');
+const decisionForm=[...host.querySelectorAll('form')].find(f=>f.textContent?.includes('确认处理决定'))!;assert(decisionForm);
+const originalAlert=globalThis.alert;let scopeWarning='';globalThis.alert=message=>{scopeWarning=String(message);};
+try {act(()=>decisionForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));}
+finally {globalThis.alert=originalAlert;}
+assert(scopeWarning.includes('不适用于当前版本'));assert.equal(reviewUpdates,0,'stale modal must not change a comment moved onto another branch');
 // Review rounds that actually preceded a saved snapshot remain inherited after restore.
 const savedAfterRound=createDraftSnapshot(roundTwo.updatedTask,draft.id,'已有审阅的快照','主笔甲');
 const inheritedRestore=restoreDraftVersion({...savedAfterRound.updatedTask,reviewComments:[oldOpinion]},savedAfterRound.snapshotDraft.id,'主笔甲');
