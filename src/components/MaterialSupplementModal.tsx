@@ -228,7 +228,7 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
     const admission = validateMaterialForSupplementation(task, snip);
     const doc = (task.documents || []).find((d) => d.id === snip.sourceDocId);
     const relatedFact = (task.facts || []).find(
-      (f) => f.primaryEvidenceId === snip.id || f.evidenceIds?.includes(snip.id) || (doc && f.sourceDocId === doc.id)
+      (f) => f.status === 'confirmed' && !f.isHistoricOnly && (f.primaryEvidenceId === snip.id || f.evidenceIds?.includes(snip.id))
     );
 
     // Early quantitative claim verification against fact base
@@ -334,6 +334,10 @@ export const MaterialSupplementModal: React.FC<MaterialSupplementModalProps> = (
       }
 
       setIsGenerating(false);
+      if (suggestion.isUnsupportedPrompt) {
+        setGenerationError(suggestion.unsupportedPromptNotice || suggestion.diffExplanation);
+        return;
+      }
       onSupplementSuccess(suggestion);
       onClose();
     } catch (err: any) {

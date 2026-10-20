@@ -307,9 +307,10 @@ export function validateSelectedMaterialsQuantitativeClaims(
     const maskedText = maskDateAndPeriodPatterns(text);
 
     // Match numbers with units on masked text
-    const matches = maskedText.match(/\d+(?:\.\d+)?[\u4e00-\u9fa5%]{1,4}/g) || [];
+    const matches = maskedText.matchAll(/\d+(?:\.\d+)?(?:人次|场次|万元|亿元|分钟|小时|项|场|次|人|个|家|件|条|篇|套|户|台|元|吨|%|[\u4e00-\u9fa5%]{1,4})/g);
 
-    for (const match of matches) {
+    for (const occurrence of matches) {
+      const match = occurrence[0];
       // Filter out calendar years and dates and locations
       if (/^\d{4}年$/.test(match)) continue;
       if (/^\d{1,2}月$/.test(match)) continue;
@@ -329,7 +330,7 @@ export function validateSelectedMaterialsQuantitativeClaims(
       if (['年', '月份', '季度', '段', '页', '批次', '步'].includes(unit)) continue;
 
       // Extract clause around match
-      const matchIdx = snip.text.indexOf(match);
+      const matchIdx = occurrence.index!;
       const textBefore = matchIdx >= 0 ? snip.text.slice(Math.max(0, matchIdx - 60), matchIdx) : '';
       const textAfter = matchIdx >= 0 ? snip.text.slice(matchIdx + match.length, Math.min(snip.text.length, matchIdx + match.length + 60)) : '';
       const surroundingContext = `${textBefore}${match}${textAfter}`;
@@ -340,7 +341,7 @@ export function validateSelectedMaterialsQuantitativeClaims(
         snipEffectivePeriod.match(/\d{4}年/)?.[0] ||
         doc?.period?.match(/\d{4}年/)?.[0] ||
         (task.startDate ? `${task.startDate.slice(0, 4)}年` : undefined);
-      const clausePeriodInfo = extractClausePeriod(snip.text, match, fallbackYear);
+      const clausePeriodInfo = extractClausePeriod(snip.text, match, fallbackYear, matchIdx);
 
       // If multiple conflicting periods exist in the clause/sentence and attribution cannot be determined, prompt manual verification
       if (clausePeriodInfo.isAmbiguous) {
@@ -764,16 +765,17 @@ export function generateMaterialSupplementation(
     const doc = task.documents.find((d) => d.id === snip.sourceDocId);
     const matchedFact = task.facts.find(
       (f) =>
+        f.status === 'confirmed' && !f.isHistoricOnly &&
         (f.primaryEvidenceId === snip.id || (Array.isArray(f.evidenceIds) && f.evidenceIds.includes(snip.id))) &&
         arePeriodsStrictlyIdentical(f.period || '', snip.period || doc?.period || '')
     );
     return {
       evidenceId: snip.id,
       sourceDocId: snip.sourceDocId,
-      sourceDocName: snip.docName || doc?.name || '材料来源',
+      sourceDocName: snip.docName?.trim() || doc?.name.trim() || '材料来源',
       snippetLocation: snip.location,
       snippetText: snip.text,
-      period: snip.period || doc?.period || '本统计期间',
+      period: snip.period?.trim() || doc?.period.trim() || '',
       usage: doc?.usage || 'current_fact',
       associatedFactId: matchedFact?.id,
       metric: matchedFact?.metric,
