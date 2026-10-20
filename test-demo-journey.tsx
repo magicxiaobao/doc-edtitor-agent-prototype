@@ -78,6 +78,13 @@ assert(!runDocumentAudit(task(),[{...gapBlock,content:'服务满意度未见提�
 for(const content of ['服务满意度仍有提升空间。','服务满意度亟待提升。','服务满意度有待提高。','服务满意度将进一步提升。','力争服务满意度显著提升。','未观察到服务满意度显著提升。','服务满意度提升不明显。','服务满意度提高不显著。','服务满意度有所提升不明显。','尚未有证据表明服务满意度显著提升','缺乏服务满意度显著提升的依据','服务满意度显著提升的依据尚待补充']) {
   assert(!runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).some(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`),`no achieved satisfaction outcome: ${content}`);
 }
+for(const connector of ['可以','可']) {
+  const denied=`没有充分证据${connector}表明服务满意度显著提升`;
+  const contradicted=`没有充分证据${connector}表明上期成效但本期服务满意度显著提升`;
+  const audit=(content:string)=>runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).find(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`);
+  assert(!audit(denied),`evidence denial governs the claim: ${denied}`);
+  assert.equal(audit(contradicted)?.originalText,contradicted);
+}
 click('提交本轮审阅');click('确认提交并进入审阅');
 click('审阅乙');click('提出审阅意见');
 act(()=>{(host.querySelectorAll<HTMLInputElement>('input[name="cmtType"]')[1]).click();});
