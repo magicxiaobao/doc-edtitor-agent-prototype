@@ -280,8 +280,25 @@ export function runDocumentAudit(
     // -------------------------------------------------------------
     // Check 5: Unverified Sentences / Qualitative Claims without Hard Evidence
     // -------------------------------------------------------------
-    const hasQualitativeContent = block.content.includes('服务满意度') || block.content.includes('满意度明显提升');
-    if (hasQualitativeContent) {
+    // Evidence caveats do not negate an achieved-outcome claim. Scope exclusions
+    // to the outcome phrase and its immediate qualifiers, rather than the whole clause.
+    const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause => {
+      const outcomes = clause.matchAll(/(?:服务)?满意度(?:(?!满意度|但|然而|不过|却)[^。！？；，,\n]){0,16}?(?:(?:明显|显著|持续|稳步|有所|大幅|进一步|已经|已)(?:提升|提高|改善|上升)|(?:提升|提高|改善|上升)(?:了|明显|显著))/g);
+      return [...outcomes].some(outcome => {
+        const before = clause.slice(0, outcome.index);
+        const after = clause.slice(outcome.index! + outcome[0].length);
+        const negated = /(?:尚未|并未|没有|未能|未见|未有|未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+          /(?:尚未|并未|没有|未能|未见|未有|未)(?:发现|观察到|看到|实现)?$/.test(before) ||
+          /^(?:不明显|不显著|不足)/.test(after);
+        const deferred = /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)[^但。！？；，,\n]{0,8}(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+          /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)(?:实现|推动|促进)?$/.test(before) ||
+          /^(?:的)?空间/.test(after);
+        const evidenceDenied = /(?:缺乏|缺少|尚缺|暂缺|尚无|暂无|没有|未有|尚未有|尚未取得|未取得)(?:关于|相关|量化|充分|足够|可靠|明确|任何|正式)*(?:证据|依据|材料|报告|数据)?(?:(?:能够|可以|能|可)?(?:表明|证明|支持|显示)(?:(?!但|然而|不过|却|满意度)[^。！？；，,\n]){0,32})?$/.test(before) ||
+          /^的(?:量化)?(?:依据|证据|材料|报告|数据)(?:尚|仍|暂)?(?:缺|未|无|待)/.test(after);
+        return !negated && !deferred && !evidenceDenied;
+      });
+    })?.trim();
+    if (satisfactionClaim) {
       const hasQuantitativeEvidence = activeFacts.some(
         (f) => f.metric.includes('满意度') && f.value && f.value !== '暂缺' && !f.value.includes('定性')
       );
@@ -297,7 +314,7 @@ export function runDocumentAudit(
           severity: 'warning',
           isBlocking: false,
           location: locationDesc,
-          originalText: '服务满意度明显提升',
+          originalText: satisfactionClaim,
           evidenceText: '知识库RAG检索仅提供定性问答线索（CLUE-01），当前无具体量化测评报告或出处台账。',
           suggestion: '该成效表述未能可靠验证，已标注“待人工核实”。建议在文稿中补充说明为定性线索，或在事实清单补充正式依据，不伪称核校通过。',
           status: 'unresolved',
