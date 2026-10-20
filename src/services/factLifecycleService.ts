@@ -679,6 +679,13 @@ export function resolveDraftFactEvidence(
       effectiveEvidenceId = undefined;
       effectiveSnippet = null;
     }
+  } else if (!latestFact && snapItem) {
+    effectivePeriod = snapItem.period || '未记录期间';
+    effectiveMetricScope = snapItem.metricScope || '无单独口径';
+    effectiveEvidenceId = snapItem.primaryEvidenceId;
+    effectiveSnippet = effectiveEvidenceId ? task.snippets.find(s => s.id === effectiveEvidenceId) || null : null;
+    isEvidenceMissingInSnapshot = !effectiveEvidenceId;
+    isEvidencePrunedOrUnavailable = Boolean(effectiveEvidenceId && !effectiveSnippet);
   } else {
     effectivePeriod = fact.period;
     effectiveMetricScope = fact.metricScope || '标准口径';

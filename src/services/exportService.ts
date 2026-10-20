@@ -130,7 +130,7 @@ export function exportDocumentAsTxt(
   if (opts.includeEvidence && !opts.includeBody) {
     content += `【事实依据清单与出处溯源】\n----------------------------------------------------\n`;
     if (meta?.factSnapshot?.items && meta.factSnapshot.items.length > 0) {
-      meta.factSnapshot.items.forEach((item, idx) => {
+      exportFacts.forEach((item, idx) => {
         content += `${idx + 1}. [${item.factId}] ${item.metric}：${item.value}${item.unit} | 期间：${item.period} | 口径：${item.metricScope} (主出处：${item.primaryEvidenceId || '台账'})\n`;
       });
     } else if (exportFacts.length > 0) {

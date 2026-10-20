@@ -55,6 +55,7 @@ export function App() {
   useEffect(() => {
     if (previousTaskIdRef.current !== currentTaskId) {
       setReviewNavIntent(null);
+      setViewingSnippet(null); setViewingFact(null);
       previousTaskIdRef.current = currentTaskId;
     }
   }, [currentTaskId]);

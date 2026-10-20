@@ -75,6 +75,10 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const [ignoreError, setIgnoreError] = useState<string | null>(null);
   const ignoreInputRef = useRef<HTMLTextAreaElement>(null);
 
+  useEffect(() => {
+    setIgnoringIssue(null); setIgnoreReasonInput(''); setIgnoreError(null);
+  }, [task.id, currentDraft?.id, activeRole]);
+
   // Target draft for export
   const selectedExportDraft = task.drafts.find((d) => d.id === exportVersionId) || currentDraft;
 
@@ -208,7 +212,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
   const handleConfirmIgnore = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ignoringIssue || !currentDraft) return;
-    if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || !checkPermission(activeRole, 'edit_draft').allowed || ignoringIssue.isBlocking || ignoringIssue.draftId !== currentDraft.id) { setIgnoreError('当前版本只读、无处理权限或该问题不可忽略，请返回工作稿处理'); return; }
+    if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || !checkPermission(activeRole, 'edit_draft').allowed || ignoringIssue.isBlocking || ignoringIssue.draftId !== currentDraft.id || ignoringIssue.taskId !== task.id) { setIgnoreError('当前版本只读、无处理权限或该问题不可忽略，请返回工作稿处理'); return; }
 
 
     if (!ignoreReasonInput.trim()) {
