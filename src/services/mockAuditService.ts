@@ -283,17 +283,20 @@ export function runDocumentAudit(
     // Evidence caveats do not negate an achieved-outcome claim. Scope exclusions
     // to the outcome phrase and its immediate qualifiers, rather than the whole clause.
     const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause => {
-      const outcome = clause.match(/(?:服务)?满意度[^。！？；，,\n]{0,16}?(?:(?:明显|显著|持续|稳步|有所|大幅|进一步|已经|已)(?:提升|提高|改善|上升)|(?:提升|提高|改善|上升)(?:了|明显|显著))/);
-      if (!outcome) return false;
-      const before = clause.slice(0, outcome.index);
-      const after = clause.slice(outcome.index! + outcome[0].length);
-      const negated = /(?:尚未|并未|没有|未能|未见|未有|未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(outcome[0]) ||
-        /(?:尚未|并未|没有|未能|未见|未有|未)(?:发现|观察到|看到|实现)?$/.test(before) ||
-        /^(?:不明显|不显著|不足)/.test(after);
-      const deferred = /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)[^但。！？；，,\n]{0,8}(?:提升|提高|改善|上升)/.test(outcome[0]) ||
-        /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)(?:实现|推动|促进)?$/.test(before) ||
-        /^(?:的)?空间/.test(after);
-      return !negated && !deferred;
+      const outcomes = clause.matchAll(/(?:服务)?满意度(?:(?!满意度|但|然而|不过|却)[^。！？；，,\n]){0,16}?(?:(?:明显|显著|持续|稳步|有所|大幅|进一步|已经|已)(?:提升|提高|改善|上升)|(?:提升|提高|改善|上升)(?:了|明显|显著))/g);
+      return [...outcomes].some(outcome => {
+        const before = clause.slice(0, outcome.index);
+        const after = clause.slice(outcome.index! + outcome[0].length);
+        const negated = /(?:尚未|并未|没有|未能|未见|未有|未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+          /(?:尚未|并未|没有|未能|未见|未有|未)(?:发现|观察到|看到|实现)?$/.test(before) ||
+          /^(?:不明显|不显著|不足)/.test(after);
+        const deferred = /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)[^但。！？；，,\n]{0,8}(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+          /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)(?:实现|推动|促进)?$/.test(before) ||
+          /^(?:的)?空间/.test(after);
+        const evidenceDenied = /(?:缺乏|缺少|尚缺|暂缺|尚无|暂无|没有|未有|尚未有|尚未取得|未取得)(?:关于|相关|量化|充分|足够|可靠|明确|任何|正式)*(?:证据|依据|材料|报告|数据)?(?:能够|能)?(?:表明|证明|支持|显示)?$/.test(before) ||
+          /^的(?:量化)?(?:依据|证据|材料|报告|数据)(?:尚|仍|暂)?(?:缺|未|无|待)/.test(after);
+        return !negated && !deferred && !evidenceDenied;
+      });
     })?.trim();
     if (satisfactionClaim) {
       const hasQuantitativeEvidence = activeFacts.some(

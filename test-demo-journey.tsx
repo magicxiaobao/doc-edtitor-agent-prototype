@@ -69,14 +69,14 @@ assert(!runDocumentAudit(task(),working().blocks,workingId).some(i=>i.originalTe
 const positive={...gapBlock,content:'经反馈，服务满意度显著提升。'};
 const warning=runDocumentAudit(task(),[positive],workingId).find(i=>i.type==='unverified_sentence');
 assert.equal(warning?.originalText,'服务满意度显著提升');
-for(const content of ['服务满意度提升明显','服务满意度提高显著','尚未取得量化报告但服务满意度显著提升','服务满意度有所提升但缺乏量化依据']) {
-  assert.equal(runDocumentAudit(task(),[{...gapBlock,content}],workingId).find(i=>i.type==='unverified_sentence')?.originalText,content);
+for(const content of ['服务满意度提升明显','服务满意度提高显著','尚未取得量化报告但服务满意度显著提升','服务满意度有所提升但缺乏量化依据','满意度未见提升但本期服务满意度显著提升','服务满意度未见显著提升但本期服务满意度显著提升']) {
+  assert.equal(runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).find(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`)?.originalText,content);
 }
 const qualified={...gapBlock,content:'服务满意度虽然定性感受有所提升，但目前尚缺少定量数据测评体系支撑。'};
 assert.equal(runDocumentAudit(task(),[qualified],workingId).find(i=>i.type==='unverified_sentence')?.originalText,'服务满意度虽然定性感受有所提升');
 assert(!runDocumentAudit(task(),[{...gapBlock,content:'服务满意度未见提升。'}],workingId).some(i=>i.type==='unverified_sentence'));
-for(const content of ['服务满意度仍有提升空间。','服务满意度亟待提升。','服务满意度有待提高。','服务满意度将进一步提升。','力争服务满意度显著提升。','未观察到服务满意度显著提升。','服务满意度提升不明显。','服务满意度提高不显著。','服务满意度有所提升不明显。']) {
-  assert(!runDocumentAudit(task(),[{...gapBlock,content}],workingId).some(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`),`no achieved satisfaction outcome: ${content}`);
+for(const content of ['服务满意度仍有提升空间。','服务满意度亟待提升。','服务满意度有待提高。','服务满意度将进一步提升。','力争服务满意度显著提升。','未观察到服务满意度显著提升。','服务满意度提升不明显。','服务满意度提高不显著。','服务满意度有所提升不明显。','尚未有证据表明服务满意度显著提升','缺乏服务满意度显著提升的依据','服务满意度显著提升的依据尚待补充']) {
+  assert(!runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).some(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`),`no achieved satisfaction outcome: ${content}`);
 }
 click('提交本轮审阅');click('确认提交并进入审阅');
 click('审阅乙');click('提出审阅意见');
