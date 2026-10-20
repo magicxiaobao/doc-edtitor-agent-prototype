@@ -79,11 +79,14 @@ for(const content of ['服务满意度仍有提升空间。','服务满意度亟
   assert(!runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).some(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`),`no achieved satisfaction outcome: ${content}`);
 }
 for(const connector of ['可以','可']) {
-  const denied=`没有充分证据${connector}表明服务满意度显著提升`;
-  const contradicted=`没有充分证据${connector}表明上期成效但本期服务满意度显著提升`;
   const audit=(content:string)=>runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).find(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`);
-  assert(!audit(denied),`evidence denial governs the claim: ${denied}`);
-  assert.equal(audit(contradicted)?.originalText,contradicted);
+  for(const period of ['','本期','本年度','2026年']) {
+    const denied=`没有充分证据${connector}表明${period}服务满意度显著提升`;
+    assert(!audit(denied),`evidence denial governs the claim: ${denied}`);
+  }
+  for(const contrasted of [`没有充分证据${connector}表明上期成效但本期服务满意度显著提升`,`没有充分证据${connector}表明上期服务满意度显著提升但本期服务满意度显著提升`]) {
+    assert.equal(audit(contrasted)?.originalText,contrasted);
+  }
 }
 click('提交本轮审阅');click('确认提交并进入审阅');
 click('审阅乙');click('提出审阅意见');
