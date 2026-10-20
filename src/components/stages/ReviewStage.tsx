@@ -1,5 +1,5 @@
 import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Task, 
   ReviewComment, 
@@ -22,7 +22,7 @@ import {
   rebindReviewCommentTargetBlock,
   interpretReviewCommentSuggestion
 } from '../../services/reviewCoordinationService';
-import { applyDraftContentChange } from '../../services/draftLifecycleService';
+import { applyDraftContentChange, getApplicableReviewComments, resolveCurrentReviewBase } from '../../services/draftLifecycleService';
 import { 
   MessageSquare, 
   UserCheck, 
@@ -63,7 +63,14 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   onNavigateToDraftComment,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
-  const reviewBaseDraft = (task.reviewBaseDraftId ? task.drafts.find((d) => d.id === task.reviewBaseDraftId) : undefined) || currentDraft;
+  const reviewBaseDraft = resolveCurrentReviewBase(task, currentDraft);
+  // This is the live review workspace; frozen history remains in the version views.
+  const activeReviewComments = useMemo(() => currentDraft ? getApplicableReviewComments(task, currentDraft) : [], [task, currentDraft]);
+  const ensureApplicableComment = (id: string) => {
+    if (activeReviewComments.some(c => c.id === id)) return true;
+    alert('该意见不适用于当前版本，请返回当前分支处理');
+    return false;
+  };
   const currentReviewRound = task.currentReviewRound || 1;
 
   // Comment filter
@@ -97,7 +104,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   // Contradiction resolution panel state (Compress to 2000 words vs Add 2 cases)
   const [showContradictionModal, setShowContradictionModal] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
-  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
+  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => activeReviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
   const [strategyReason, setStrategyReason] = useState(
     '综合两位审阅领导意见：在第一部分压缩常规动员铺垫约300字，同时以提炼式短句补充基层专项调研代表性成效，控制全篇在2500字左右。'
   );
@@ -109,15 +116,15 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     setSelectedBlockId(reviewBaseDraft?.blocks[0]?.id || currentDraft?.blocks[0]?.id || '');
     setShowAddCommentModal(false); setReplyingComment(null); setImplementingComment(null); setRebindingComment(null); setShowContradictionModal(false);
     setNewCommentContent(''); setNewCommentSuggestion(''); setReplyText('');
-    setCoordinationCommentIds(task.reviewComments.filter(c => ['pending','accepted_pending_implementation','need_discussion'].includes(c.status)).slice(0,2).map(c => c.id));
-  }, [task.id, reviewBaseDraft?.id, activeRole]);
+    setCoordinationCommentIds(activeReviewComments.filter(c => ['pending','accepted_pending_implementation','need_discussion'].includes(c.status)).slice(0,2).map(c => c.id));
+  }, [task.id, currentDraft?.id, reviewBaseDraft?.id, activeRole]);
   // Counts calculated dynamically from reviewComments
-  const totalComments = task.reviewComments.length;
-  const pendingCommentsCount = task.reviewComments.filter((c) => c.status === 'pending').length;
-  const acceptedPendingCount = task.reviewComments.filter((c) => c.status === 'accepted_pending_implementation').length;
-  const implementedCount = task.reviewComments.filter((c) => c.status === 'implemented').length;
-  const needDiscussionCount = task.reviewComments.filter((c) => c.status === 'need_discussion').length;
-  const rejectedCount = task.reviewComments.filter((c) => c.status === 'rejected').length;
+  const totalComments = activeReviewComments.length;
+  const pendingCommentsCount = activeReviewComments.filter((c) => c.status === 'pending').length;
+  const acceptedPendingCount = activeReviewComments.filter((c) => c.status === 'accepted_pending_implementation').length;
+  const implementedCount = activeReviewComments.filter((c) => c.status === 'implemented').length;
+  const needDiscussionCount = activeReviewComments.filter((c) => c.status === 'need_discussion').length;
+  const rejectedCount = activeReviewComments.filter((c) => c.status === 'rejected').length;
 
   const handleAddComment = (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,6 +177,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       return;
     }
     if (!replyingComment) return;
+    if (!ensureApplicableComment(replyingComment.id)) return;
 
     try {
       const {updatedTask} = updateReviewCommentDecision(task, replyingComment.id, replyAction, replyText.trim(), activeRole);
@@ -181,6 +189,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
   // Open modal to view original vs suggestion and implement into text
   const handleOpenImplementModal = (cmt: ReviewComment) => {
+    if (!ensureApplicableComment(cmt.id)) return;
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可采纳落实审阅建议');
@@ -229,6 +238,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       return;
     }
     if (!implementingComment || !currentDraft) return;
+    if (!ensureApplicableComment(implementingComment.id)) return;
 
     try {
       // Use shared implementation service: enforces target exists, base content unchanged, and zero diff rejected!
@@ -263,6 +273,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   // Rebind comment target block
   const handleConfirmRebind = () => {
     if (!rebindingComment || !currentDraft || !rebindTargetBlockId) return;
+    if (!ensureApplicableComment(rebindingComment.id)) return;
     try {
       const res = rebindReviewCommentTargetBlock(
         task,
@@ -286,6 +297,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
   // Reconcile contradictory comments (CMT-01 & CMT-02)
   const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
+    if (coordinationCommentIds.some(id => !ensureApplicableComment(id))) return;
     if (coordinationCommentIds.length < 2) { alert('请明确选择至少两条需要协调的意见'); return; }
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
@@ -433,7 +445,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       </div>
 
       {/* Contradictory comments banner */}
-      {task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length >= 2 && (
+      {activeReviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length >= 2 && (
         <div className="bg-amber-50 border-2 border-amber-400 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
           <div className="space-y-1">
             <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
@@ -461,7 +473,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             <div className="flex items-center gap-2">
               <span className="font-bold text-xs text-slate-800">全部审阅意见清单</span>
               <span className="text-xs bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono">
-                {task.reviewComments.length}
+                {activeReviewComments.length}
               </span>
             </div>
 
@@ -471,7 +483,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                 onChange={(e) => setCommentFilter(e.target.value as any)}
                 className="border border-slate-300 rounded px-2 py-1 bg-white text-slate-700 text-xs"
               >
-                <option value="all">全部状态 ({task.reviewComments.length})</option>
+                <option value="all">全部状态 ({activeReviewComments.length})</option>
                 <option value="pending">待处理 ({pendingCommentsCount})</option>
                 <option value="accepted_pending_implementation">决定采纳·待落实 ({acceptedPendingCount})</option>
                 <option value="implemented">已修改/已落实 ({implementedCount})</option>
@@ -493,7 +505,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
           {/* Comments Feed */}
           <div className="space-y-3">
-            {task.reviewComments
+            {activeReviewComments
               .filter((c) => {
                 if (commentFilter !== 'all' && c.status !== commentFilter) return false;
                 if (reviewerFilter !== 'all' && c.reviewer !== reviewerFilter) return false;
@@ -1155,7 +1167,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              <CoordinationOpinionSelector comments={task.reviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
+              <CoordinationOpinionSelector comments={activeReviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
 
               <div className="space-y-1">
                 <label className="font-semibold text-slate-700">请选择协调策略：</label>

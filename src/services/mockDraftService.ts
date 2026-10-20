@@ -1,3 +1,4 @@
+import { isPeriodWithinTaskPeriod } from './factLifecycleService';
 import { Task, ParagraphBlock, Fact, OutlineSection, DraftVersion, type RevisionAction, type RevisionSuggestion, type ReviewComment } from '../types';
 import { computeTextDiff } from './diffService';
 import { isValidAuthenticCase, interpretReviewCommentSuggestion } from './reviewCoordinationService';
@@ -9,6 +10,21 @@ export interface ParagraphRevisionOptions {
   task?: Task;
   currentDraft?: DraftVersion;
   sourceComment?: ReviewComment;
+}
+
+// Include units supplied by facts as well as common demo metrics. Longest units
+// come first so e.g. 人次 is not truncated to 人, and custom units stay visible.
+function extractRevisionMetrics(text: string, options?: ParagraphRevisionOptions): string[] {
+  const units = [...new Set([
+    '人次', '场次', '万元', '亿元', '分钟', '小时', '公里', '平方米', '吨',
+    '项', '场', '次', '人', '个', '家', '件', '条', '篇', '套', '户', '台', '元', '名', '宗', '起', '%', '％',
+    ...(options?.task?.facts.map(f => f.unit) || []),
+    ...(options?.currentDraft?.snapshotMetadata?.factSnapshot?.items?.map(f => f.unit) || []),
+  ].map(unit => unit.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
+  const pattern = units.map(unit => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const number = '[+\\-−]?\\s*(?:\\d{1,3}(?:[,，]\\d{3})+|\\d+)(?:\\.\\d+)?';
+  return [...text.matchAll(new RegExp(`(${number})\\s*(${pattern})`, 'g'))]
+    .map(match => `${Number(match[1].replace(/[,，\s]/g, '').replace('−', '-'))}${match[2].replace('％', '%')}`);
 }
 
 /**
@@ -79,13 +95,7 @@ export function isValidFactForDraft(fact: Fact, task: Task): boolean {
   }
 
   // Must belong to current statistical period (e.g. 2025 historic data cannot enter 2026 or 2027 draft)
-  if (task.startDate && fact.period) {
-    const taskYear = task.startDate.split('-')[0];
-    const factYearMatch = fact.period.match(/(\d{4})年/);
-    if (factYearMatch && factYearMatch[1] !== taskYear) {
-      return false;
-    }
-  }
+  if (!isPeriodWithinTaskPeriod(fact.period, task.startDate, task.endDate)) return false;
 
   // Must have original evidence snippet or explicit author supplementation
   if (!fact.primaryEvidenceId && !fact.isAuthorSupplemented) {
@@ -167,7 +177,7 @@ export function generateDraftFromFactsAndOutline(
     // Filter only valid confirmed facts assigned to this section
     const validAssignedFacts = task.facts.filter(
       (f) => assignedFactIds.includes(f.id) && isValidFactForDraft(f, task)
-    );
+    ).map(f => ({ ...f, value: f.selectedConflictValue || f.value }));
 
     // Case 1: No valid confirmed facts assigned to this section
     if (validAssignedFacts.length === 0) {
@@ -268,7 +278,7 @@ function buildSingleFactParagraph(
   instructionPrompt?: string
 ): ParagraphBlock {
   const fPeriod = fact.period || periodStr;
-  const val = fact.value;
+  const val = fact.selectedConflictValue || fact.value;
   const unit = fact.unit;
   const metric = fact.metric;
 
@@ -399,7 +409,7 @@ export function generateParagraphRevision(
   let unsupportedPromptNotice: string | undefined;
 
   // Extract all numbers with their following Chinese units (e.g. 25场, 800人次, 128项, 12次)
-  const numbersWithUnits = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+  const numbersWithUnits = extractRevisionMetrics(originalText, options);
 
   const sourceComment = options?.sourceComment;
   const interpretation = interpretReviewCommentSuggestion(sourceComment);
@@ -409,8 +419,8 @@ export function generateParagraphRevision(
   // Case 1: Reviewer explicitly provided a replacement draft
   if (interpretation.isReplacement && interpretation.replacementText) {
     suggestedText = interpretation.replacementText;
-    const origNumbers = originalText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
-    const replNumbers = interpretation.replacementText.match(/\d+(?:[.\d]+)?[\u4e00-\u9fa5]{1,3}/g) || [];
+    const origNumbers = numbersWithUnits;
+    const replNumbers = extractRevisionMetrics(interpretation.replacementText, options);
     const hasDataDiff = origNumbers.join(',') !== replNumbers.join(',');
 
     if (hasDataDiff) {
@@ -606,8 +616,9 @@ export function generateParagraphRevision(
 
   // Safety invariant check: every single number + unit from original must remain in suggestedText!
   if (!isUnsupportedPrompt && !interpretation.isReplacement) {
+    const suggestedMetrics = extractRevisionMetrics(suggestedText, options);
     numbersWithUnits.forEach((nu) => {
-      if (!suggestedText.includes(nu)) {
+      if (!suggestedMetrics.includes(nu)) {
         // If regex or replacement accidentally dropped it, restore original
         suggestedText = originalText;
         diffExplanation = `核验发现改写可能会丢失关键指标“${nu}”，已自动保护原始数据口径。本次正文未变化。`;

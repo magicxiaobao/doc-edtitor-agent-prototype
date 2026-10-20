@@ -63,7 +63,7 @@ export function runDocumentAudit(
         selectedConflictValue: item.selectedConflictValue || item.value,
       };
     });
-  } else if (task.facts && task.facts.length > 0) {
+  } else if (!targetDraft?.isHistoricalSnapshot && !targetDraft?.isFinal && task.facts && task.facts.length > 0) {
     activeFacts = task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map((f) => ({
       id: f.id,
       metric: f.metric,

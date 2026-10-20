@@ -24,6 +24,7 @@ import {
   EvidenceSnippet,
   TaskStage,
   Fact,
+  AdoptedEvidenceRecord,
 } from '../types';
 import { getReviewCommentLocation, interpretReviewCommentSuggestion } from '../services/reviewCoordinationService';
 import { ParagraphSuggestionEditor } from './ParagraphSuggestionEditor';
@@ -48,7 +49,7 @@ export interface DraftingInspectorContentProps {
   onChangeCommentReviewerFilter: (reviewer: 'all' | '审阅乙' | '审阅丁') => void;
   inspectingFactId: string | null;
   onClearInspectingFactId: () => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
   onSelectStage?: (stage: TaskStage) => void;
   onOpenContradictionModal: () => void;
   onOpenRebindModal: (comment: ReviewComment) => void;

@@ -595,6 +595,7 @@ export interface ResolvedDraftFactEvidence {
 
   // Task current latest confirmed values
   currentConfirmedValue: string;
+  isCurrentFactDeleted: boolean;
   currentPeriod: string;
   currentMetricScope: string;
   currentEvidenceId?: string;
@@ -618,6 +619,16 @@ export interface ResolvedDraftFactEvidence {
  * Unifies the resolution of statistical period, metric scope, and primary evidence ID
  * so historical drafts strictly display frozen values while latest values are explicitly labeled.
  */
+export function findDraftFact(task: Task, draft: DraftVersion | undefined, id: string): Fact | undefined {
+  const latest = task.facts.find(f => f.id === id);
+  if (latest) return latest;
+  const frozen = draft?.snapshotMetadata?.factSnapshot?.items?.find(f => f.factId === id);
+  if (!frozen) return undefined;
+  return { ...frozen, id, status: 'excluded', hasConflict: frozen.hasConflict || false,
+    conflictCandidates: frozen.conflictCandidates?.map(c => ({...c, evidenceId:c.evidenceId || '', sourceDocId:''})),
+    evidenceIds: frozen.primaryEvidenceId ? [frozen.primaryEvidenceId] : [], value: frozen.selectedConflictValue || frozen.value };
+}
+
 export function resolveDraftFactEvidence(
   fact: Fact,
   draft: DraftVersion | undefined,
@@ -630,14 +641,15 @@ export function resolveDraftFactEvidence(
   const hasFrozenItem = Boolean(snapItem);
 
   const adoptedValue = snapItem
-    ? `${snapItem.value} ${snapItem.unit}`
+    ? `${snapItem.selectedConflictValue || snapItem.value} ${snapItem.unit}`
     : isHistoricalOrFinal
     ? '历史快照未收录此事实'
-    : `${fact.value} ${fact.unit}`;
+    : `${fact.selectedConflictValue || fact.value} ${fact.unit}`;
 
-  const currentConfirmedValue = `${fact.value} ${fact.unit}`;
+  const latestFact = task.facts.find(f => f.id === fact.id);
+  const currentConfirmedValue = latestFact?.status === 'confirmed' ? `${latestFact.selectedConflictValue || latestFact.value} ${latestFact.unit}` : latestFact ? '当前未核准' : '任务中已删除此事实';
 
-  const currentSnippet = task.snippets.find((s) => s.id === fact.primaryEvidenceId) || null;
+  const currentSnippet = latestFact ? task.snippets.find((s) => s.id === latestFact.primaryEvidenceId) || null : null;
   const currentDoc = currentSnippet ? task.documents.find((d) => d.id === currentSnippet.sourceDocId) : undefined;
   const currentDocName = currentSnippet?.docName || currentDoc?.name || '未知材料文档';
   const currentLocation = currentSnippet?.location || '段落索引';
@@ -668,6 +680,13 @@ export function resolveDraftFactEvidence(
       effectiveEvidenceId = undefined;
       effectiveSnippet = null;
     }
+  } else if (!latestFact && snapItem) {
+    effectivePeriod = snapItem.period || '未记录期间';
+    effectiveMetricScope = snapItem.metricScope || '无单独口径';
+    effectiveEvidenceId = snapItem.primaryEvidenceId;
+    effectiveSnippet = effectiveEvidenceId ? task.snippets.find(s => s.id === effectiveEvidenceId) || null : null;
+    isEvidenceMissingInSnapshot = !effectiveEvidenceId;
+    isEvidencePrunedOrUnavailable = Boolean(effectiveEvidenceId && !effectiveSnippet);
   } else {
     effectivePeriod = fact.period;
     effectiveMetricScope = fact.metricScope || '标准口径';
@@ -680,7 +699,10 @@ export function resolveDraftFactEvidence(
   const effectiveLocation = effectiveSnippet?.location || '段落索引';
 
   const hasSnapshotDiff = Boolean(
-    snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)
+    snapItem && latestFact && (
+      (snapItem.selectedConflictValue || snapItem.value) !== (latestFact.selectedConflictValue || latestFact.value) ||
+      snapItem.unit !== latestFact.unit
+    )
   );
   const hasPeriodDiff = Boolean(
     snapItem && snapItem.period && snapItem.period !== fact.period
@@ -705,9 +727,10 @@ export function resolveDraftFactEvidence(
     effectiveDocName,
     effectiveLocation,
     currentConfirmedValue,
-    currentPeriod: fact.period,
-    currentMetricScope: fact.metricScope || '标准口径',
-    currentEvidenceId: fact.primaryEvidenceId,
+    isCurrentFactDeleted: !latestFact,
+    currentPeriod: latestFact ? latestFact.period : '当前事实已删除',
+    currentMetricScope: latestFact ? latestFact.metricScope || '标准口径' : '当前事实已删除',
+    currentEvidenceId: latestFact?.primaryEvidenceId,
     currentSnippet,
     currentDocName,
     currentLocation,

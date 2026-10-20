@@ -1,6 +1,6 @@
 import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
 import { DecisionNoteModal } from '../DecisionNoteModal';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Task, 
   TaskStage,
@@ -15,9 +15,10 @@ import {
   ReviewComment,
   ReviewCommentStatus,
   Fact,
+  AdoptedEvidenceRecord,
   ReviewNavigationIntent
 } from '../../types';
-import { resolveDraftFactEvidence } from '../../services/factLifecycleService';
+import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
   computeContentHash,
@@ -50,7 +51,8 @@ import {
   undoSafeParagraphModification,
   validateUndoEligibility,
   getRecentModificationLogs,
-  getLatestAppliedLogForDraft
+  getLatestAppliedLogForDraft,
+  getDraftReviewComments
 } from '../../services/draftLifecycleService';
 import { 
   computeTextDiff 
@@ -110,7 +112,7 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
@@ -132,6 +134,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 }) => {
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  const activeReviewComments = useMemo(() => getDraftReviewComments(task, currentDraft), [task, currentDraft]);
 
   // Collapsible panels
   const [showLeftNav, setShowLeftNav] = useState(true);
@@ -178,7 +181,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Contradiction resolution panel
   const [showContradictionModal, setShowContradictionModal] = useState(false);
   const [selectedStrategy, setSelectedStrategy] = useState<'compress_priority' | 'case_priority' | 'balanced'>('balanced');
-  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => task.reviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
+  const [coordinationCommentIds, setCoordinationCommentIds] = useState<string[]>(() => activeReviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).slice(0, 2).map(c => c.id));
   useEffect(() => { setShowContradictionModal(false); setCoordinationCommentIds([]); }, [task.id]);
 
   const [strategyReason, setStrategyReason] = useState(
@@ -189,8 +192,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(() => {
     if (navIntent && navIntent.taskId === task.id && navIntent.commentId) {
       const initDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
-      const isImmutable = Boolean(initDraft?.isHistoricalSnapshot || initDraft?.isFinal);
-      const comments = isImmutable ? (initDraft?.frozenReviewComments || []) : (task.reviewComments || []);
+      const comments = activeReviewComments;
       const cmt = comments.find((c) => c.id === navIntent.commentId);
       if (cmt && initDraft) {
         const resolved = resolveReviewNavigationContext(cmt, initDraft);
@@ -528,11 +530,6 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Active review comments associated with current draft:
   // If viewing historical snapshot or finalized draft, STRICTLY read frozen review comments;
   // If missing frozenReviewComments on a historical version, NEVER fallback to task.reviewComments (which would leak current comments into history)!
-  const activeReviewComments: ReviewComment[] =
-    isCurrentDraftImmutable
-      ? (currentDraft?.frozenReviewComments || [])
-      : (task.reviewComments || []);
-
   // Selected comment: STRICTLY query within activeReviewComments of the current version.
   // NEVER fallback to task.reviewComments to prevent polluting historical snapshots with current comments.
   const selectedComment = activeReviewComments.find((c) => c.id === selectedCommentId);
@@ -691,8 +688,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       if (!fact) return true;
       if (fact.status !== 'confirmed') return true;
       if (fact.isHistoricOnly) return true;
-      if (task.factSnapshot) {
-        const snapItem = task.factSnapshot.items?.find((item) => item.factId === fId);
+      if (currentDraft?.snapshotMetadata?.factSnapshot) {
+        const snapItem = currentDraft.snapshotMetadata.factSnapshot.items?.find((item) => item.factId === fId);
         if (snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)) {
           return true;
         }
@@ -1434,6 +1431,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Resolve contradiction between CMT-01 and CMT-02
   const handleResolveContradiction = (mode: 'strategy_only' | 'implement_now') => {
+    if (coordinationCommentIds.some(id => !activeReviewComments.some(c => c.id === id))) { alert('所选意见不适用于当前版本，请重新选择'); return; }
     if (coordinationCommentIds.length < 2) { alert('请明确选择至少两条需要协调的意见'); return; }
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
@@ -1550,7 +1548,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       );
       onUpdateTask({
         drafts: updatedTask.drafts,
-        currentDraftId: updatedTask.drafts[0].id,
+        currentDraftId: currentDraft.id,
       });
 
       setShowSaveVersionModal(false);
@@ -1589,6 +1587,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const currentCoordinationDiff = currentDraft ? generateCoordinationDiff(task, currentDraft, mappedStrategy) : null;
 
   const handleApplyCoordination = (mode: 'strategy_only' | 'implement_now') => {
+    if (coordinationCommentIds.some(id => !activeReviewComments.some(c => c.id === id))) { alert('所选意见不适用于当前版本，请重新选择'); return; }
     const perm = checkPermission(activeRole, 'resolve_comment');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可协调裁决篇幅冲突');
@@ -2828,7 +2827,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               </span>
                             )}
                             {block.referencedFactIds.map((factId) => {
-                              const fact = task.facts.find((f) => f.id === factId);
+                              const fact = findDraftFact(task, currentDraft, factId);
                               if (!fact) return null;
                               return (
                                 <button
@@ -2836,13 +2835,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    const snippet = task.snippets.find((s) => s.id === fact.primaryEvidenceId);
-                                    if (snippet) onViewSnippet(snippet);
+                                    const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
+                                    onViewSnippet(resolved.effectiveSnippet || { id: resolved.effectiveEvidenceId || '', sourceDocId: '', docName: '出处已不可用', location: '', period: resolved.effectivePeriod, text: '' }, fact);
                                   }}
                                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-100/90 text-blue-900 hover:bg-blue-200 font-medium cursor-pointer transition-colors text-xs"
                                   title={`点击反查材料出处：${fact.metric}`}
                                 >
-                                  <span>{fact.metric}: {fact.value}{fact.unit}</span>
+                                  <span>{currentDraft?.snapshotMetadata?.factSnapshot?.items?.find(f => f.factId === factId)?.metric || fact.metric}: {resolveDraftFactEvidence(fact, currentDraft, task).adoptedValue}</span>
                                   <ExternalLink className="w-3 h-3 opacity-70" />
                                 </button>
                               );
@@ -3588,7 +3587,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             </div>
 
             <div className="p-5 space-y-4 text-xs">
-              <CoordinationOpinionSelector comments={task.reviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
+              <CoordinationOpinionSelector comments={activeReviewComments} selected={coordinationCommentIds} onChange={setCoordinationCommentIds}/>
 
               <div className="space-y-2">
                 <label className="font-semibold text-slate-700 block">选择协调裁决策略：</label>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { ExternalLink, AlertTriangle } from 'lucide-react';
 import { Fact, Task, DraftVersion, ParagraphBlock, EvidenceSnippet, AdoptedEvidenceRecord } from '../types';
-import { resolveDraftFactEvidence } from '../services/factLifecycleService';
+import { resolveDraftFactEvidence, findDraftFact } from '../services/factLifecycleService';
 
 export interface MaterialEvidenceListProps {
   task: Task;
@@ -10,7 +10,7 @@ export interface MaterialEvidenceListProps {
   isCurrentDraftImmutable: boolean;
   inspectingFactId: string | null;
   onClearInspectingFactId?: () => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
 }
 
 export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
@@ -49,7 +49,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
 
       {activeBlock.referencedFactIds.length > 0 ? (
         activeBlock.referencedFactIds.map((factId) => {
-          const fact = task.facts.find((f) => f.id === factId);
+          const fact = findDraftFact(task, currentDraft, factId);
           if (!fact) return null;
 
           const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
@@ -65,7 +65,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-slate-900 text-sm">{fact.metric}</span>
+                <span className="font-bold text-slate-900 text-sm">{currentDraft?.snapshotMetadata?.factSnapshot?.items?.find(f => f.factId === factId)?.metric || fact.metric}</span>
                 <span
                   className={`text-xs px-2 py-0.5 rounded font-medium ${
                     fact.status === 'confirmed'
@@ -73,7 +73,7 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                       : 'bg-amber-100 text-amber-800'
                   }`}
                 >
-                  {fact.status === 'confirmed' ? '当前已核准' : '待确认'}
+                  {resolved.isCurrentFactDeleted ? '当前事实已删除' : fact.status === 'confirmed' ? '当前已核准' : '待确认'}
                 </span>
               </div>
 
@@ -330,19 +330,19 @@ export const MaterialEvidenceList: React.FC<MaterialEvidenceListProps> = ({
                     type="button"
                     onClick={() =>
                       onViewSnippet(
-                        currentSnip || {
+                        {
                           id: ev.evidenceId,
                           docName: ev.sourceDocName,
                           sourceDocId: ev.sourceDocId,
                           location: ev.snippetLocation || '采纳冻结片段',
                           period: ev.period,
                           text: ev.snippetText,
-                        }
+                        }, undefined, ev
                       )
                     }
                     className="text-sm text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 cursor-pointer"
                   >
-                    <span>在抽屉中核验全文</span>
+                    <span>在抽屉中核验冻结片段</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </button>
                 </div>

@@ -437,7 +437,7 @@ export async function runTask18Tests() {
   const taskWithDiffEvidence: Task = createPresetTask('under_review');
   const targetFact = taskWithDiffEvidence.facts[0];
   taskWithDiffEvidence.facts = taskWithDiffEvidence.facts.map((f) =>
-    f.id === targetFact.id ? { ...f, value: '999', unit: '项' } : f
+    f.id === targetFact.id ? { ...f, value: '999', selectedConflictValue: '999', unit: '项' } : f
   );
 
   const histDraft: DraftVersion = {
@@ -446,23 +446,13 @@ export async function runTask18Tests() {
     versionNumber: 'V0.9-归档',
     isHistoricalSnapshot: true,
     isFinal: false,
-    factSnapshot: {
-      draftVersionId: 'DRAFT-HIST-SNAPSHOT-120',
-      createdAt: '2026-08-01T00:00:00Z',
-      items: [
-        {
-          factId: targetFact.id,
-          metric: targetFact.metric,
-          value: '120',
-          unit: '项',
-          period: '2026年上半年',
-          metricScope: '抽样基层调研覆盖项',
-          primaryEvidenceId: targetFact.primaryEvidenceId,
-          evidenceDocName: '2026半年度专项汇报.docx',
-          evidenceLocation: '第2页第3段',
-          evidenceSnippetText: '阶段性覆盖120项重点工作。',
-        },
-      ],
+    snapshotMetadata: {
+      ...taskWithDiffEvidence.drafts[0].snapshotMetadata!,
+      factSnapshot: {
+        confirmedAt: '2026-08-01T00:00:00Z', hash:'DEMO-HIST-120', factIds:[targetFact.id],
+        items:[{ factId:targetFact.id, metric:targetFact.metric, value:'120', selectedConflictValue:'120', unit:'项',
+          period:'2026年上半年',metricScope:'抽样基层调研覆盖项',primaryEvidenceId:targetFact.primaryEvidenceId }],
+      },
     },
   };
 
@@ -478,7 +468,7 @@ export async function runTask18Tests() {
   );
 
   const histContainerText = mountedHistEvidence.container.textContent || '';
-  assert(histContainerText.includes('120'), '9.1: 历史快照清晰显示冻结采用值“120”');
+  assert([...mountedHistEvidence.container.querySelectorAll('span')].find(el => el.textContent === '稿件冻结采用值')?.parentElement?.textContent?.includes('120 项'), '9.1: 历史快照清晰显示冻结采用值“120”');
   assert(histContainerText.includes('999'), '9.2: 历史快照清晰显示任务最新核准值“999”');
   assert(histContainerText.includes('稿件冻结采用值'), '9.3: 明确标示【稿件冻结采用值】标识');
   assert(histContainerText.includes('任务最新核准值'), '9.4: 明确标示【任务最新核准值】标识');

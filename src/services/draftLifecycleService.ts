@@ -25,6 +25,60 @@ import {
   arePeriodsStrictlyIdentical
 } from './materialSupplementService';
 
+function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
+  if (Array.isArray(draft.reviewBaselineIds)) return [...draft.reviewBaselineIds];
+  // Compatibility for old drafts: only direct review rounds of this draft,
+  // never all descendants of a mutable ancestor shared with another branch.
+  return task.drafts.filter(d => d.sourceDraftId === draft.id &&
+    (d.id.startsWith('DRAFT-SNAP-REV-') || d.id === task.reviewBaseDraftId)).map(d => d.id);
+}
+
+function getApplicableReviewDraftIds(task: Task, draft: DraftVersion): Set<string> {
+  const applicableDraftIds = new Set<string>(getReviewBaselineIds(task, draft));
+  const visited = new Set<string>();
+  let lineage: DraftVersion | undefined = draft;
+  while (lineage && !visited.has(lineage.id)) {
+    visited.add(lineage.id);
+    applicableDraftIds.add(lineage.id);
+    lineage = task.drafts.find(d => d.id === lineage?.sourceDraftId);
+  }
+  return applicableDraftIds;
+}
+
+/** One scope for finalization, frozen review records and working-draft exports. */
+export function getApplicableReviewComments(task: Task, draft: DraftVersion): ReviewComment[] {
+  const applicableDraftIds = getApplicableReviewDraftIds(task, draft);
+  return task.reviewComments.filter(comment => {
+    // A rebind replaces the active target; targetVersionId remains original evidence.
+    const targetId = comment.rebindRecord?.targetDraftId || comment.targetVersionId;
+    if (!targetId || applicableDraftIds.has(targetId)) return true;
+    // Preserve unresolved provenance in old data rather than silently discarding it.
+    if (!task.drafts.some(d => d.id === targetId)) return true;
+    return !draft.sourceDraftId && !task.reviewBaseDraftId && !Array.isArray(draft.reviewBaselineIds);
+  });
+}
+
+export function resolveCurrentReviewBase(task: Task, draft: DraftVersion | undefined): DraftVersion | undefined {
+  if (!draft) return undefined;
+  const base = task.drafts.find(d => d.id === task.reviewBaseDraftId);
+  return base && getApplicableReviewDraftIds(task, draft).has(base.id) ? base : draft;
+}
+
+export function getDraftReviewComments(task: Task, draft: DraftVersion | undefined): ReviewComment[] {
+  if (!draft) return [];
+  return draft.isHistoricalSnapshot || draft.isFinal
+    ? draft.frozenReviewComments || []
+    : getApplicableReviewComments(task, draft);
+}
+
+function freezeReviewComments(task: Task, draft: DraftVersion): ReviewComment[] | undefined {
+  // Re-saving a read-only version must preserve its original time boundary.
+  const comments = draft.isHistoricalSnapshot || draft.isFinal
+    ? draft.frozenReviewComments
+    : getApplicableReviewComments(task, draft);
+  return comments === undefined ? undefined : JSON.parse(JSON.stringify(comments));
+}
+
 /**
  * Compares two adopted evidence records for exact semantic equivalence.
  * Detects modifications to snippet text, documents, periods, usage, or metrics
@@ -182,7 +236,7 @@ export function acceptDraftCandidate(
         summary: currentDraft.summary
           ? `${currentDraft.summary}（采纳新候选前自动归档历史快照）`
           : '采纳新候选前系统自动归档的历史快照',
-        frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+        frozenReviewComments: freezeReviewComments(task, currentDraft),
       };
     }
   }
@@ -200,6 +254,7 @@ export function acceptDraftCandidate(
     isHistoricalSnapshot: false,
     isWorkingDraft: true,
     sourceDraftId: currentDraft?.id,
+    reviewBaselineIds: currentDraft ? getReviewBaselineIds(task, currentDraft) : [],
     snapshotMetadata: candidate.snapshotMetadata || currentDraft?.snapshotMetadata,
     auditRecords: currentDraft?.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
   };
@@ -332,6 +387,7 @@ export function applyDraftContentChange(
       isHistoricalSnapshot: false,
       isWorkingDraft: true,
       sourceDraftId: targetDraft.id, // 记录来源版本ID
+      reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
       snapshotMetadata: newSnapshotMetadata || targetDraft.snapshotMetadata,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     };
@@ -504,26 +560,12 @@ export function validateFinalizationConditions(
 
   // 6. Review comments closed:
   // Requirement 2: 待处理(pending)、待落实(accepted_pending_implementation)和待沟通(need_discussion)按版本关联检查，都不能定稿！
-  const unclosedComments = task.reviewComments.filter((c) => {
+  const unclosedComments = (targetDraft ? getApplicableReviewComments(task, targetDraft) : task.reviewComments).filter((c) => {
     const isUnclosed =
       c.status === 'pending' ||
       c.status === 'accepted_pending_implementation' ||
       c.status === 'need_discussion';
-    if (!isUnclosed) return false;
-
-    // Check version association
-    if (c.type === 'overall') return true;
-    if (!c.targetVersionId) return true;
-    if (targetDraft) {
-      if (c.targetVersionId === targetDraft.id) return true;
-      if (targetDraft.sourceDraftId && c.targetVersionId === targetDraft.sourceDraftId) {
-        // If proposed on ancestor draft, and not implemented/rejected, still applies
-        return true;
-      }
-      // If comment was proposed on current draft lineage
-      return true;
-    }
-    return true;
+    return isUnclosed;
   });
 
   const commentsClosed = unclosedComments.length === 0;
@@ -601,8 +643,8 @@ export function finalizeDraft(
     }
   }
   const finalDraft: DraftVersion = {
-    id: `DRAFT-FINAL-${Date.now()}`,
-    versionNumber: '定稿 v2.0 (最终核定版)',
+    id: `DRAFT-FINAL-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    versionNumber: `定稿 ${currentDraft.versionNumber}`,
     createdAt: new Date().toISOString(),
     author: activeRole,
     summary: '经主笔核定、审阅意见全部闭环并完成事实口径核校后的正式定稿文件',
@@ -612,9 +654,10 @@ export function finalizeDraft(
     isWorkingDraft: false,
     finalizedAt: new Date().toISOString(),
     sourceDraftId: currentDraft.id,
-    snapshotMetadata: currentDraft.snapshotMetadata,
-    auditRecords: currentDraft.auditRecords,
-    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments)), // 冻结定稿时刻的审阅记录快照
+    reviewBaselineIds: getReviewBaselineIds(task, currentDraft),
+    snapshotMetadata: currentDraft.snapshotMetadata ? JSON.parse(JSON.stringify(currentDraft.snapshotMetadata)) : undefined,
+    auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
+    frozenReviewComments: freezeReviewComments(task, currentDraft),
   };
 
   const updatedTask: Task = {
@@ -670,9 +713,10 @@ export function createDraftSnapshot(
     isHistoricalSnapshot: true,
     isWorkingDraft: false,
     sourceDraftId: targetDraft.id,
+    reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
     snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
     auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
-    frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+    frozenReviewComments: freezeReviewComments(task, targetDraft),
   };
 
   const updatedTask: Task = {
@@ -717,6 +761,7 @@ export function restoreDraftVersion(
     isHistoricalSnapshot: false,
     isWorkingDraft: true,
     sourceDraftId: sourceDraft.id,
+    reviewBaselineIds: getReviewBaselineIds(task, sourceDraft),
     snapshotMetadata: sourceDraft.snapshotMetadata ? JSON.parse(JSON.stringify(sourceDraft.snapshotMetadata)) : undefined,
     auditRecords: sourceDraft.auditRecords ? JSON.parse(JSON.stringify(sourceDraft.auditRecords)) : [],
   };
@@ -774,14 +819,20 @@ export function submitDraftForReview(
       isHistoricalSnapshot: true,
       isWorkingDraft: false,
       sourceDraftId: targetDraft.id,
+      reviewBaselineIds: getReviewBaselineIds(task, targetDraft),
       snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
-      frozenReviewComments: JSON.parse(JSON.stringify(task.reviewComments || [])),
+      frozenReviewComments: freezeReviewComments(task, targetDraft),
     };
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }
 
   const reviewBaseId = baselineSnapshot?.id || targetDraft.id;
+  if (baselineSnapshot) {
+    const reviewBaselineIds = [...new Set([...getReviewBaselineIds(task, targetDraft), reviewBaseId])];
+    targetDraft = { ...targetDraft, reviewBaselineIds };
+    updatedDrafts = updatedDrafts.map(d => d.id === targetDraft!.id ? targetDraft! : d);
+  }
   const nextRound = (task.currentReviewRound || 0) + 1;
 
   const updatedTask: Task = {

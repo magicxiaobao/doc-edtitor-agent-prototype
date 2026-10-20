@@ -198,6 +198,8 @@ export function validateTaskStructure(task: any): boolean {
     if (!draft || typeof draft !== 'object') return false;
     if (typeof draft.id !== 'string' || !draft.id) return false;
     if (!Array.isArray(draft.blocks)) return false;
+    if (draft.reviewBaselineIds !== undefined && (!Array.isArray(draft.reviewBaselineIds) ||
+        draft.reviewBaselineIds.some((id: unknown) => typeof id !== 'string'))) return false;
     for (const b of draft.blocks) {
       if (!b || typeof b !== 'object') return false;
       if (typeof b.id !== 'string' || !b.id) return false;
@@ -631,6 +633,7 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             isHistoricalSnapshot,
             isFinal: isExplicitFinal,
             sourceDraftId: typeof d?.sourceDraftId === 'string' ? d.sourceDraftId : undefined,
+            reviewBaselineIds: Array.isArray(d?.reviewBaselineIds) ? d.reviewBaselineIds.filter((id: unknown) => typeof id === 'string') : undefined,
             snapshotMetadata: d?.snapshotMetadata,
             auditRecords: Array.isArray(d?.auditRecords) ? d.auditRecords : [],
             frozenReviewComments: Array.isArray(d?.frozenReviewComments) ? d.frozenReviewComments : undefined,

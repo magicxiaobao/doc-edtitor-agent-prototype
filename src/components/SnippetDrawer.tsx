@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task } from '../types';
+import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task, AdoptedEvidenceRecord } from '../types';
 import { X, FileText, Calendar, MapPin, Tag, AlertTriangle, ChevronDown, CheckCircle2 } from 'lucide-react';
 import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 
@@ -8,6 +8,7 @@ interface SnippetDrawerProps {
   documents: SourceDocument[];
   onClose: () => void;
   fact?: Fact | null;
+  adoptedEvidence?: AdoptedEvidenceRecord | null;
   currentDraft?: DraftVersion | null;
   task?: Task | null;
 }
@@ -17,6 +18,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   documents,
   onClose,
   fact,
+  adoptedEvidence,
   currentDraft,
   task,
 }) => {
@@ -29,7 +31,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   // Retrieve fact object if snippet passed without fact
   const resolvedFact =
     fact ||
-    (snippet && task
+    (!adoptedEvidence && doc?.usage !== 'style_ref' && snippet && task
       ? task.facts.find(
           (f) => f.primaryEvidenceId === snippet.id || f.evidenceIds.includes(snippet.id)
         )
@@ -50,6 +52,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   const snapItem = resolvedData ? resolvedData.snapItem : null;
   const hasSnapshotDiff = resolvedData ? resolvedData.hasSnapshotDiff : false;
   const hasFrozenItem = resolvedData ? resolvedData.hasFrozenItem : false;
+  const isCurrentFactDeleted = resolvedData?.isCurrentFactDeleted || false;
   const adoptedValue = resolvedData
     ? resolvedData.adoptedValue
     : resolvedFact
@@ -70,16 +73,21 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   // If viewing historical or final snapshot, STRICTLY select snippet matching frozenEvidenceId!
   // If frozenEvidenceId is not found or not recorded, DO NOT show latest snippet as frozen evidence!
   const resolvedSnippet: EvidenceSnippet | null = (() => {
+    if (adoptedEvidence) return { id: adoptedEvidence.evidenceId, sourceDocId: adoptedEvidence.sourceDocId,
+      docName: adoptedEvidence.sourceDocName, location: adoptedEvidence.snippetLocation || '采纳冻结片段',
+      period: adoptedEvidence.period, text: adoptedEvidence.snippetText };
     if (resolvedData) {
       return resolvedData.effectiveSnippet;
     }
-    if (isHistoricalOrFinal) {
+    if (isHistoricalOrFinal && resolvedFact) {
       return null;
     }
     return snippet || (resolvedFact && task ? task.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
   })();
 
-  const resolvedDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
+  const liveDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
+  // Adoption freezes the excerpt, not the source document's entire content.
+  const resolvedDoc = adoptedEvidence ? undefined : liveDoc;
 
   return (
     <div
@@ -89,6 +97,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
       className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200"
     >
       <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col border-l border-slate-200">
+        {isHistoricalOrFinal && !adoptedEvidence && resolvedSnippet && <p className="p-3 text-sm bg-amber-50 text-amber-900">此版本保留了依据标识；下方为材料库现存原文，未保存原文快照时无法保证与采用当时完全一致。</p>}
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div className="flex items-center space-x-2">
@@ -125,7 +134,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                     : 'bg-amber-100 text-amber-800'
                 }`}
               >
-                {resolvedFact.status === 'confirmed' ? '当前已核准' : '待确认'}
+                {isCurrentFactDeleted ? '当前事实已删除' : resolvedFact.status === 'confirmed' ? '当前已核准' : '待确认'}
               </span>
             </div>
 
@@ -158,7 +167,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   {currentConfirmedValue}
                 </span>
                 <span className="text-xs text-slate-400 block font-normal">
-                  期间：{resolvedFact.period} · 口径：{resolvedFact.metricScope || '标准口径'}
+                    期间：{resolvedData?.currentPeriod || resolvedFact.period} · 口径：{resolvedData?.currentMetricScope || resolvedFact.metricScope || '标准口径'}
                 </span>
               </div>
             </div>
@@ -185,7 +194,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   冻结统计口径：<strong className="text-slate-700 font-medium">{frozenMetricScope}</strong>
                 </div>
               )}
-              {resolvedFact.metricScope && (
+              {!isCurrentFactDeleted && resolvedFact.metricScope && (
                 <div>
                   {isHistoricalOrFinal && frozenMetricScope ? '当前最新统计口径：' : '统计口径：'}
                   <strong className="text-slate-700 font-medium">{resolvedFact.metricScope}</strong>
@@ -200,9 +209,9 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
           <div className="p-4 bg-blue-50/70 border-b border-blue-100">
             <div className="text-xs font-semibold uppercase tracking-wider text-blue-800 mb-1 flex items-center justify-between">
               <span className="flex items-center gap-1">
-                <Tag className="w-3.5 h-3.5" /> 关联证据片段
+                <Tag className="w-3.5 h-3.5" /> {adoptedEvidence ? '采纳时冻结片段' : '关联证据片段'}
               </span>
-              {isHistoricalOrFinal && (
+              {isHistoricalOrFinal && !adoptedEvidence && (
                 <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-normal font-sans">
                   基于快照冻结证据ID追溯
                 </span>
@@ -245,13 +254,17 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
         {/* Document Full Text Context */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-slate-700">材料上下文全文核验</h4>
+            <h4 className="text-sm font-semibold text-slate-700">{adoptedEvidence ? '采纳材料存证范围' : '材料上下文全文核验'}</h4>
             <span className="text-xs text-slate-400">
               {resolvedDoc ? `来源：${resolvedDoc.source} (${resolvedDoc.period})` : '登记文本出处'}
             </span>
           </div>
 
-          {resolvedDoc ? (
+          {adoptedEvidence ? (
+            <p className="p-4 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-900">
+              仅保存采纳时片段，未保存当时全文。上方展示采纳时冻结的原文、材料名称、位置和期间。
+            </p>
+          ) : resolvedDoc ? (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-md text-sm text-slate-700 leading-relaxed space-y-3 font-normal">
               {resolvedDoc.content.split('\n\n').map((paragraph, idx) => {
                 const isTarget =
