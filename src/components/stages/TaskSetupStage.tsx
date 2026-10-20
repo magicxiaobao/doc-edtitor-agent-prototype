@@ -28,7 +28,7 @@ interface TaskSetupStageProps {
 export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
   currentTask,
   tasks,
-  onUpdateTask,
+  onUpdateTask: updateTask,
   onSelectTask,
   onCreateTask,
   onProceedToNextStage,
@@ -51,6 +51,18 @@ export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
 
   // Filter tasks
+  const onUpdateTask = (updated: Partial<Task>) => {
+    if (activeRole !== '主笔甲') { setFormError('仅主笔可修改任务配置'); return; }
+    if (updated.startDate !== undefined || updated.endDate !== undefined) {
+      const start = updated.startDate ?? currentTask.startDate;
+      const end = updated.endDate ?? currentTask.endDate;
+      if (!start || !end || !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || start > end) { setFormError('请填写有效且顺序正确的统计起止日期'); return; }
+      setFormError('统计期间已调整，请到材料与事实页重新确认依据，再确认大纲。');
+      updateTask({ ...updated, factSnapshot: undefined, outlineSnapshot: undefined, outlineConfirmed: false });
+      return;
+    }
+    setFormError(null); updateTask(updated);
+  };
   const filteredTasks = tasks.filter((t) => {
     const matchSearch = t.title.toLowerCase().includes(searchTerm.toLowerCase()) || t.usage.toLowerCase().includes(searchTerm.toLowerCase());
     const matchType = filterType === 'all' || t.docType === filterType;
@@ -60,6 +72,7 @@ export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    if (activeRole !== '主笔甲') { setFormError('仅主笔可创建任务'); return; }
 
     if (!formTitle.trim()) {
       setFormError('任务主题与名称不能为空');
@@ -71,7 +84,7 @@ export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
       return;
     }
 
-    if (new Date(formStartDate) > new Date(formEndDate)) {
+    if (!Number.isFinite(Date.parse(formStartDate)) || !Number.isFinite(Date.parse(formEndDate)) || new Date(formStartDate) > new Date(formEndDate)) {
       setFormError('统计起止日期颠倒：统计开始日期不能晚于结束日期');
       return;
     }
@@ -91,7 +104,7 @@ export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
       targetWordCount: formTargetWords,
       mandatoryCoverage: formCoverage.trim(),
       deadline: formDeadline,
-      primaryAuthor: activeRole === '主笔甲' ? '主笔甲' : '主笔甲',
+      primaryAuthor: '主笔甲',
       currentStage: 'task_setup',
       status: '草稿',
       updatedAt: new Date().toISOString(),
@@ -110,6 +123,7 @@ export const TaskSetupStage: React.FC<TaskSetupStageProps> = ({
 
   return (
     <div className="space-y-6">
+      {formError && <p role="status" className="p-3 bg-amber-50 text-amber-900 text-sm">{formError}</p>}
       {/* Workbench Header & Quick Actions */}
       <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

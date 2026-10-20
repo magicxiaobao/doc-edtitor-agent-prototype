@@ -40,6 +40,7 @@ interface CandidateComparisonModalProps {
   onDiscard: () => void;
   onRegenerate: () => void;
   activeRole: UserRole;
+  activeCompletedRunId?: string | null;
   onViewSnippet: (snippet: EvidenceSnippet) => void;
   currentInstructionInput?: string;
   onInspectFact?: (factId: string) => void;
@@ -55,6 +56,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
   onDiscard,
   onRegenerate,
   activeRole,
+  activeCompletedRunId = null,
   onViewSnippet,
   currentInstructionInput = '',
   onInspectFact,
@@ -153,6 +155,9 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
     });
   }, [task.outline, currentDraft, candidate]);
 
+  useEffect(() => { setSelectedSectionId('all'); }, [candidate?.runId, isOpen]);
+  useEffect(() => { if (selectedSectionId !== 'all' && !sections.some(s => s.id === selectedSectionId)) setSelectedSectionId('all'); }, [sections, selectedSectionId]);
+
   if (!isOpen || !candidate) {
     return null;
   }
@@ -167,7 +172,7 @@ export const CandidateComparisonModal: React.FC<CandidateComparisonModalProps> =
     task,
     currentDraft,
     candidate,
-    candidate.runId,
+    activeCompletedRunId,
     activeRole
   );
 
