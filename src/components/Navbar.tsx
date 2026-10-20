@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ConfirmActionModal } from './ConfirmActionModal';
 import { UserRole, Task } from '../types';
 import { 
   FileCheck2, 
@@ -34,6 +35,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onResetData,
 }) => {
   const [showSandboxBar, setShowSandboxBar] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 shadow-sm border-b border-slate-800">
@@ -178,11 +180,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {/* Reset button */}
               <button
-                onClick={() => {
-                  if (window.confirm('确认重置演示数据为系统初始状态吗？未保存的临时改动将被清除。')) {
-                    onResetData();
-                  }
-                }}
+                onClick={() => setShowResetConfirm(true)}
                 className="flex items-center gap-1 px-2.5 py-1 text-purple-200 hover:text-rose-200 hover:bg-rose-950/60 border border-purple-800 hover:border-rose-800 rounded transition-colors text-xs font-medium cursor-pointer"
                 title="重置本地演示状态为默认"
               >
@@ -193,6 +191,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
       )}
+      {showResetConfirm && <ConfirmActionModal title="重置演示数据" confirmLabel="确认重置" onCancel={() => setShowResetConfirm(false)} onConfirm={() => {setShowResetConfirm(false); onResetData();}}>
+        将恢复系统预置场景，当前演示改动会被重置，并保留重置前备份。是否继续？
+      </ConfirmActionModal>}
     </header>
   );
 };

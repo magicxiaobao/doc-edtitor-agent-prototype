@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { ConfirmActionModal } from '../ConfirmActionModal';
 import { 
   Task, 
   AuditIssue, 
@@ -54,6 +55,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
 
   const [activeTab, setActiveTab] = useState<'audit' | 'export'>('audit');
   const [isExportingDocx, setIsExportingDocx] = useState(false);
+  const [showFinalizeConfirm, setShowFinalizeConfirm] = useState(false);
   const [exportVersionId, setExportVersionId] = useState<string>(task.currentDraftId || task.drafts[0]?.id || '');
 
   // Synchronize exportVersionId when task or currentDraftId changes
@@ -78,6 +80,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
 
   useEffect(() => {
     setIgnoringIssue(null); setIgnoreReasonInput(''); setIgnoreError(null);
+    setShowFinalizeConfirm(false);
   }, [task.id, currentDraft?.id, activeRole]);
 
   // Target draft for export
@@ -323,16 +326,20 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
       return;
     }
 
-    if (!window.confirm('确认定稿吗？定稿后将生成不可篡改的定稿快照（定稿 v2.0）。后续编辑将自动生成新的工作草稿，旧定稿保留归档。')) {
-      return;
-    }
+    setShowFinalizeConfirm(true);
+  };
 
+  const handleConfirmFinalize = () => {
+    // Recheck the current task and draft, even if an audit changed while the dialog was open.
+    const latest = validateFinalizationConditions(task, currentDraft?.id, activeRole);
+    if (!latest.canFinalize) { setShowFinalizeConfirm(false); alert(latest.reasons.join('；')); return; }
     const res = finalizeDraft(task, currentDraft.id, activeRole);
     if (!res.success) {
       alert(res.error || '定稿执行失败');
       return;
     }
 
+    setShowFinalizeConfirm(false);
     onUpdateTask({
       drafts: res.updatedTask!.drafts,
       currentDraftId: res.finalDraft!.id,
@@ -1033,6 +1040,9 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
           </div>
         </div>
       )}
+      {showFinalizeConfirm && <ConfirmActionModal title="确认最终定稿" confirmLabel="确认定稿并归档" onCancel={() => setShowFinalizeConfirm(false)} onConfirm={handleConfirmFinalize}>
+        当前版本【{currentDraft?.versionNumber}】将保存为只读定稿快照。后续修改会另建工作稿，已归档定稿继续保留。
+      </ConfirmActionModal>}
     </div>
   );
 };

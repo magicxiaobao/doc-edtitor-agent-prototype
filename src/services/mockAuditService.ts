@@ -280,8 +280,12 @@ export function runDocumentAudit(
     // -------------------------------------------------------------
     // Check 5: Unverified Sentences / Qualitative Claims without Hard Evidence
     // -------------------------------------------------------------
-    const hasQualitativeContent = block.content.includes('服务满意度') || block.content.includes('满意度明显提升');
-    if (hasQualitativeContent) {
+    // Only flag a positive outcome claim, never a statement that evidence is still missing.
+    const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause =>
+      /满意度(?:明显|显著|持续|稳步|有所)?(?:提升|提高|改善|上升)/.test(clause) &&
+      !/尚未|并未|没有|未能|不作|不据此|待补|暂缺|缺乏|缺少|尚待/.test(clause)
+    )?.trim();
+    if (satisfactionClaim) {
       const hasQuantitativeEvidence = activeFacts.some(
         (f) => f.metric.includes('满意度') && f.value && f.value !== '暂缺' && !f.value.includes('定性')
       );
@@ -297,7 +301,7 @@ export function runDocumentAudit(
           severity: 'warning',
           isBlocking: false,
           location: locationDesc,
-          originalText: '服务满意度明显提升',
+          originalText: satisfactionClaim,
           evidenceText: '知识库RAG检索仅提供定性问答线索（CLUE-01），当前无具体量化测评报告或出处台账。',
           suggestion: '该成效表述未能可靠验证，已标注“待人工核实”。建议在文稿中补充说明为定性线索，或在事实清单补充正式依据，不伪称核校通过。',
           status: 'unresolved',

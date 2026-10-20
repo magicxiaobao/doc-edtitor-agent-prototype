@@ -100,8 +100,8 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
 
   return (
     <div className="bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-2.5 shadow-2xs">
-      <div className="max-w-7xl mx-auto flex items-center justify-between overflow-x-auto no-scrollbar gap-2">
-        <nav className="flex items-center space-x-1 sm:space-x-2 min-w-max" aria-label="工作阶段进度">
+      <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+        <nav className="flex items-center space-x-1 sm:space-x-2 w-full overflow-x-auto no-scrollbar whitespace-nowrap" aria-label="工作阶段进度">
           {stages.map((st, idx) => {
             const isActive = currentStage === st.id;
             const Icon = st.icon;
@@ -111,7 +111,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
                 {idx > 0 && <span className="text-slate-300 font-light text-xs">/</span>}
                 <button
                   onClick={() => onSelectStage(st.id)}
-                  className={`flex items-center space-x-2 px-3 py-1.5 rounded text-xs font-medium transition-all cursor-pointer ${
+                  className={`shrink-0 flex items-center space-x-2 px-3 py-1.5 rounded text-xs font-medium transition-all cursor-pointer ${
                     isActive
                       ? 'bg-blue-50 text-blue-800 border border-blue-200 font-semibold shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -147,7 +147,7 @@ export const StageBreadcrumbs: React.FC<StageBreadcrumbsProps> = ({
         </nav>
 
         {/* Stage Status Summary & Warning Pills */}
-        <div className="hidden xl:flex items-center gap-2 text-xs">
+        <div className="hidden xl:flex w-full justify-end items-center gap-2 text-xs whitespace-nowrap">
           {hasConflictPending && (
             <div className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
