@@ -80,7 +80,7 @@ for(const content of ['服务满意度仍有提升空间。','服务满意度亟
 }
 for(const connector of ['可以','可']) {
   const audit=(content:string)=>runDocumentAudit(task(),[{...gapBlock,referencedFactIds:['FACT-06'],content}],workingId).find(i=>i.issueId===`ISSUE-GAP-${gapBlock.id}-satisfaction`);
-  for(const period of ['','本期','本年度','2026年']) {
+  for(const period of ['','本期','本年度','2026年','2026年1至9月','2026年1月至9月','2026年1月1日至9月30日']) {
     const denied=`没有充分证据${connector}表明${period}服务满意度显著提升`;
     assert(!audit(denied),`evidence denial governs the claim: ${denied}`);
   }
