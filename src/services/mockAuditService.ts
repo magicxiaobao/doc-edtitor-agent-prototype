@@ -280,11 +280,21 @@ export function runDocumentAudit(
     // -------------------------------------------------------------
     // Check 5: Unverified Sentences / Qualitative Claims without Hard Evidence
     // -------------------------------------------------------------
-    // Only flag a positive outcome claim, never a statement that evidence is still missing.
-    const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause =>
-      /满意度[^。！？；，,\n]{0,16}?(?:(?:明显|显著|持续|稳步|有所|大幅|进一步|已经|已)(?:提升|提高|改善|上升)|(?:提升|提高|改善|上升)(?:了|明显|显著))/.test(clause) &&
-      !/尚未|并未|没有|未能|未见|未有|不作|不据此|待补|暂缺|缺乏|缺少|尚待|亟待|有待|仍待|(?:提升|提高|改善)(?:的)?空间|(?:提升|提高|改善|上升)(?:不明显|不显著|不足)|满意度[^，,]{0,12}(?:将|拟|力争|争取|计划)|满意度[^，,]{0,8}(?:未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(clause)
-    )?.trim();
+    // Evidence caveats do not negate an achieved-outcome claim. Scope exclusions
+    // to the outcome phrase and its immediate qualifiers, rather than the whole clause.
+    const satisfactionClaim = block.content.split(/[。！？；\n，,]/).find(clause => {
+      const outcome = clause.match(/(?:服务)?满意度[^。！？；，,\n]{0,16}?(?:(?:明显|显著|持续|稳步|有所|大幅|进一步|已经|已)(?:提升|提高|改善|上升)|(?:提升|提高|改善|上升)(?:了|明显|显著))/);
+      if (!outcome) return false;
+      const before = clause.slice(0, outcome.index);
+      const after = clause.slice(outcome.index! + outcome[0].length);
+      const negated = /(?:尚未|并未|没有|未能|未见|未有|未|不)(?:明显|显著|有所)?(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+        /(?:尚未|并未|没有|未能|未见|未有|未)(?:发现|观察到|看到|实现)?$/.test(before) ||
+        /^(?:不明显|不显著|不足)/.test(after);
+      const deferred = /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)[^但。！？；，,\n]{0,8}(?:提升|提高|改善|上升)/.test(outcome[0]) ||
+        /(?:尚待|亟待|有待|仍待|将|拟|力争|争取|计划)(?:实现|推动|促进)?$/.test(before) ||
+        /^(?:的)?空间/.test(after);
+      return !negated && !deferred;
+    })?.trim();
     if (satisfactionClaim) {
       const hasQuantitativeEvidence = activeFacts.some(
         (f) => f.metric.includes('满意度') && f.value && f.value !== '暂缺' && !f.value.includes('定性')
