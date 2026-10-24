@@ -17,7 +17,7 @@ import {
 import { Task, DraftVersion, ExportOptions, ReviewComment, FactItemSnapshot } from '../types';
 
 export function safeDownloadName(name: string): string { return name.replace(/[\\/:*?"<>|]+/g, '_'); }
-function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
+export function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
   const frozen = draft.snapshotMetadata?.factSnapshot?.items;
   if (frozen) return frozen.map(f => ({ ...f, value: f.selectedConflictValue || f.value }));
   if (draft.isHistoricalSnapshot || draft.isFinal) return [];
@@ -43,7 +43,7 @@ function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
     });
 }
 
-function formatFactEvidenceTxt(item: FactItemSnapshot): string {
+export function formatFactEvidenceTxt(item: FactItemSnapshot): string {
   const fid = item.factId;
   const metric = item.metric;
   const val = `${item.selectedConflictValue || item.value}${item.unit}`;

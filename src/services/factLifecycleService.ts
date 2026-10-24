@@ -764,10 +764,14 @@ export function resolveDraftFactEvidence(
     effectiveSnippet = currentSnippet;
   }
 
-  const isProvenanceMatch = Boolean(snapItem?.provenance && (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId));
-  const effectiveDoc = effectiveSnippet && !isProvenanceMatch ? task.documents.find((d) => d.id === effectiveSnippet.sourceDocId) : undefined;
-  const effectiveDocName = isProvenanceMatch ? snapItem!.provenance!.sourceDocName : (effectiveSnippet?.docName || effectiveDoc?.name);
-  const effectiveLocation = isProvenanceMatch ? (snapItem!.provenance!.location || '段落索引') : (effectiveSnippet?.location || '段落索引');
+  const shouldUseFrozenProvenance = Boolean(
+    (isHistoricalOrFinal || !latestFact) &&
+    snapItem?.provenance &&
+    (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId)
+  );
+  const effectiveDoc = effectiveSnippet && !shouldUseFrozenProvenance ? task.documents.find((d) => d.id === effectiveSnippet.sourceDocId) : undefined;
+  const effectiveDocName = shouldUseFrozenProvenance ? snapItem!.provenance!.sourceDocName : (effectiveSnippet?.docName || effectiveDoc?.name);
+  const effectiveLocation = shouldUseFrozenProvenance ? (snapItem!.provenance!.location || '段落索引') : (effectiveSnippet?.location || '段落索引');
 
   const hasSnapshotDiff = Boolean(
     snapItem && latestFact && (
