@@ -86,7 +86,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   })();
 
   const hasFrozenProvenance = Boolean(
-    isHistoricalOrFinal &&
+    (isHistoricalOrFinal || isCurrentFactDeleted) &&
     resolvedData?.provenance &&
     (!resolvedData.effectiveEvidenceId || resolvedData.provenance.evidenceId === resolvedData.effectiveEvidenceId)
   );

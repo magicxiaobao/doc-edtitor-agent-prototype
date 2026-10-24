@@ -999,7 +999,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                         return (
                           <div key={item.factId || idx} className="p-3 bg-white rounded border border-slate-200 text-xs text-slate-700 space-y-1">
                             <div className="font-semibold text-slate-800">
-                              {idx + 1}. [{item.factId}] {item.metric}：<span className="font-mono text-blue-700">{val}</span> | 期间：${period} | 口径：${scope} (主出处：${evId})
+                              {idx + 1}. [{item.factId}] {item.metric}：<span className="font-mono text-blue-700">{val}</span> | 期间：{period} | 口径：{scope} (主出处：{evId})
                             </div>
                             {(item.hasConflict || item.selectedConflictValue) && (
                               <div className="text-slate-600 pl-3">

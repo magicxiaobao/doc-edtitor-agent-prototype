@@ -181,6 +181,23 @@ try {
     });
   });
 
+  await check('deleted current fact drawer keeps its frozen excerpt isolated from live full text', () => {
+    const task = createPresetTask('under_review'); const draft = task.drafts[0];
+    const fact = task.facts.find(f => f.id === 'FACT-01')!;
+    const saved = draft.snapshotMetadata!.factSnapshot!.items.find(f => f.factId === fact.id)!.provenance!;
+    task.facts = task.facts.filter(f => f.id !== fact.id);
+    task.documents.find(d => d.id === saved.sourceDocId)!.content = 'DELETED-FACT-LIVE-FULL-TEXT';
+    const resolved = resolveDraftFactEvidence(fact, draft, task);
+    assert(resolved.isCurrentFactDeleted); assert.equal(resolved.effectiveSnippet?.text, saved.text);
+    mount((root, host) => {
+      act(() => root.render(<SnippetDrawer snippet={resolved.effectiveSnippet} fact={fact} documents={task.documents}
+        task={task} currentDraft={draft} onClose={() => {}}/>));
+      assert(host.textContent?.includes(saved.text));
+      assert(!host.textContent?.includes('DELETED-FACT-LIVE-FULL-TEXT'), 'deleted-fact fallback also displays a frozen excerpt, not current context');
+      assert(host.textContent?.includes('未保存当时全文'));
+    });
+  });
+
   await check('evidence-only export preview shows the same frozen sources as the generated file', () => {
     const task = createPresetTask('under_review'); const draft = task.drafts[0];
     const expected = draft.snapshotMetadata!.factSnapshot!.items.find(f => f.factId === 'FACT-01')!.provenance!;
@@ -195,6 +212,44 @@ try {
       assert(preview.textContent?.includes(expected.sourceDocName), 'evidence-only preview must not be empty');
       assert(preview.textContent?.includes(expected.text), 'preview must include the frozen source quote');
     });
+  });
+
+  await check('preview option matrix preserves frozen sources, legacy limitations and independent sections', () => {
+    for (const mode of ['historical', 'final', 'legacy'] as const) {
+      const task = createPresetTask('under_review'); const draft = task.drafts[0];
+      draft.isWorkingDraft = false; draft.isHistoricalSnapshot = mode !== 'final'; draft.isFinal = mode === 'final';
+      draft.blocks[0].content = 'PREVIEW-BODY-ONLY';
+      draft.frozenReviewComments = [{id: 'PREVIEW-REVIEW', type: 'overall', targetVersionId: draft.id,
+        reviewer: '审阅乙', content: 'PREVIEW-REVIEW-ONLY', status: 'rejected', createdAt: draft.createdAt}];
+      const item = draft.snapshotMetadata!.factSnapshot!.items.find(f => f.factId === 'FACT-01')!;
+      const saved = structuredClone(item.provenance!);
+      if (mode === 'legacy') for (const f of draft.snapshotMetadata!.factSnapshot!.items) delete f.provenance;
+      task.snippets.forEach(s => { s.text = 'PREVIEW-LIVE-MUST-NOT-LEAK'; s.docName = 'PREVIEW-LIVE-MUST-NOT-LEAK'; });
+      task.documents.forEach(d => { d.name = 'PREVIEW-LIVE-MUST-NOT-LEAK'; });
+      mount((root, host) => {
+        act(() => root.render(<AuditAndExportStage task={task} activeRole="主笔甲" onUpdateTask={() => {}}/>));
+        act(() => button(host, '下载导出文件').click());
+        const inputs = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+        assert.equal(inputs.length, 3);
+        const title = [...host.querySelectorAll('span')].find(s => s.textContent?.startsWith('实时导出预览：'))!;
+        const preview = title.parentElement!.parentElement!;
+        for (const includeBody of [false, true]) for (const includeEvidence of [false, true]) for (const includeReviewLog of [false, true]) {
+          [includeBody, includeEvidence, includeReviewLog].forEach((value, i) => {
+            if (inputs[i].checked !== value) act(() => inputs[i].click());
+          });
+          const text = preview.textContent || '';
+          assert.equal(text.includes('PREVIEW-BODY-ONLY'), includeBody);
+          assert.equal(text.includes('PREVIEW-REVIEW-ONLY'), includeReviewLog);
+          assert(!text.includes('PREVIEW-LIVE-MUST-NOT-LEAK'));
+          assert.equal(text.includes(saved.text), includeEvidence && mode !== 'legacy');
+          assert.equal(text.includes('该版本未保存原文快照'), includeEvidence && mode === 'legacy');
+          if (includeEvidence && mode !== 'legacy') {
+            for (const value of [saved.sourceDocName, saved.sourceDocId, saved.location!, saved.evidenceId, item.period, item.metricScope!, item.conflictResolutionReason!]) assert(text.includes(value));
+          }
+          assert(!/[：:]\s*\$|\(主出处：\$/.test(text), 'preview must not render template interpolation dollar signs');
+        }
+      });
+    }
   });
 } finally {
   if (previousCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', previousCreateObjectURL);
