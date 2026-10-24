@@ -107,7 +107,8 @@ act(() => button('取消').click());
 const other = {...empty, id: 'other-task'};
 act(() => root.render(<MaterialsAndFactsStage task={other} activeRole="主笔甲" onUpdateTask={u => updates.push(u)} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
 await act(async () => { await new Promise(r => setTimeout(r, 850)); });
-assert(!container.textContent?.includes('检索返回结果'));
+assert(![...container.querySelectorAll('button')].some(b => /定位原文|建立事实候选/.test(b.textContent || '')),
+  'cancelled/cross-task results must not expose source or fact-creation actions');
 
 const material: SourceDocument = {id:'DEMO-SOURCE',name:'补写演示材料',source:'演示',usage:'current_fact',period:'2026年1至9月',fileType:'pasted',parseStatus:'parsed',content:'完善分类登记与反馈。'};
 const evidence: EvidenceSnippet = {id:'DEMO-SNIP',sourceDocId:material.id,docName:material.name,period:material.period,location:'第1段',text:material.content};

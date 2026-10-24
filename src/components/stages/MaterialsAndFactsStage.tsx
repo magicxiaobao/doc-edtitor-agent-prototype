@@ -965,11 +965,9 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
             };
 
             const isResultEmpty = ragResult.scenario === 'empty' || ragResult.snippets.length === 0;
-            const isClueResult = !isResultEmpty && (
-              ragResult.isClueOnly ||
-              ragResult.scenario === 'clue_only' ||
-              (ragResult.snippets.length > 0 && ragResult.snippets.every((snip) => isClueSnippet(snip)))
-            );
+            const clueCount = ragResult.snippets.filter(isClueSnippet).length;
+            const originalCount = ragResult.snippets.length - clueCount;
+            const isClueResult = !isResultEmpty && originalCount === 0;
 
             return (
               <div className="border border-slate-200 rounded-lg p-4 bg-slate-50 space-y-3">
@@ -978,6 +976,8 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                     <span>检索结果</span>
                   ) : isClueResult ? (
                     <span>检索线索（{ragResult.snippets.length}条）</span>
+                  ) : clueCount > 0 ? (
+                    <span>检索结果（候选原文片段{originalCount}条，检索线索{clueCount}条）</span>
                   ) : (
                     <span>候选原文片段（{ragResult.snippets.length}条）</span>
                   )}
