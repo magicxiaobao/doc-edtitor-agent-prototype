@@ -315,7 +315,9 @@ assert(loadedTask10.tasks[0].documents[0].content.length === longContent.length,
 // 11. 8种导出选项组合测试
 // -----------------------------------------------------------------------
 console.log('\n>>> [回归 11] 正文、依据、审阅 8 种合法组合导出一致性检验:');
-const testDraft11 = task1.drafts[0];
+const testDraft11 = structuredClone(task1.drafts[0]);
+const bodyOnlyMarker11 = 'EXPORT-BODY-ONLY：本句仅属于所选版本的正文，不属于材料原文。';
+testDraft11.blocks[0].content = `${bodyOnlyMarker11}\n${testDraft11.blocks[0].content}`;
 const combos = [
   { body: true, evd: true, rev: true },
   { body: true, evd: true, rev: false },
@@ -334,9 +336,9 @@ for (const c of combos) {
     includeReviewLog: c.rev,
   });
   if (c.body) {
-    assert(txt.includes('工作总结'), `组合 [${c.body},${c.evd},${c.rev}] TXT包含正文`);
+    assert(txt.includes(bodyOnlyMarker11), `组合 [${c.body},${c.evd},${c.rev}] TXT包含正文`);
   } else {
-    assert(!txt.includes('累计完成重点任务128项'), `组合 [${c.body},${c.evd},${c.rev}] TXT未包含正文`);
+    assert(!txt.includes(bodyOnlyMarker11), `组合 [${c.body},${c.evd},${c.rev}] TXT未包含正文（依据原文允许与事实表述重叠）`);
   }
   if (c.evd) {
     assert(txt.includes('依据出处：') || txt.includes('【事实依据清单'), `组合 [${c.body},${c.evd},${c.rev}] TXT包含依据`);

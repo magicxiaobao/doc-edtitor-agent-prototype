@@ -85,9 +85,15 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
     return snippet || (resolvedFact && task ? task.snippets.find((s) => s.id === resolvedFact.primaryEvidenceId) : null) || null;
   })();
 
+  const hasFrozenProvenance = Boolean(
+    (isHistoricalOrFinal || isCurrentFactDeleted) &&
+    resolvedData?.provenance &&
+    (!resolvedData.effectiveEvidenceId || resolvedData.provenance.evidenceId === resolvedData.effectiveEvidenceId)
+  );
+
   const liveDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
-  // Adoption freezes the excerpt, not the source document's entire content.
-  const resolvedDoc = adoptedEvidence ? undefined : liveDoc;
+  // Adoption and frozen provenance freeze the excerpt, not the source document's entire content.
+  const resolvedDoc = (adoptedEvidence || hasFrozenProvenance) ? undefined : liveDoc;
 
   return (
     <div
@@ -97,7 +103,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
       className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200"
     >
       <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col border-l border-slate-200">
-        {isHistoricalOrFinal && !adoptedEvidence && resolvedSnippet && <p className="p-3 text-sm bg-amber-50 text-amber-900">此版本保留了依据标识；下方为材料库现存原文，未保存原文快照时无法保证与采用当时完全一致。</p>}
+        {isHistoricalOrFinal && !adoptedEvidence && !hasFrozenProvenance && resolvedSnippet && <p className="p-3 text-sm bg-amber-50 text-amber-900">此版本保留了依据标识；下方为材料库现存原文，未保存原文快照时无法保证与采用当时完全一致。</p>}
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div className="flex items-center space-x-2">
@@ -254,13 +260,13 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
         {/* Document Full Text Context */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-slate-700">{adoptedEvidence ? '采纳材料存证范围' : '材料上下文全文核验'}</h4>
+            <h4 className="text-sm font-semibold text-slate-700">{adoptedEvidence || hasFrozenProvenance ? '采纳材料存证范围' : '材料上下文全文核验'}</h4>
             <span className="text-xs text-slate-400">
-              {resolvedDoc ? `来源：${resolvedDoc.source} (${resolvedDoc.period})` : '登记文本出处'}
+              {adoptedEvidence || hasFrozenProvenance ? '冻结存证' : resolvedDoc ? `来源：${resolvedDoc.source} (${resolvedDoc.period})` : '登记文本出处'}
             </span>
           </div>
 
-          {adoptedEvidence ? (
+          {adoptedEvidence || hasFrozenProvenance ? (
             <p className="p-4 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-900">
               仅保存采纳时片段，未保存当时全文。上方展示采纳时冻结的原文、材料名称、位置和期间。
             </p>

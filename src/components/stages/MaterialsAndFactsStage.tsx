@@ -21,7 +21,8 @@ import {
   createFactCandidate, 
   confirmFact, 
   modifyOrExcludeFact,
-  formatDefaultPeriodForTask 
+  formatDefaultPeriodForTask,
+  buildFactItemSnapshot
 } from '../../services/factLifecycleService';
 import { 
   Database, 
@@ -235,17 +236,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     const invalidFact = confirmedFacts.find(f => !confirmFact(task, f.id, activeRole).success);
     if (invalidFact) { alert(`事实【${invalidFact.metric}】依据尚不合格，请重新核准或排除。`); return; }
 
-    const snapshotItems = confirmedFacts.map((f) => ({
-      factId: f.id,
-      metric: f.metric,
-      value: f.selectedConflictValue || f.value,
-      unit: f.unit,
-      period: f.period,
-      metricScope: f.metricScope,
-      primaryEvidenceId: f.primaryEvidenceId,
-      selectedConflictValue: f.selectedConflictValue,
-      conflictResolutionReason: f.conflictResolutionReason,
-    }));
+    const snapshotItems = confirmedFacts.map((f) => buildFactItemSnapshot(task, f));
 
     const snapshot = {
       confirmedAt: new Date().toISOString(),

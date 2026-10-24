@@ -6,10 +6,11 @@ import {
   UserRole, 
   DraftVersion,
   ExportOptions,
-  ReviewComment
+  ReviewComment,
+  FactItemSnapshot
 } from '../../types';
 import { runDocumentAudit } from '../../services/mockAuditService';
-import { exportDocumentAsTxt, exportDocumentAsDocx } from '../../services/exportService';
+import { exportDocumentAsTxt, exportDocumentAsDocx, exportFactsFor } from '../../services/exportService';
 import { checkPermission, canFinalize as canFinalizeRole } from '../../services/permissionService';
 import { 
   validateFinalizationConditions, 
@@ -87,6 +88,24 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
 
   // Target draft for export
   const selectedExportDraft = task.drafts.find((d) => d.id === exportVersionId) || currentDraft;
+
+  const exportFacts = React.useMemo(
+    () => (selectedExportDraft ? exportFactsFor(task, selectedExportDraft) : []),
+    [task, selectedExportDraft]
+  );
+
+  const snapshotFactMap = React.useMemo(() => {
+    const map = new Map<string, FactItemSnapshot>();
+    if (selectedExportDraft?.snapshotMetadata?.factSnapshot?.items) {
+      selectedExportDraft.snapshotMetadata.factSnapshot.items.forEach((item) => {
+        map.set(item.factId, {
+          ...item,
+          value: item.selectedConflictValue || item.value,
+        });
+      });
+    }
+    return map;
+  }, [selectedExportDraft]);
 
   // Run dynamic audit issues using active snapshot and draft ID
   const auditIssues = currentDraft ? runDocumentAudit(task, currentDraft.blocks, currentDraft.id) : [];
@@ -920,12 +939,115 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                 <div key={b.id} className="space-y-1">
                   <p className="text-slate-800 leading-relaxed indent-8 text-base font-serif">{b.content}</p>
                   {exportOptions.includeEvidence && b.referencedFactIds.length > 0 && (
-                    <div className="text-xs text-blue-700 pl-8 italic">
-                      📎 依据追溯：{b.referencedFactIds.map((id) => task.facts.find((f) => f.id === id)?.metric || id).join('、')}
+                    <div className="text-xs text-blue-700 pl-8 space-y-1">
+                      {b.referencedFactIds.map((id) => {
+                        const snapF = snapshotFactMap.get(id) || exportFacts.find((f) => f.factId === id);
+                        if (!snapF) return null;
+                        const val = `${snapF.selectedConflictValue || snapF.value}${snapF.unit}`;
+                        const period = snapF.period || '未记录期间';
+                        const scope = snapF.metricScope || '无单独口径';
+                        const conflictPart = (snapF.hasConflict || snapF.selectedConflictValue)
+                          ? ` | 裁决采信: ${val}${snapF.conflictResolutionReason ? ' (理由: ' + snapF.conflictResolutionReason + ')' : ''}`
+                          : '';
+                        const evId = snapF.provenance?.evidenceId || snapF.primaryEvidenceId || '未指定主出处';
+                        const matName = snapF.provenance
+                          ? `${snapF.provenance.sourceDocName}${snapF.provenance.sourceDocId ? ' [材料ID: ' + snapF.provenance.sourceDocId + ']' : ''} (${snapF.provenance.location || '未记录位置'})`
+                          : '未记录材料快照';
+                        const quoteText = snapF.provenance?.text
+                          ? `“${snapF.provenance.text}”`
+                          : '该版本未保存原文快照';
+
+                        return (
+                          <div key={id} className="p-1.5 bg-blue-50/70 rounded border border-blue-100">
+                            📎 依据出处：[{snapF.factId}] {snapF.metric} {val} | 期间: {period} | 口径: {scope}{conflictPart} | 主出处: {evId} | 来源材料: {matName} | 引用原文: {quoteText}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {exportOptions.includeEvidence && b.adoptedEvidences && b.adoptedEvidences.length > 0 && (
+                    <div className="text-xs text-emerald-700 pl-8 space-y-1">
+                      {b.adoptedEvidences.map((ev, i) => (
+                        <div key={i} className="p-1.5 bg-emerald-50/70 rounded border border-emerald-100">
+                          📄 材料补写依据：[材料补写出处: {ev.sourceDocName}{ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} ({ev.snippetLocation || '片段'}) “{ev.snippetText}” (期间: {ev.period})]
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
               ))}
+
+              {!exportOptions.includeBody && exportOptions.includeEvidence && (
+                <div className="space-y-4">
+                  <div className="border-b border-slate-200 pb-2">
+                    <h3 className="font-bold text-sm text-slate-800">【事实依据清单与出处溯源】</h3>
+                  </div>
+                  {exportFacts.length > 0 ? (
+                    <div className="space-y-3">
+                      {exportFacts.map((item, idx) => {
+                        const val = `${item.selectedConflictValue || item.value}${item.unit}`;
+                        const period = item.period || '未记录期间';
+                        const scope = item.metricScope || '无单独口径';
+                        const evId = item.provenance?.evidenceId || item.primaryEvidenceId || '未指定主出处';
+                        const matName = item.provenance
+                          ? `${item.provenance.sourceDocName}${item.provenance.sourceDocId ? ' [材料ID: ' + item.provenance.sourceDocId + ']' : ''} (${item.provenance.location || '未记录位置'})`
+                          : '未记录材料快照';
+                        const quoteText = item.provenance?.text
+                          ? `“${item.provenance.text}”`
+                          : '该版本未保存原文快照';
+
+                        return (
+                          <div key={item.factId || idx} className="p-3 bg-white rounded border border-slate-200 text-xs text-slate-700 space-y-1">
+                            <div className="font-semibold text-slate-800">
+                              {idx + 1}. [{item.factId}] {item.metric}：<span className="font-mono text-blue-700">{val}</span> | 期间：{period} | 口径：{scope} (主出处：{evId})
+                            </div>
+                            {(item.hasConflict || item.selectedConflictValue) && (
+                              <div className="text-slate-600 pl-3">
+                                - 裁决采信：{val}{item.conflictResolutionReason ? ' (理由：' + item.conflictResolutionReason + ')' : ''}
+                              </div>
+                            )}
+                            <div className="text-slate-600 pl-3">
+                              - 来源材料：{matName}
+                            </div>
+                            <div className="text-slate-600 pl-3">
+                              - 引用原文：{quoteText}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded text-xs text-slate-500 italic">
+                      暂无已核准的事实依据。
+                    </div>
+                  )}
+
+                  {(() => {
+                    const allAdoptedEvidences = selectedExportDraft?.blocks?.flatMap((b) =>
+                      (b.adoptedEvidences || []).map((ev) => ({ ...ev, blockOrder: b.order }))
+                    ) || [];
+                    if (allAdoptedEvidences.length === 0) return null;
+                    return (
+                      <div className="space-y-3 pt-3 border-t border-slate-200">
+                        <h4 className="font-bold text-xs text-slate-700">【段落补写采纳材料依据清单】</h4>
+                        <div className="space-y-2">
+                          {allAdoptedEvidences.map((ev, idx) => (
+                            <div key={idx} className="p-2.5 bg-emerald-50/50 rounded border border-emerald-200 text-xs text-slate-700">
+                              {idx + 1}. [第{ev.blockOrder}段] {ev.sourceDocName}{ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} ({ev.snippetLocation || '片段'}) | 期间：{ev.period} | 采用时冻结原文：“{ev.snippetText}”
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {!exportOptions.includeBody && !exportOptions.includeEvidence && !exportOptions.includeReviewLog && (
+                <div className="p-6 text-center text-xs text-slate-400 italic">
+                  （已依据导出选项排除正文、依据出处及审阅处理记录，仅保留文稿版本元数据）
+                </div>
+              )}
 
               {exportOptions.includeReviewLog && (
                 <div className="pt-4 border-t border-slate-200 mt-4 space-y-2">

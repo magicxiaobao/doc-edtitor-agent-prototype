@@ -17,11 +17,50 @@ import {
 import { Task, DraftVersion, ExportOptions, ReviewComment, FactItemSnapshot } from '../types';
 
 export function safeDownloadName(name: string): string { return name.replace(/[\\/:*?"<>|]+/g, '_'); }
-function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
+export function exportFactsFor(task: Task, draft: DraftVersion): FactItemSnapshot[] {
   const frozen = draft.snapshotMetadata?.factSnapshot?.items;
   if (frozen) return frozen.map(f => ({ ...f, value: f.selectedConflictValue || f.value }));
   if (draft.isHistoricalSnapshot || draft.isFinal) return [];
-  return task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly && (!f.hasConflict || f.selectedConflictValue) && isPeriodWithinTaskPeriod(f.period, task.startDate, task.endDate)).map(f => ({ ...f, factId: f.id, value: f.selectedConflictValue || f.value }));
+  return task.facts
+    .filter(f => f.status === 'confirmed' && !f.isHistoricOnly && (!f.hasConflict || f.selectedConflictValue) && isPeriodWithinTaskPeriod(f.period, task.startDate, task.endDate))
+    .map(f => {
+      const snip = task.snippets.find(s => s.id === f.primaryEvidenceId);
+      const doc = snip ? task.documents.find(d => d.id === snip.sourceDocId) : undefined;
+      return {
+        ...f,
+        factId: f.id,
+        value: f.selectedConflictValue || f.value,
+        provenance: snip ? {
+          evidenceId: snip.id,
+          sourceDocId: snip.sourceDocId || doc?.id || '',
+          sourceDocName: snip.docName || doc?.name || '未知材料文档',
+          location: snip.location || '段落索引',
+          text: snip.text || '',
+          period: snip.period || doc?.period || f.period,
+          capturedAt: new Date().toISOString(),
+        } : undefined,
+      };
+    });
+}
+
+export function formatFactEvidenceTxt(item: FactItemSnapshot): string {
+  const fid = item.factId;
+  const metric = item.metric;
+  const val = `${item.selectedConflictValue || item.value}${item.unit}`;
+  const period = item.period || '未记录期间';
+  const scope = item.metricScope || '无单独口径';
+  const conflictPart = (item.hasConflict || item.selectedConflictValue)
+    ? ` | 裁决采信: ${val}${item.conflictResolutionReason ? ' (理由: ' + item.conflictResolutionReason + ')' : ''}`
+    : '';
+  const evId = item.provenance?.evidenceId || item.primaryEvidenceId || '未指定主出处';
+  const matPart = item.provenance
+    ? `${item.provenance.sourceDocName}${item.provenance.sourceDocId ? ' [材料ID: ' + item.provenance.sourceDocId + ']' : ''} (${item.provenance.location || '未记录位置'})`
+    : '未记录材料快照';
+  const quotePart = item.provenance?.text
+    ? `“${item.provenance.text}”`
+    : '该版本未保存原文快照';
+
+  return `[事实依据: [${fid}] ${metric} ${val} | 期间: ${period} | 口径: ${scope}${conflictPart} | 主出处: ${evId} | 来源材料: ${matPart} | 引用原文: ${quotePart}]`;
 }
 
 /**
@@ -45,7 +84,7 @@ export function normalizeExportOptions(options?: boolean | ExportOptions): Requi
 /**
  * Requirement 4 & Task 10: Exports document version as TXT
  * - Supports granular options: includeBody, includeEvidence, includeReviewLog (all 8 combinations!)
- * - When includeBody is false and includeEvidence is true, outputs standalone evidence list.
+ * - When includeBody is false and includeEvidence is true, outputs standalone evidence list with frozen provenance.
  * - Uses frozen snapshotMetadata of the target draft rather than current outline/facts.
  * - Returns generated text string for test verification.
  */
@@ -73,16 +112,12 @@ export function exportDocumentAsTxt(
   outlineList.forEach((sec) => sectionsMap.set(sec.id, sec.title));
 
   // Prepare snapshot facts map
-  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string; period?: string; primaryEvidenceId?: string }>();
+  const snapshotFactMap = new Map<string, FactItemSnapshot>();
   if (meta?.factSnapshot?.items) {
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
-        metric: item.metric,
+        ...item,
         value: item.selectedConflictValue || item.value,
-        unit: item.unit,
-        metricScope: item.metricScope,
-        period: item.period,
-        primaryEvidenceId: item.primaryEvidenceId,
       });
     });
   }
@@ -102,10 +137,8 @@ export function exportDocumentAsTxt(
       if (opts.includeEvidence && block.referencedFactIds.length > 0) {
         const referencedFacts = block.referencedFactIds
           .map((fId) => {
-            const snapF = snapshotFactMap.get(fId);
-            if (snapF) return `[事实依据: ${snapF.metric} ${snapF.value}${snapF.unit} (口径: ${snapF.metricScope})]`;
-            const taskF = exportFacts.find((f) => f.factId === fId);
-            if (taskF) return `[事实依据: ${taskF.metric} ${taskF.value}${taskF.unit} (口径: ${taskF.metricScope})]`;
+            const snapF = snapshotFactMap.get(fId) || exportFacts.find((f) => f.factId === fId);
+            if (snapF) return formatFactEvidenceTxt(snapF);
             return null;
           })
           .filter(Boolean)
@@ -118,7 +151,7 @@ export function exportDocumentAsTxt(
 
       if (opts.includeEvidence && block.adoptedEvidences && block.adoptedEvidences.length > 0) {
         const adoptedMaterials = block.adoptedEvidences
-          .map((ev) => `[材料补写出处: ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) “${ev.snippetText}” (期间: ${ev.period})]`)
+          .map((ev) => `[材料补写出处: ${ev.sourceDocName}${ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} (${ev.snippetLocation || '片段'}) “${ev.snippetText}” (期间: ${ev.period})]`)
           .join(' ');
         if (adoptedMaterials) {
           content += `    >>> 材料补写依据：${adoptedMaterials}\n\n`;
@@ -130,13 +163,25 @@ export function exportDocumentAsTxt(
   // Standalone Evidence Section when includeBody is false but includeEvidence is true
   if (opts.includeEvidence && !opts.includeBody) {
     content += `【事实依据清单与出处溯源】\n----------------------------------------------------\n`;
-    if (meta?.factSnapshot?.items && meta.factSnapshot.items.length > 0) {
+    if (exportFacts.length > 0) {
       exportFacts.forEach((item, idx) => {
-        content += `${idx + 1}. [${item.factId}] ${item.metric}：${item.value}${item.unit} | 期间：${item.period} | 口径：${item.metricScope} (主出处：${item.primaryEvidenceId || '台账'})\n`;
-      });
-    } else if (exportFacts.length > 0) {
-      exportFacts.forEach((f, idx) => {
-        content += `${idx + 1}. [${f.factId}] ${f.metric}：${f.selectedConflictValue || f.value}${f.unit} | 期间：${f.period} | 口径：${f.metricScope} (主出处：${f.primaryEvidenceId || '台账'})\n`;
+        const val = `${item.selectedConflictValue || item.value}${item.unit}`;
+        const period = item.period || '未记录期间';
+        const scope = item.metricScope || '无单独口径';
+        const evId = item.provenance?.evidenceId || item.primaryEvidenceId || '未指定主出处';
+        const matName = item.provenance
+          ? `${item.provenance.sourceDocName}${item.provenance.sourceDocId ? ' [材料ID: ' + item.provenance.sourceDocId + ']' : ''} (${item.provenance.location || '未记录位置'})`
+          : '未记录材料快照';
+        const quoteText = item.provenance?.text
+          ? `“${item.provenance.text}”`
+          : '该版本未保存原文快照';
+
+        content += `${idx + 1}. [${item.factId}] ${item.metric}：${val} | 期间：${period} | 口径：${scope} (主出处：${evId})\n`;
+        if (item.hasConflict || item.selectedConflictValue) {
+          content += `   - 裁决采信：${val}${item.conflictResolutionReason ? ' (理由：' + item.conflictResolutionReason + ')' : ''}\n`;
+        }
+        content += `   - 来源材料：${matName}\n`;
+        content += `   - 引用原文：${quoteText}\n`;
       });
     } else {
       content += `暂无已核准的事实依据。\n`;
@@ -149,7 +194,7 @@ export function exportDocumentAsTxt(
     if (allAdoptedEvidences.length > 0) {
       content += `\n【段落补写采纳材料依据清单】\n----------------------------------------------------\n`;
       allAdoptedEvidences.forEach((ev, idx) => {
-        content += `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”\n`;
+        content += `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName}${ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”\n`;
       });
     }
     content += `\n`;
@@ -342,16 +387,12 @@ export async function exportDocumentAsDocx(
   const outlineList = meta?.outlineSections || task.outline;
   outlineList.forEach((sec) => sectionsMap.set(sec.id, sec.title));
 
-  const snapshotFactMap = new Map<string, { metric: string; value: string; unit: string; metricScope: string; period?: string; primaryEvidenceId?: string }>();
+  const snapshotFactMap = new Map<string, FactItemSnapshot>();
   if (meta?.factSnapshot?.items) {
     meta.factSnapshot.items.forEach((item) => {
       snapshotFactMap.set(item.factId, {
-        metric: item.metric,
+        ...item,
         value: item.selectedConflictValue || item.value,
-        unit: item.unit,
-        metricScope: item.metricScope,
-        period: item.period,
-        primaryEvidenceId: item.primaryEvidenceId,
       });
     });
   }
@@ -397,14 +438,28 @@ export async function exportDocumentAsDocx(
       if (opts.includeEvidence && block.referencedFactIds.length > 0) {
         const referencedFacts = block.referencedFactIds
           .map((fId) => {
-            const snapF = snapshotFactMap.get(fId);
-            if (snapF) return `【依据】${snapF.metric}: ${snapF.value}${snapF.unit} (${snapF.metricScope})`;
-            const taskF = exportFacts.find((f) => f.factId === fId);
-            if (taskF) return `【依据】${taskF.metric}: ${taskF.value}${taskF.unit} (${taskF.metricScope})`;
-            return null;
+            const snapF = snapshotFactMap.get(fId) || exportFacts.find((f) => f.factId === fId);
+            if (!snapF) return null;
+            const fid = snapF.factId;
+            const metric = snapF.metric;
+            const val = `${snapF.selectedConflictValue || snapF.value}${snapF.unit}`;
+            const period = snapF.period || '未记录期间';
+            const scope = snapF.metricScope || '无单独口径';
+            const conflictPart = (snapF.hasConflict || snapF.selectedConflictValue)
+              ? ` | 裁决采信: ${val}${snapF.conflictResolutionReason ? ' (理由: ' + snapF.conflictResolutionReason + ')' : ''}`
+              : '';
+            const evId = snapF.provenance?.evidenceId || snapF.primaryEvidenceId || '未指定主出处';
+            const matPart = snapF.provenance
+              ? `${snapF.provenance.sourceDocName}${snapF.provenance.sourceDocId ? ' [' + snapF.provenance.sourceDocId + ']' : ''} (${snapF.provenance.location || '未记录位置'})`
+              : '未记录材料快照';
+            const quotePart = snapF.provenance?.text
+              ? `“${snapF.provenance.text}”`
+              : '该版本未保存原文快照';
+
+            return `【${fid}】${metric} ${val} | 期间: ${period} | 口径: ${scope}${conflictPart} | 主出处: ${evId} | 来源材料: ${matPart} | 引用原文: ${quotePart}`;
           })
           .filter(Boolean)
-          .join('；');
+          .join('\n');
 
         if (referencedFacts) {
           docParagraphs.push(
@@ -427,8 +482,8 @@ export async function exportDocumentAsDocx(
 
       if (opts.includeEvidence && block.adoptedEvidences && block.adoptedEvidences.length > 0) {
         const adoptedMaterials = block.adoptedEvidences
-          .map((ev) => `【材料补写】${ev.sourceDocName} “${ev.snippetText}” (${ev.period})`)
-          .join('；');
+          .map((ev) => `【材料补写】${ev.sourceDocName}${ev.sourceDocId ? ' [' + ev.sourceDocId + ']' : ''} (${ev.snippetLocation || '片段'}) “${ev.snippetText}” (期间: ${ev.period})`)
+          .join('\n');
         if (adoptedMaterials) {
           docParagraphs.push(
             new Paragraph({
@@ -472,10 +527,11 @@ export async function exportDocumentAsDocx(
       new TableRow({
         tableHeader: true,
         children: [
-          new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '事实编号', bold: true, size: 20, font: 'SimHei' })] })] }),
-          new TableCell({ width: { size: 30, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '指标名称与数值', bold: true, size: 20, font: 'SimHei' })] })] }),
-          new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '统计期间', bold: true, size: 20, font: 'SimHei' })] })] }),
-          new TableCell({ width: { size: 35, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '口径说明与出处', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 12, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '事实编号', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 20, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '指标名称与数值', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 15, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '统计期间', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 25, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '口径说明与裁决', bold: true, size: 20, font: 'SimHei' })] })] }),
+          new TableCell({ width: { size: 28, type: WidthType.PERCENTAGE }, children: [new Paragraph({ children: [new TextRun({ text: '来源材料与引用原文', bold: true, size: 20, font: 'SimHei' })] })] }),
         ],
       })
     );
@@ -483,13 +539,55 @@ export async function exportDocumentAsDocx(
     const itemsToRender = exportFacts;
 
     itemsToRender.forEach((item) => {
+      const val = `${item.selectedConflictValue || item.value}${item.unit}`;
+      const period = item.period || '未记录期间';
+      const scope = item.metricScope || '无单独口径';
+      const evId = item.provenance?.evidenceId || item.primaryEvidenceId || '未指定主出处';
+      const matName = item.provenance
+        ? `${item.provenance.sourceDocName}${item.provenance.sourceDocId ? ' [' + item.provenance.sourceDocId + ']' : ''} (${item.provenance.location || '未记录位置'})`
+        : '未记录材料快照';
+      const quoteText = item.provenance?.text
+        ? `“${item.provenance.text}”`
+        : '该版本未保存原文快照';
+
+      const scopeRuns: TextRun[] = [
+        new TextRun({ text: scope, size: 18, font: 'FangSong' }),
+      ];
+      if (item.hasConflict || item.selectedConflictValue) {
+        scopeRuns.push(
+          new TextRun({
+            text: `\n裁决采信：${val}${item.conflictResolutionReason ? ' (理由: ' + item.conflictResolutionReason + ')' : ''}`,
+            size: 16,
+            color: '1E40AF',
+            font: 'FangSong',
+          })
+        );
+      }
+
       factTableRows.push(
         new TableRow({
           children: [
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: item.factId, size: 18, font: 'FangSong' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${item.metric}：${item.value}${item.unit}`, size: 18, font: 'FangSong' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: item.period || '2026年1-9月', size: 18, font: 'FangSong' })] })] }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${item.metricScope} (${item.primaryEvidenceId || '台账'})`, size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${item.metric}：${val}`, size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: period, size: 18, font: 'FangSong' })] })] }),
+            new TableCell({ children: [new Paragraph({ children: scopeRuns })] }),
+            new TableCell({
+              children: [
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: `主出处：${evId}\n`, bold: true, size: 18, font: 'FangSong' }),
+                    new TextRun({ text: `材料：${matName}\n`, size: 16, color: '333333', font: 'FangSong' }),
+                    new TextRun({
+                      text: `原文：${quoteText}`,
+                      size: 16,
+                      italics: true,
+                      color: item.provenance?.text ? '047857' : '777777',
+                      font: 'FangSong',
+                    }),
+                  ],
+                }),
+              ],
+            }),
           ],
         })
       );
@@ -526,7 +624,7 @@ export async function exportDocumentAsDocx(
             spacing: { after: 100 },
             children: [
               new TextRun({
-                text: `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”`,
+                text: `${idx + 1}. [第${ev.blockOrder}段] ${ev.sourceDocName}${ev.sourceDocId ? ' [' + ev.sourceDocId + ']' : ''} (${ev.snippetLocation || '片段'}) | 期间：${ev.period} | 采用时冻结原文：“${ev.snippetText}”`,
                 size: 20,
                 font: 'FangSong',
               }),
