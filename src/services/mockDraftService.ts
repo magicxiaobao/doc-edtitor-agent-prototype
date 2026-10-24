@@ -143,6 +143,49 @@ export function isSupportedDraftInstruction(prompt?: string): boolean {
 }
 
 /**
+ * Formats fact metric and value naturally without repeating leading verbs like 组织/开展/举办
+ */
+export function formatFactMetricAction(metric: string, value: string, unit: string, isCumulative: boolean = true): string {
+  const trimmed = metric.trim();
+  const startsWithCumulative = trimmed.startsWith('累计') || trimmed.startsWith('共');
+  const startsWithVerb = /^(开展|组织|举办|实施|推进|完成|办班)/.test(trimmed);
+  const endsWithVerb = /(完成|推进|开展|组织|举办|达|计)$/.test(trimmed);
+
+  // A scale/rate label reports a measurement, not an event or a completed quota.
+  if (unit === '%' || unit === '％' || /(?:规模|人数|人次|次数|场次|比例|比率|满意度|总数|总量|数量|率)$/.test(trimmed)) {
+    return `${trimmed}为${value}${unit}`;
+  }
+
+  if (startsWithCumulative) {
+    return `${trimmed}${value}${unit}`;
+  }
+
+  if (endsWithVerb) {
+    if (isCumulative) {
+      return `累计${trimmed}${value}${unit}`;
+    }
+    return `${trimmed}${value}${unit}`;
+  }
+
+  if (startsWithVerb) {
+    if (isCumulative) {
+      return `累计${trimmed}${value}${unit}`;
+    }
+    return `${trimmed}${value}${unit}`;
+  }
+
+  // Noun-like metric (e.g. 专题培训, 专题调研, 业务办件)
+  if (/(?:培训|培训班)$/.test(trimmed) && (unit === '场' || unit === '场次')) {
+    return isCumulative ? `累计组织${trimmed}${value}${unit}` : `组织${trimmed}${value}${unit}`;
+  }
+  if (trimmed.endsWith('调研') && unit === '次') {
+    return isCumulative ? `累计开展${trimmed}${value}${unit}` : `开展${trimmed}${value}${unit}`;
+  }
+  // A noun-like metric does not establish completion; preserve its actual meaning.
+  return `${trimmed}为${value}${unit}`;
+}
+
+/**
  * Deterministically generates draft paragraphs strictly driven by
  * confirmed outline sections and their assigned confirmed facts.
  * NO fallback values (no hardcoded 128, 16, 800, 12, or fixed 2026 dates).
@@ -205,21 +248,23 @@ export function generateDraftFromFactsAndOutline(
       // Generate paired training paragraph
       const factIds = [trainingFact.id, attendeeFact.id];
       const tPeriod = trainingFact.period || periodStr;
+      const trainingPhraseCumulative = formatFactMetricAction(trainingFact.metric, trainingFact.value, trainingFact.unit, true);
+      const trainingPhraseConcise = formatFactMetricAction(trainingFact.metric, trainingFact.value, trainingFact.unit, false);
       let content = '';
 
       if (isHighlightOutcomes) {
-        content = `在干部队伍履职能力建设方面，紧扣高素质实战需求，业务赋能质效大幅跃升。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，专业实操水平与规范执行能力取得显著成效。`;
+        content = `【重点成效】在干部队伍履职能力建设方面，${tPeriod}，${trainingPhraseCumulative}，累计参训${attendeeFact.value}${attendeeFact.unit}。`;
       } else if (isConcise) {
-        content = `${tPeriod}，组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，参训${attendeeFact.value}${attendeeFact.unit}，有效强化干部队伍履职执行水平。`;
+        content = `${tPeriod}，${trainingPhraseConcise}，参训${attendeeFact.value}${attendeeFact.unit}。`;
       } else if (isAlignment) {
-        content = `紧扣基层履职能力薄弱短板，靶向开展专业实操培训。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，推动培训举措与岗位实际需求紧密对应。`;
+        content = `聚焦岗位实际需求，靶向推进业务培训。${tPeriod}，${trainingPhraseCumulative}，累计参训${attendeeFact.value}${attendeeFact.unit}。`;
       } else if (isReportingTone) {
-        content = `聚焦高素质专业化干部队伍建设，高位推动业务赋能。${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，全流程赋能机制健全运转。`;
+        content = `聚焦高素质专业化干部队伍建设，统筹推进业务培训。${tPeriod}，${trainingPhraseCumulative}，累计参训${attendeeFact.value}${attendeeFact.unit}。`;
       } else {
         const leadIn = hasMeasureAndFact
-          ? `在干部队伍履职能力建设方面，坚持需求导向，深化分级分类专业实操培养。`
-          : `扎实开展干部业务培训工作。`;
-        content = `${leadIn}${tPeriod}，累计组织${trainingFact.metric}${trainingFact.value}${trainingFact.unit}，累计参训${attendeeFact.value}${attendeeFact.unit}，有效强化了专业化履职能力与规范执行水平。`;
+          ? `在干部队伍履职能力建设方面，`
+          : `扎实开展干部业务培训工作，`;
+        content = `${leadIn}${tPeriod}，${trainingPhraseCumulative}，累计参训${attendeeFact.value}${attendeeFact.unit}。`;
       }
 
       blocks.push({
@@ -288,57 +333,60 @@ function buildSingleFactParagraph(
   const isAlignment = prompt.includes('对应') || prompt.includes('问题与安排');
   const isReportingTone = prompt.includes('汇报口吻') || prompt.includes('单位负责人');
 
+  const formattedMetric = formatFactMetricAction(metric, val, unit, true);
+  const conciseMetric = formatFactMetricAction(metric, val, unit, false);
+
   let content = '';
 
   if (isHighlightOutcomes) {
     if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
-      content = `全系统强化攻坚突破，各项部署紧盯节点攻坚克难，取得扎实成效。${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标高效达成，重点攻坚成效显著。`;
+      content = `【重点成效】全系统紧盯重点部署攻坚突破。${fPeriod}，截至统计期末，${formattedMetric}。`;
     } else if (metric.includes('调研')) {
-      content = `【重点成效】在调查研究方面，紧扣基层急难愁盼深入调研，${fPeriod}累计${metric}${val}${unit}，推动形成一系列制度优化与长效机制。`;
+      content = `【重点成效】在调查研究方面，紧扣实际工作深入开展调研。${fPeriod}，${formattedMetric}。`;
     } else {
-      content = `【重点成效】立足业务发展需要，紧扣核心指标狠抓工作质效。${fPeriod}，${metric}完成${val}${unit}，有力保障全系统高质量运转。`;
+      content = `【重点成效】立足业务发展需要，紧扣核心指标推进落实。${fPeriod}，${formattedMetric}。`;
     }
   } else if (isConcise) {
     if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
-      content = `${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标平稳达成。`;
+      content = `${fPeriod}，截至统计期末，${formattedMetric}。`;
     } else if (metric.includes('调研')) {
-      content = `在调查研究方面，${fPeriod}累计${metric}${val}${unit}，形成制度优化举措。`;
+      content = `在调查研究方面，${fPeriod}，${conciseMetric}。`;
     } else {
-      content = `${fPeriod}，${metric}完成${val}${unit}，保障系统运转。`;
+      content = `${fPeriod}，${conciseMetric}。`;
     }
   } else if (isAlignment) {
     if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
-      content = `紧扣工作堵点破局突围，坚持靶向发力与清单化推进。${fPeriod}，截至统计期末，${metric}${val}${unit}，确保问题清单与具体安排紧密对应、如期销号。`;
+      content = `围绕工作堵点，坚持清单化推进。${fPeriod}，截至统计期末，${formattedMetric}，确保具体安排紧密对应。`;
     } else if (metric.includes('调研')) {
-      content = `坚持以问题为导向，紧密对接一线实际诉求。在调查研究方面，${fPeriod}累计${metric}${val}${unit}，推动问题发现在一线、举措落实在一线。`;
+      content = `坚持以问题为导向，深入一线了解实际情况。在调查研究方面，${fPeriod}，${formattedMetric}。`;
     } else {
-      content = `对标业务短板清单统筹推进整改治理。${fPeriod}，${metric}完成${val}${unit}，确保整改举措与序时安排有序对应。`;
+      content = `围绕清单任务统筹推进落实。${fPeriod}，${formattedMetric}。`;
     }
   } else if (isReportingTone) {
     if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
-      content = `紧扣全局中心工作部署，统筹推进全流程规范治理。${fPeriod}，截至统计期末，${metric}${val}${unit}，各项既定序时指标高位推进、平稳达成。`;
+      content = `紧扣全局中心工作部署，统筹推进各项重点任务。${fPeriod}，截至统计期末，${formattedMetric}。`;
     } else if (metric.includes('调研')) {
-      content = `深入贯彻大兴调查研究部署要求，立足单位高标准履职定位，${fPeriod}累计${metric}${val}${unit}，为科学决策提供扎实依据。`;
+      content = `深入贯彻调查研究要求，立足单位实际深入一线。${fPeriod}，${formattedMetric}。`;
     } else {
-      content = `紧扣中心大局与核心指标，统筹推进全流程规范治理。${fPeriod}，${metric}完成${val}${unit}，有力保障全系统平稳高效运转。`;
+      content = `紧扣中心大局与核心指标，统筹推进各项工作。${fPeriod}，${formattedMetric}。`;
     }
   } else {
     // Standard default generation
     if (metric.includes('任务') || metric.includes('推进') || metric.includes('攻坚')) {
       const lead = hasMeasureAndFact
-        ? `全系统强化统筹联动与机制创新，各项重点部署紧盯节点有序推进。`
+        ? `全系统强化统筹联动，各项重点部署紧盯节点有序推进。`
         : `各项既定重点任务平稳有序开展。`;
-      content = `${fPeriod}，${lead}截至统计期末，${metric}${val}${unit}，各项既定序时指标平稳达成，重点攻坚成效显著。`;
+      content = `${fPeriod}，${lead}截至统计期末，${formattedMetric}。`;
     } else if (metric.includes('调研')) {
       const lead = hasMeasureAndFact
-        ? `深入推进调查研究，紧扣基层一线急难愁盼诉求，`
+        ? `深入推进调查研究，紧扣基层实际诉求，`
         : `扎实开展常态化专项调研，`;
-      content = `在调查研究方面，${lead}${fPeriod}累计${metric}${val}${unit}，推动形成一系列制度优化与流程改进举措。`;
+      content = `在调查研究方面，${lead}${fPeriod}，${formattedMetric}。`;
     } else {
       const lead = hasFormalTone
         ? `立足业务发展需要，严谨抓好各项工作落实。`
         : `抓细抓实各项日常工作。`;
-      content = `${lead}${fPeriod}，${metric}完成${val}${unit}，保障全系统平稳高效运转。`;
+      content = `${lead}${fPeriod}，${formattedMetric}。`;
     }
   }
 
@@ -351,7 +399,6 @@ function buildSingleFactParagraph(
     updatedAt: new Date().toISOString(),
   };
 }
-
 
 /**
  * Shared deterministic paragraph compression rule.

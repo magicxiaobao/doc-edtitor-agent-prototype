@@ -99,7 +99,8 @@ assert(blocks2027.length === 1, '生成全新章节对应段落');
 assert(blocks2027[0].sectionId === 'SEC-NEW-888', '段落sectionId与全新章节ID一致');
 assert(blocks2027[0].id.includes('SEC-NEW-888'), '段落ID与全新章节ID绑定');
 assert(blocks2027[0].content.includes('2027年二季度'), '正文按当前2027年二季度期间生成');
-assert(blocks2027[0].content.includes('落地营商便民服务事项完成66件'), '正文包含全新事实名称、数值及单位');
+assert(blocks2027[0].content.includes('落地营商便民服务事项为66件'), '正文以中性数量表述保留全新事实名称、数值及单位');
+assert(!blocks2027[0].content.includes('落地营商便民服务事项完成'), '通用名词指标不额外拼接完成断言');
 assert(blocks2027[0].referencedFactIds.includes('FACT-NEW-777'), '段落正确引用全新事实ID');
 
 // ==========================================
