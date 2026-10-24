@@ -151,6 +151,11 @@ export function formatFactMetricAction(metric: string, value: string, unit: stri
   const startsWithVerb = /^(开展|组织|举办|实施|推进|完成|办班)/.test(trimmed);
   const endsWithVerb = /(完成|推进|开展|组织|举办|达|计)$/.test(trimmed);
 
+  // Attendance-scale labels describe a measured quantity, not another training event.
+  if (/参训.*(?:规模|人数|人次)$/.test(trimmed)) {
+    return `${trimmed}为${value}${unit}`;
+  }
+
   if (startsWithCumulative) {
     return `${trimmed}${value}${unit}`;
   }
