@@ -151,8 +151,8 @@ export function formatFactMetricAction(metric: string, value: string, unit: stri
   const startsWithVerb = /^(开展|组织|举办|实施|推进|完成|办班)/.test(trimmed);
   const endsWithVerb = /(完成|推进|开展|组织|举办|达|计)$/.test(trimmed);
 
-  // Attendance-scale labels describe a measured quantity, not another training event.
-  if (/参训.*(?:规模|人数|人次)$/.test(trimmed)) {
+  // A scale/rate label reports a measurement, not an event or a completed quota.
+  if (unit === '%' || unit === '％' || /(?:规模|人数|人次|次数|场次|比例|比率|满意度|总数|总量|数量|率)$/.test(trimmed)) {
     return `${trimmed}为${value}${unit}`;
   }
 
@@ -162,7 +162,7 @@ export function formatFactMetricAction(metric: string, value: string, unit: stri
 
   if (endsWithVerb) {
     if (isCumulative) {
-      return startsWithVerb ? `累计${trimmed}${value}${unit}` : `累计${trimmed}${value}${unit}`;
+      return `累计${trimmed}${value}${unit}`;
     }
     return `${trimmed}${value}${unit}`;
   }
@@ -175,16 +175,14 @@ export function formatFactMetricAction(metric: string, value: string, unit: stri
   }
 
   // Noun-like metric (e.g. 专题培训, 专题调研, 业务办件)
-  if (trimmed.includes('培训')) {
+  if (/(?:培训|培训班)$/.test(trimmed) && (unit === '场' || unit === '场次')) {
     return isCumulative ? `累计组织${trimmed}${value}${unit}` : `组织${trimmed}${value}${unit}`;
   }
-  if (trimmed.includes('调研')) {
+  if (trimmed.endsWith('调研') && unit === '次') {
     return isCumulative ? `累计开展${trimmed}${value}${unit}` : `开展${trimmed}${value}${unit}`;
   }
-  if (isCumulative) {
-    return `累计${trimmed}完成${value}${unit}`;
-  }
-  return `${trimmed}完成${value}${unit}`;
+  // A noun-like metric does not establish completion; preserve its actual meaning.
+  return `${trimmed}为${value}${unit}`;
 }
 
 /**

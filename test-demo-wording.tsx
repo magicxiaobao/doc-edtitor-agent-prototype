@@ -101,6 +101,30 @@ await check('a separately assigned attendance-scale fact is not turned into an e
   }
 });
 
+await check('ongoing quantities and rate labels never become completed work or invented events', () => {
+  const fixtures = [
+    ['重点推进工作任务', '128', '项', '截至统计期末累计推进重点工作128项。'],
+    ['受理事项', '37', '件', '本期受理事项37件，仍在办理。'],
+    ['培训覆盖率', '85', '%', '培训覆盖率为85%。'],
+    ['调研参与比例', '62', '%', '调研参与比例为62%。'],
+  ];
+  for (const [metric, value, unit, raw] of fixtures) {
+    const task = createPresetTask('ready_to_draft');
+    const fact = {...task.facts[0], metric, value, unit, hasConflict: false,
+      selectedConflictValue: undefined, conflictResolutionReason: undefined};
+    task.facts = [fact]; task.outline = [{...task.outline[0], assignedFactIds: [fact.id]}];
+    task.snippets.find(s => s.id === fact.primaryEvidenceId)!.text = raw;
+    for (const prompt of prompts) {
+      const blocks = generate(task, prompt); assert.equal(blocks.length, 1);
+      const text = blocks[0].content;
+      assert(text.includes(`${metric}为${value}${unit}`), text);
+      assert(!text.includes('完成'), `ongoing count is not completion: ${text}`);
+      assert(!/组织培训覆盖率|开展调研参与比例|累计培训覆盖率|累计调研参与比例/.test(text), text);
+      assert.deepEqual(blocks[0].referencedFactIds, [fact.id]);
+    }
+  }
+});
+
 await check('real initial-draft generation preserves frozen raw quotation even when it contains repeated verbs', async () => {
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   let task = createPresetTask('ready_to_draft');
