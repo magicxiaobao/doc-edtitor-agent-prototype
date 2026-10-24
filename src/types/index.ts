@@ -82,6 +82,16 @@ export interface Fact {
   gapDescription?: string;
 }
 
+export interface FactEvidenceProvenance {
+  evidenceId: string;        // e.g. "EVD-02"
+  sourceDocId: string;       // e.g. "SRC-02"
+  sourceDocName: string;     // e.g. "科室乙前三季度汇总"
+  location?: string;         // e.g. "第2段"
+  text: string;              // 冻结的原文片段
+  period?: string;           // e.g. "2026年1至9月"
+  capturedAt?: string;       // 冻结捕获时间 (ISO string)
+}
+
 export interface FactItemSnapshot {
   factId: string;
   metric: string;
@@ -94,6 +104,7 @@ export interface FactItemSnapshot {
   conflictResolutionReason?: string;
   hasConflict?: boolean;
   conflictCandidates?: { value: string; description: string; evidenceId?: string }[];
+  provenance?: FactEvidenceProvenance; // 冻结的来源材料与原文快照（可选，兼容历史数据）
 }
 
 export interface FactSnapshot {

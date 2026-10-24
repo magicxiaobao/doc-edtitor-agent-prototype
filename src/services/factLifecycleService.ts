@@ -1,4 +1,4 @@
-import { Task, Fact, UserRole, EvidenceSnippet, SourceDocument, DraftVersion, FactItemSnapshot } from '../types';
+import { Task, Fact, UserRole, EvidenceSnippet, SourceDocument, DraftVersion, FactItemSnapshot, FactEvidenceProvenance } from '../types';
 import { checkPermission } from './permissionService';
 
 /**
@@ -581,6 +581,7 @@ export function formatDefaultPeriodForTask(startDate?: string, endDate?: string)
 export interface ResolvedDraftFactEvidence {
   fact: Fact;
   snapItem: FactItemSnapshot | null;
+  provenance?: FactEvidenceProvenance;
   isHistoricalOrFinal: boolean;
   hasFrozenItem: boolean;
 
@@ -612,6 +613,53 @@ export interface ResolvedDraftFactEvidence {
   isEvidenceMissingInSnapshot: boolean;
   isEvidencePrunedOrUnavailable: boolean;
   isSnapshotMissingFact: boolean;
+}
+
+/**
+ * Captures immutable evidence provenance for a fact from task snippets and documents.
+ */
+export function captureFactEvidenceProvenance(
+  task: { snippets: EvidenceSnippet[]; documents: SourceDocument[] },
+  fact: Fact
+): FactEvidenceProvenance | undefined {
+  const primaryEvidenceId = fact.primaryEvidenceId;
+  if (!primaryEvidenceId) return undefined;
+  const snippet = task.snippets.find((s) => s.id === primaryEvidenceId);
+  if (!snippet) return undefined;
+  const doc = task.documents.find((d) => d.id === snippet.sourceDocId);
+  return {
+    evidenceId: snippet.id,
+    sourceDocId: snippet.sourceDocId || doc?.id || '',
+    sourceDocName: snippet.docName || doc?.name || '未知材料文档',
+    location: snippet.location || '段落索引',
+    text: snippet.text || '',
+    period: snippet.period || doc?.period || fact.period,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Builds a canonical FactItemSnapshot capturing metric, values, conflict resolutions, and immutable evidence provenance.
+ */
+export function buildFactItemSnapshot(
+  task: { snippets: EvidenceSnippet[]; documents: SourceDocument[] },
+  fact: Fact
+): FactItemSnapshot {
+  const provenance = captureFactEvidenceProvenance(task, fact);
+  return {
+    factId: fact.id,
+    metric: fact.metric,
+    value: fact.selectedConflictValue || fact.value,
+    unit: fact.unit,
+    period: fact.period,
+    metricScope: fact.metricScope,
+    primaryEvidenceId: fact.primaryEvidenceId,
+    selectedConflictValue: fact.selectedConflictValue,
+    conflictResolutionReason: fact.conflictResolutionReason,
+    hasConflict: fact.hasConflict,
+    conflictCandidates: fact.conflictCandidates ? JSON.parse(JSON.stringify(fact.conflictCandidates)) : undefined,
+    provenance,
+  };
 }
 
 /**
@@ -666,7 +714,17 @@ export function resolveDraftFactEvidence(
       effectivePeriod = snapItem.period || '未记录期间';
       effectiveMetricScope = snapItem.metricScope || '无单独口径';
       effectiveEvidenceId = snapItem.primaryEvidenceId;
-      if (effectiveEvidenceId) {
+      if (snapItem.provenance && (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId)) {
+        effectiveSnippet = {
+          id: snapItem.provenance.evidenceId,
+          sourceDocId: snapItem.provenance.sourceDocId,
+          docName: snapItem.provenance.sourceDocName,
+          location: snapItem.provenance.location || '段落索引',
+          period: snapItem.provenance.period || snapItem.period || '',
+          text: snapItem.provenance.text,
+        };
+        isEvidencePrunedOrUnavailable = false;
+      } else if (effectiveEvidenceId) {
         effectiveSnippet = task.snippets.find((s) => s.id === effectiveEvidenceId) || null;
         if (!effectiveSnippet) {
           isEvidencePrunedOrUnavailable = true;
@@ -684,9 +742,21 @@ export function resolveDraftFactEvidence(
     effectivePeriod = snapItem.period || '未记录期间';
     effectiveMetricScope = snapItem.metricScope || '无单独口径';
     effectiveEvidenceId = snapItem.primaryEvidenceId;
-    effectiveSnippet = effectiveEvidenceId ? task.snippets.find(s => s.id === effectiveEvidenceId) || null : null;
-    isEvidenceMissingInSnapshot = !effectiveEvidenceId;
-    isEvidencePrunedOrUnavailable = Boolean(effectiveEvidenceId && !effectiveSnippet);
+    if (snapItem.provenance && (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId)) {
+      effectiveSnippet = {
+        id: snapItem.provenance.evidenceId,
+        sourceDocId: snapItem.provenance.sourceDocId,
+        docName: snapItem.provenance.sourceDocName,
+        location: snapItem.provenance.location || '段落索引',
+        period: snapItem.provenance.period || snapItem.period || '',
+        text: snapItem.provenance.text,
+      };
+      isEvidencePrunedOrUnavailable = false;
+    } else {
+      effectiveSnippet = effectiveEvidenceId ? task.snippets.find(s => s.id === effectiveEvidenceId) || null : null;
+      isEvidenceMissingInSnapshot = !effectiveEvidenceId;
+      isEvidencePrunedOrUnavailable = Boolean(effectiveEvidenceId && !effectiveSnippet);
+    }
   } else {
     effectivePeriod = fact.period;
     effectiveMetricScope = fact.metricScope || '标准口径';
@@ -694,9 +764,10 @@ export function resolveDraftFactEvidence(
     effectiveSnippet = currentSnippet;
   }
 
-  const effectiveDoc = effectiveSnippet ? task.documents.find((d) => d.id === effectiveSnippet.sourceDocId) : undefined;
-  const effectiveDocName = effectiveSnippet?.docName || effectiveDoc?.name;
-  const effectiveLocation = effectiveSnippet?.location || '段落索引';
+  const isProvenanceMatch = Boolean(snapItem?.provenance && (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId));
+  const effectiveDoc = effectiveSnippet && !isProvenanceMatch ? task.documents.find((d) => d.id === effectiveSnippet.sourceDocId) : undefined;
+  const effectiveDocName = isProvenanceMatch ? snapItem!.provenance!.sourceDocName : (effectiveSnippet?.docName || effectiveDoc?.name);
+  const effectiveLocation = isProvenanceMatch ? (snapItem!.provenance!.location || '段落索引') : (effectiveSnippet?.location || '段落索引');
 
   const hasSnapshotDiff = Boolean(
     snapItem && latestFact && (
@@ -717,6 +788,7 @@ export function resolveDraftFactEvidence(
   return {
     fact,
     snapItem,
+    provenance: snapItem?.provenance,
     isHistoricalOrFinal,
     hasFrozenItem,
     adoptedValue,

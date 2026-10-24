@@ -921,7 +921,20 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                   <p className="text-slate-800 leading-relaxed indent-8 text-base font-serif">{b.content}</p>
                   {exportOptions.includeEvidence && b.referencedFactIds.length > 0 && (
                     <div className="text-xs text-blue-700 pl-8 italic">
-                      📎 依据追溯：{b.referencedFactIds.map((id) => task.facts.find((f) => f.id === id)?.metric || id).join('、')}
+                      📎 依据追溯：{b.referencedFactIds.map((id) => {
+                        const snapF = selectedExportDraft?.snapshotMetadata?.factSnapshot?.items?.find((f) => f.factId === id);
+                        if (snapF) {
+                          const evId = snapF.provenance?.evidenceId || snapF.primaryEvidenceId || '台账';
+                          return `${snapF.metric}: ${snapF.selectedConflictValue || snapF.value}${snapF.unit} (出处: ${evId})`;
+                        }
+                        const f = task.facts.find((fact) => fact.id === id);
+                        return f ? `${f.metric}: ${f.selectedConflictValue || f.value}${f.unit}` : id;
+                      }).join('；')}
+                    </div>
+                  )}
+                  {exportOptions.includeEvidence && b.adoptedEvidences && b.adoptedEvidences.length > 0 && (
+                    <div className="text-xs text-emerald-700 pl-8 italic">
+                      📄 材料依据：{b.adoptedEvidences.map((ev) => `【材料补写】${ev.sourceDocName} “${ev.snippetText}” (${ev.period})`).join('；')}
                     </div>
                   )}
                 </div>

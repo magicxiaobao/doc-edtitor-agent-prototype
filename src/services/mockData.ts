@@ -399,19 +399,32 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
     baseTask.factSnapshot = {
       confirmedAt: '2026-10-07T08:30:00.000Z',
       factIds: baseTask.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly).map((f) => f.id),
-      items: baseTask.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly).map((f) => ({
-        factId: f.id,
-        metric: f.metric,
-        value: f.selectedConflictValue || f.value,
-        unit: f.unit,
-        period: f.period,
-        metricScope: f.metricScope,
-        primaryEvidenceId: f.primaryEvidenceId,
-        selectedConflictValue: f.selectedConflictValue,
-        conflictResolutionReason: f.conflictResolutionReason,
-        hasConflict: f.hasConflict,
-        conflictCandidates: f.conflictCandidates ? JSON.parse(JSON.stringify(f.conflictCandidates)) : undefined,
-      })),
+      items: baseTask.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly).map((f) => {
+        const snip = baseTask.snippets.find((s) => s.id === f.primaryEvidenceId);
+        const doc = snip ? baseTask.documents.find((d) => d.id === snip.sourceDocId) : undefined;
+        return {
+          factId: f.id,
+          metric: f.metric,
+          value: f.selectedConflictValue || f.value,
+          unit: f.unit,
+          period: f.period,
+          metricScope: f.metricScope,
+          primaryEvidenceId: f.primaryEvidenceId,
+          selectedConflictValue: f.selectedConflictValue,
+          conflictResolutionReason: f.conflictResolutionReason,
+          hasConflict: f.hasConflict,
+          conflictCandidates: f.conflictCandidates ? JSON.parse(JSON.stringify(f.conflictCandidates)) : undefined,
+          provenance: snip ? {
+            evidenceId: snip.id,
+            sourceDocId: snip.sourceDocId,
+            sourceDocName: snip.docName || doc?.name || '未知材料文档',
+            location: snip.location || '段落索引',
+            text: snip.text || '',
+            period: snip.period || doc?.period || f.period,
+            capturedAt: '2026-10-07T08:30:00.000Z',
+          } : undefined,
+        };
+      }),
       hash: 'SNAPSHOT-HASH-CONFIRMED-128',
     };
     baseTask.styleConfirmed = true;
@@ -447,14 +460,32 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   baseTask.factSnapshot = {
     confirmedAt: '2026-10-07T08:30:00.000Z',
     factIds: baseTask.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map(f => f.id),
-    items: baseTask.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map(f => ({
-      factId: f.id, metric: f.metric, value: f.selectedConflictValue || f.value,
-      unit: f.unit, period: f.period, metricScope: f.metricScope,
-      primaryEvidenceId: f.primaryEvidenceId, selectedConflictValue: f.selectedConflictValue,
-      conflictResolutionReason: f.conflictResolutionReason,
-      hasConflict: f.hasConflict,
-      conflictCandidates: f.conflictCandidates ? JSON.parse(JSON.stringify(f.conflictCandidates)) : undefined,
-    })),
+    items: baseTask.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly).map(f => {
+      const snip = baseTask.snippets.find((s) => s.id === f.primaryEvidenceId);
+      const doc = snip ? baseTask.documents.find((d) => d.id === snip.sourceDocId) : undefined;
+      return {
+        factId: f.id,
+        metric: f.metric,
+        value: f.selectedConflictValue || f.value,
+        unit: f.unit,
+        period: f.period,
+        metricScope: f.metricScope,
+        primaryEvidenceId: f.primaryEvidenceId,
+        selectedConflictValue: f.selectedConflictValue,
+        conflictResolutionReason: f.conflictResolutionReason,
+        hasConflict: f.hasConflict,
+        conflictCandidates: f.conflictCandidates ? JSON.parse(JSON.stringify(f.conflictCandidates)) : undefined,
+        provenance: snip ? {
+          evidenceId: snip.id,
+          sourceDocId: snip.sourceDocId,
+          sourceDocName: snip.docName || doc?.name || '未知材料文档',
+          location: snip.location || '段落索引',
+          text: snip.text || '',
+          period: snip.period || doc?.period || f.period,
+          capturedAt: '2026-10-07T08:30:00.000Z',
+        } : undefined,
+      };
+    }),
     hash: 'SNAPSHOT-HASH-CONFIRMED-128',
   };
   baseTask.styleConfirmed = true;
