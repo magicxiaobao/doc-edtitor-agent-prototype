@@ -1,4 +1,4 @@
-import {dom} from './test-jsdom-env';
+import {dom, simulateTextareaChange} from './test-jsdom-env';
 import React, {act} from 'react';
 import {createRoot} from 'react-dom/client';
 import assert from 'node:assert/strict';
@@ -6,6 +6,7 @@ import JSZip from 'jszip';
 import {createPresetTask} from './src/services/mockData';
 import {MaterialsAndFactsStage} from './src/components/stages/MaterialsAndFactsStage';
 import {DraftingStage} from './src/components/stages/DraftingStage';
+import {StyleAndOutlineStage} from './src/components/stages/StyleAndOutlineStage';
 import {AuditAndExportStage} from './src/components/stages/AuditAndExportStage';
 import {SnippetDrawer} from './src/components/SnippetDrawer';
 import {resolveDraftFactEvidence} from './src/services/factLifecycleService';
@@ -45,6 +46,70 @@ async function exportText(task: Task, draft: DraftVersion, options: ExportOption
 const previousCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
 Object.defineProperty(URL, 'createObjectURL', {configurable: true, value: undefined});
 try {
+  await check('real redecision freezes a coherent scope/source into new drafts and exports without rewriting history', async () => {
+    let task = createPresetTask('ready_to_draft');
+    const original = structuredClone(task);
+    const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+    const update = (u: Partial<Task>) => { task = {...task, ...u}; };
+    const materials = () => act(() => root.render(<MaterialsAndFactsStage task={task} activeRole="主笔甲"
+      onUpdateTask={update} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
+    const drafting = () => act(() => root.render(<DraftingStage task={task} activeRole="主笔甲"
+      onUpdateTask={update} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
+    const decideAndConfirm = (value: string) => {
+      materials(); act(() => button(host, '裁决冲突').click());
+      const candidate = original.facts[0].conflictCandidates!.find(c => c.value === value)!;
+      const cardText = [...host.querySelectorAll('p')].find(p => p.textContent === candidate.description)!;
+      assert(cardText);
+      act(() => { cardText.click(); simulateTextareaChange(host.querySelector<HTMLTextAreaElement>('textarea[required]')!, `核对材料后采信${value}项。`); });
+      act(() => button(host, '确认采信并写入事实').click());
+      materials(); act(() => button(host, '确认本次事实清单').click());
+      act(() => root.render(<StyleAndOutlineStage task={task} activeRole="主笔甲"
+        onUpdateTask={update} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
+      act(() => button(host, '确认大纲并进入起草').click());
+      assert(task.outlineConfirmed && task.factSnapshot);
+      return candidate;
+    };
+    try {
+      const first = decideAndConfirm('120'); drafting();
+      await act(async () => { button(host, '立即生成初稿').click(); await new Promise(r => setTimeout(r, 850)); });
+      const draft = task.drafts.find(d => d.id === task.currentDraftId)!;
+      assert(draft);
+      const item = draft.snapshotMetadata!.factSnapshot!.items.find(f => f.factId === 'FACT-01')!;
+      assert.equal(item.metricScope, first.description); assert.equal(item.value, '120');
+      assert.equal(item.provenance?.evidenceId, 'EVD-01');
+      assert(draft.blocks.some(b => b.content.includes('120项')));
+      assert.equal(resolveDraftFactEvidence(task.facts[0], draft, task).hasScopeDiff, false);
+      const saved = createDraftSnapshot(task, draft.id, '裁决口径冻结120', '主笔甲');
+      task = saved.updatedTask;
+      const history = saved.snapshotDraft; const frozen = structuredClone(history);
+      const options = {includeBody: true, includeEvidence: true, includeReviewLog: false};
+      const before = await Promise.all([false, true].map(docx => exportText(task, history, options, docx)));
+      for (const text of before) {
+        assert(text.includes(first.description)); assert(text.includes('EVD-01'));
+        assert(text.includes(item.provenance!.text));
+        assert(!text.includes(original.facts[0].metricScope), '120 export must not retain the former 128 scope');
+      }
+      const next = decideAndConfirm('128'); drafting();
+      await act(async () => { button(host, '生成整稿候选').click(); await new Promise(r => setTimeout(r, 850)); });
+      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!; assert(dialog);
+      act(() => button(dialog, '整体采纳并创建新工作稿').click());
+      const current = task.drafts.find(d => d.id === task.currentDraftId)!;
+      const nextItem = current.snapshotMetadata!.factSnapshot!.items.find(f => f.factId === 'FACT-01')!;
+      assert.equal(nextItem.metricScope, next.description); assert.equal(nextItem.value, '128');
+      assert.equal(nextItem.provenance?.evidenceId, 'EVD-02');
+      assert(current.blocks.some(b => b.content.includes('128项')));
+      assert.equal(resolveDraftFactEvidence(task.facts[0], current, task).hasScopeDiff, false);
+      assert.equal(resolveDraftFactEvidence(task.facts[0], history, task).hasScopeDiff, true);
+      assert.deepEqual(task.drafts.find(d => d.id === history.id), frozen, 'new decisions/candidates must preserve the saved historical version');
+      for (const [i, docx] of [false, true].entries()) {
+        assert.equal(await exportText(task, history, options, docx), before[i]);
+        const text = await exportText(task, current, options, docx);
+        assert(text.includes(next.description)); assert(text.includes('EVD-02'));
+        assert(!text.includes(first.description));
+      }
+    } finally { act(() => root.unmount()); host.remove(); }
+  });
+
   let generatedTask = createPresetTask('ready_to_draft');
   await check('real fact confirmation captures provenance before real initial draft generation', async () => {
     mount((root, host) => {

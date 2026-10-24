@@ -1,4 +1,4 @@
-import { dom } from './test-jsdom-env';
+import { dom, simulateTextareaChange } from './test-jsdom-env';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import assert from 'node:assert/strict';
@@ -47,6 +47,58 @@ const button = (label: string) => {
   const result = [...container.querySelectorAll('button')].find(b => b.textContent?.includes(label));
   assert(result, `missing button: ${label}`); return result;
 };
+// Re-open real conflict decisions in all presets. A previous adoption must not
+// leave the other candidate's scope attached to the newly selected value/source.
+for (const scenario of ['ready_to_draft', 'under_review', 'conflict_pending'] as const) {
+  let current = createPresetTask(scenario);
+  const original = structuredClone(current);
+  const render = () => act(() => root.render(<MaterialsAndFactsStage task={current} activeRole="主笔甲"
+    onUpdateTask={u => { current = {...current, ...u}; }} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
+  for (const value of ['120', '128', '120']) {
+    render();
+    act(() => button('裁决冲突').click());
+    const candidate = original.facts[0].conflictCandidates!.find(c => c.value === value)!;
+    const label = [...container.querySelectorAll('p')].find(p => p.textContent === candidate.description)!;
+    assert(label, 'real candidate card must be present');
+    const reason = `回归核对${scenario}：采信${value}项，采用所选材料口径。`;
+    act(() => {
+      label.click();
+      simulateTextareaChange(container.querySelector<HTMLTextAreaElement>('textarea[required]')!, reason);
+    });
+    act(() => button('确认采信并写入事实').click());
+    const fact = current.facts[0];
+    assert.equal(fact.metricScope, candidate.description, `${scenario}/${value}: scope must follow the selected source`);
+    assert.equal(fact.value, value); assert.equal(fact.selectedConflictValue, value);
+    assert.equal(fact.primaryEvidenceId, candidate.evidenceId);
+    assert.equal(fact.conflictResolutionReason, reason);
+    assert.equal(current.factSnapshot, undefined);
+    assert.equal(current.outlineConfirmed, false); assert.equal(current.outlineSnapshot, undefined);
+    assert.deepEqual(current.facts.slice(1), original.facts.slice(1));
+    assert.deepEqual(current.drafts, original.drafts, 'redecisions must never rewrite existing drafts or their frozen sources');
+    render(); act(() => button('确认本次事实清单').click());
+    const item = current.factSnapshot!.items.find(f => f.factId === fact.id)!;
+    assert.equal(item.metricScope, candidate.description); assert.equal(item.value, value);
+    assert.equal(item.primaryEvidenceId, candidate.evidenceId);
+    assert.equal(item.provenance?.evidenceId, candidate.evidenceId);
+    assert.equal(item.provenance?.text, current.snippets.find(s => s.id === candidate.evidenceId)!.text);
+  }
+  render();
+  const beforeCancel = structuredClone(current);
+  act(() => button('裁决冲突').click());
+  act(() => button('取消').click());
+  assert.deepEqual(current, beforeCancel, 'cancelling a redecision must change nothing');
+  act(() => button('裁决冲突').click());
+  const exclude = [...container.querySelectorAll('div')].find(e => e.textContent === '排除该事实（不写入本期稿件）')!;
+  act(() => exclude.click());
+  act(() => button('确认采信并写入事实').click());
+  assert.equal(current.facts[0].status, 'excluded');
+  assert.equal(current.facts[0].selectedConflictValue, undefined);
+  render(); act(() => button('确认本次事实清单').click());
+  assert(!current.factSnapshot!.factIds.includes('FACT-01'));
+  assert.deepEqual(current.drafts, original.drafts);
+}
+console.log('PASS: real conflict redecisions synchronize scope, value, source and snapshots; cancel/exclude preserve history');
+act(() => root.render(<MaterialsAndFactsStage task={empty} activeRole="主笔甲" onUpdateTask={u => updates.push(u)} onViewSnippet={() => {}} onProceedToNextStage={() => {}}/>));
 act(() => button('确认本次事实清单').click());
 assert.equal(updates.length, 0); assert(alerts.some(a => a.includes('至少一项')));
 act(() => button('检索').click());

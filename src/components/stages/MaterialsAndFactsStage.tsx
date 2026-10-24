@@ -166,6 +166,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
             status: 'confirmed' as const,
             value: conflictChoice,
             selectedConflictValue: conflictChoice,
+            metricScope: matchedCand ? matchedCand.description : f.metricScope,
             primaryEvidenceId: matchedCand ? matchedCand.evidenceId : f.primaryEvidenceId,
             conflictResolutionReason: conflictReason.trim() || `主笔采信${conflictChoice}${f.unit}口径`,
           };
