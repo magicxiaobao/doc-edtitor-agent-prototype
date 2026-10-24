@@ -969,7 +969,7 @@ export const AuditAndExportStage: React.FC<AuditAndExportStageProps> = ({
                     <div className="text-xs text-emerald-700 pl-8 space-y-1">
                       {b.adoptedEvidences.map((ev, i) => (
                         <div key={i} className="p-1.5 bg-emerald-50/70 rounded border border-emerald-100">
-                          📄 材料补写依据：[材料补写出处: {ev.sourceDocName}{ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} ({ev.snippetLocation || '片段'}) “${ev.snippetText}” (期间: ${ev.period})]
+                          📄 材料补写依据：[材料补写出处: {ev.sourceDocName}{ev.sourceDocId ? ' [材料ID: ' + ev.sourceDocId + ']' : ''} ({ev.snippetLocation || '片段'}) “{ev.snippetText}” (期间: {ev.period})]
                         </div>
                       ))}
                     </div>

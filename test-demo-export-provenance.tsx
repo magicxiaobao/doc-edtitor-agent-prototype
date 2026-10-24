@@ -153,6 +153,25 @@ try {
       const output = await exportText(detached, result.workingDraft, {includeBody: false, includeEvidence: true, includeReviewLog: false}, docx);
       assert(output.includes(text)); assert(output.includes(snippet.docName)); assert(output.includes(snippet.location));
     }
+    mount((root, host) => {
+      act(() => root.render(<AuditAndExportStage task={detached} activeRole="主笔甲" onUpdateTask={() => {}}/>));
+      act(() => button(host, '下载导出文件').click());
+      const inputs = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+      assert.equal(inputs.length, 3);
+      const title = [...host.querySelectorAll('span')].find(s => s.textContent?.startsWith('实时导出预览：'))!;
+      const preview = title.parentElement!.parentElement!;
+      for (const includeBody of [false, true]) for (const includeEvidence of [false, true]) for (const includeReviewLog of [false, true]) {
+        [includeBody, includeEvidence, includeReviewLog].forEach((value, i) => {
+          if (inputs[i].checked !== value) act(() => inputs[i].click());
+        });
+        const rendered = preview.textContent || '';
+        assert.equal(rendered.includes(snippet.docName), includeEvidence);
+        assert.equal(rendered.includes(snippet.location), includeEvidence);
+        if (includeEvidence) assert(rendered.includes(`“${text}”`), 'preview must quote exactly the adopted frozen text');
+        assert(!rendered.includes(`$${text}`), 'JSX must not prefix the adopted quote with a literal dollar sign');
+        assert(!rendered.includes(`$${snippet.period}`), 'JSX must not prefix the adopted period with a literal dollar sign');
+      }
+    });
   });
 
   await check('working evidence keeps source name and location consistent with the snippet it opens', () => {
