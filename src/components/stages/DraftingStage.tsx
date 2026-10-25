@@ -32,6 +32,8 @@ import { AutoResizeParagraphTextarea } from '../AutoResizeParagraphTextarea';
 import { DraftingInspectorContent } from '../DraftingInspectorContent';
 import { MaterialEvidenceList } from '../MaterialEvidenceList';
 import { MaterialSupplementModal } from '../MaterialSupplementModal';
+import { FactImpactModal } from '../FactImpactModal';
+import { analyzeFactImpact, FactImpactItem } from '../../services/factImpactService';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -135,6 +137,16 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const activeReviewComments = useMemo(() => getDraftReviewComments(task, currentDraft), [task, currentDraft]);
+
+  // Task 21: Fact Impact Analysis (derived deterministically from task and currentDraft snapshot)
+  const factImpact = useMemo(() => analyzeFactImpact(task, currentDraft), [task, currentDraft]);
+  const [showFactImpactModal, setShowFactImpactModal] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
+
+  // Clear locate error when switching task or draft
+  useEffect(() => {
+    setLocateError(null);
+  }, [task.id, currentDraft?.id]);
 
   // Collapsible panels
   const [showLeftNav, setShowLeftNav] = useState(true);
@@ -283,6 +295,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           showSaveVersionModal ||
           showVersionHistory ||
           showRecentModificationsModal ||
+          showFactImpactModal ||
           showSubmitReviewModal ||
           showContradictionModal ||
           implementingComment ||
@@ -718,23 +731,74 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }, 80);
   }, [navIntent, task.id, currentDraft?.id, activeReviewComments]);
 
-  // Identify blocks whose referenced facts have changed, been revoked, or are unconfirmed
-  const blocksNeedingReview = (currentDraft?.blocks || []).filter((block) => {
-    if (!isCurrentDraftImmutable && !task.factSnapshot && block.referencedFactIds.length > 0) return true;
-    return block.referencedFactIds.some((fId) => {
-      const fact = task.facts.find((f) => f.id === fId);
-      if (!fact) return true;
-      if (fact.status !== 'confirmed') return true;
-      if (fact.isHistoricOnly) return true;
-      if (currentDraft?.snapshotMetadata?.factSnapshot) {
-        const snapItem = currentDraft.snapshotMetadata.factSnapshot.items?.find((item) => item.factId === fId);
-        if (snapItem && (snapItem.value !== fact.value || snapItem.unit !== fact.unit)) {
-          return true;
+  // Task 21: Identify blocks needing review strictly from deterministic fact impact analysis
+  const blocksNeedingReview = useMemo(() => {
+    return (currentDraft?.blocks || []).filter((block) =>
+      factImpact.affectedBlockIds.includes(block.id)
+    );
+  }, [currentDraft?.blocks, factImpact.affectedBlockIds]);
+
+  // Task 21: Locate block from impact panel (strict Block ID matching, no index fallback)
+  const handleLocateBlock = (blockId: string, factId?: string) => {
+    setShowFactImpactModal(false);
+
+    const targetBlock = currentDraft?.blocks.find((b) => b.id === blockId);
+    if (!targetBlock) {
+      setLocateError(`定位失败：目标段落【${blockId}】在当前稿件中不存在（可能已被删除或重构），已停止定位。`);
+      return;
+    }
+
+    setLocateError(null);
+    setSelectedBlockId(blockId);
+
+    if (factId) {
+      setInspectingFactId(factId);
+      setInspectorTab('material_evidence');
+    }
+
+    if (!showRightInspector) {
+      setShowRightInspector(true);
+    }
+
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setShowTabletInspectorDrawer(true);
+    }
+
+    setTimeout(() => {
+      const el =
+        document.querySelector(`[data-testid="textarea-block-${blockId}"]`) ||
+        document.querySelector(`[data-testid="block-card-${blockId}"]`) ||
+        document.getElementById(`block-${blockId}`);
+      if (el) {
+        if (typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        if (el instanceof HTMLElement) {
+          el.focus({ preventScroll: true });
         }
       }
-      return false;
-    });
-  });
+    }, 100);
+  };
+
+  // Task 21: View frozen draft evidence from impact panel
+  const handleViewDraftEvidence = (item: FactImpactItem) => {
+    setShowFactImpactModal(false);
+    const fact = findDraftFact(task, currentDraft, item.factId);
+    if (fact) {
+      const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
+      onViewSnippet(
+        resolved.effectiveSnippet || {
+          id: resolved.effectiveEvidenceId || '',
+          sourceDocId: '',
+          docName: '出处已不可用',
+          location: '',
+          period: resolved.effectivePeriod,
+          text: '',
+        },
+        fact
+      );
+    }
+  };
 
   const totalCommentsCount = activeReviewComments.length;
   const pendingCommentsCount = activeReviewComments.filter((c) => c.status === 'pending').length;
@@ -1866,6 +1930,34 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                   <span>· 目标 <strong className="text-slate-700 font-mono">{task.targetWordCount}</strong> 字</span>
                 </div>
               )}
+
+              {/* Task 21: Fact Impact Compact Entrance */}
+              <button
+                type="button"
+                onClick={() => setShowFactImpactModal(true)}
+                data-testid="btn-open-fact-impact"
+                className={`text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs border ${
+                  factImpact.changedFactsCount > 0
+                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+                title="查看事实变更对当前稿件的影响总览与逐段定位"
+              >
+                <AlertCircle
+                  className={`w-3.5 h-3.5 ${
+                    factImpact.changedFactsCount > 0 ? 'text-amber-600' : 'text-slate-400'
+                  }`}
+                />
+                <span>
+                  {!factImpact.hasDraft
+                    ? '依据变更影响：尚无稿件可比较'
+                    : !factImpact.hasSnapshotBaseline
+                    ? '依据变更影响：缺少比较基准，需人工核实'
+                    : factImpact.changedFactsCount > 0
+                    ? `依据变更影响：${factImpact.changedFactsCount}项事实 · ${factImpact.affectedBlocksCount}段需复核`
+                    : '依据变更影响：未发现已关联事实的差异'}
+                </span>
+              </button>
             </div>
 
             <button
@@ -2014,6 +2106,18 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                 )}
                 <span>{isPrerequisiteMet ? '前序审批完备 · 具备起草条件' : '准备条件未满足'}</span>
               </span>
+
+              {/* Task 21: Fact impact button when no draft */}
+              <button
+                type="button"
+                onClick={() => setShowFactImpactModal(true)}
+                data-testid="btn-open-fact-impact"
+                className="text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1.5 cursor-pointer bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200"
+                title="尚无稿件可比较"
+              >
+                <Info className="w-3.5 h-3.5 text-slate-400" />
+                <span>依据变更影响：尚无稿件可比较</span>
+              </button>
             </div>
 
             <button
@@ -2129,6 +2233,26 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               <div>• 版本继承：起草生成的整稿将作为候选稿供主笔在差异对比后决定是否整体采纳。</div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Locate Block Error Banner */}
+      {locateError && (
+        <div
+          data-testid="locate-error-alert"
+          className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-900 flex items-center justify-between gap-2 animate-in fade-in"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{locateError}</span>
+          </div>
+          <button
+            onClick={() => setLocateError(null)}
+            className="text-rose-500 hover:text-rose-700 p-1 cursor-pointer"
+            title="关闭提示"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -2864,10 +2988,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                               第{block.order || idx + 1}段
                             </span>
                             {blocksNeedingReview.some((b) => b.id === block.id) && (
-                              <span className="inline-flex items-center gap-1 text-xs bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded font-medium">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowFactImpactModal(true);
+                                }}
+                                data-testid={`badge-block-fact-changed-${block.id}`}
+                                className="inline-flex items-center gap-1 text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2 py-0.5 rounded font-medium cursor-pointer transition-colors"
+                                title="点击查看影响该段落的事实变动详情"
+                              >
                                 <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                                引用事实已变动/待复核
-                              </span>
+                                <span>引用事实已变动/待复核</span>
+                              </button>
                             )}
                             {block.referencedFactIds.map((factId) => {
                               const fact = findDraftFact(task, currentDraft, factId);
@@ -3827,6 +3960,18 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onViewSnippet={onViewSnippet}
         onSelectStage={onSelectStage}
         onSupplementSuccess={handleSupplementSuccess}
+      />
+
+      {/* Task 21: Fact Impact Overview & Block Locating Modal */}
+      <FactImpactModal
+        isOpen={showFactImpactModal}
+        onClose={() => setShowFactImpactModal(false)}
+        analysis={factImpact}
+        currentDraft={currentDraft}
+        task={task}
+        onLocateBlock={handleLocateBlock}
+        onViewDraftEvidence={handleViewDraftEvidence}
+        onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
       />
     </div>
   );
