@@ -79,18 +79,18 @@ await check('referenced gap without a frozen item is disclosed rather than calle
 
 await check('real App drawer keeps working/history/final evidence frozen and reports missing provenance', async () => {
   const keys = [STORAGE_KEY_V2, LEGACY_STORAGE_KEY_V1, BACKUP_CORRUPTED_KEY];
-  for (const mode of ['working', 'history', 'final', 'missing-provenance', 'missing-item', 'deleted'] as const) {
+  for (const mode of ['working', 'history', 'final', 'missing-provenance', 'missing-item', 'deleted', 'deleted-missing-item'] as const) {
     keys.forEach(removeStorageItem);
     const task = createPresetTask('under_review'); task.currentStage = 'drafting';
     const draft = draftOf(task); const original = structuredClone(draft.snapshotMetadata!.factSnapshot!.items[0]);
     if (mode === 'history') {draft.isHistoricalSnapshot = true; draft.isWorkingDraft = false;}
     if (mode === 'final') {draft.isFinal = true; draft.isWorkingDraft = false;}
     if (mode === 'missing-provenance') delete draft.snapshotMetadata!.factSnapshot!.items[0].provenance;
-    if (mode === 'missing-item') draft.snapshotMetadata!.factSnapshot!.items = draft.snapshotMetadata!.factSnapshot!.items.filter(i => i.factId !== original.factId);
+    if (mode === 'missing-item' || mode === 'deleted-missing-item') draft.snapshotMetadata!.factSnapshot!.items = draft.snapshotMetadata!.factSnapshot!.items.filter(i => i.factId !== original.factId);
     // The live snippet with the SAME old ID is also altered. A frozen viewer must not borrow it.
     const liveMarker = '当前材料已经改写，不是采纳时原文';
     task.snippets = task.snippets.map(s => s.id === original.primaryEvidenceId ? {...s, text: liveMarker} : s);
-    task.facts = mode === 'deleted' ? task.facts.filter(f => f.id !== original.factId) : task.facts.map(f =>
+    task.facts = mode === 'deleted' || mode === 'deleted-missing-item' ? task.facts.filter(f => f.id !== original.factId) : task.facts.map(f =>
       f.id === original.factId ? {...f, value: '120', selectedConflictValue: '120', primaryEvidenceId: 'EVD-01', metricScope: '当前甲口径'} : f);
     assert(savePersistedState([task], task.id, '主笔甲'));
     const view = mount(<App/>);
@@ -99,6 +99,12 @@ await check('real App drawer keeps working/history/final evidence frozen and rep
       act(() => (view.host.querySelector('[data-testid="btn-open-fact-impact"]') as HTMLElement).click());
       const card = view.host.querySelector(`[data-testid="fact-impact-card-${original.factId}"]`)!; assert(card, mode);
       click(card, '查看本稿依据');
+      if (mode === 'deleted-missing-item') {
+        assert(!view.host.querySelector('[aria-labelledby="snippet-drawer-title"]'));
+        assert(view.host.textContent?.includes('既无本稿冻结记录，也无当前事实记录'));
+        assert.deepEqual(business(loadPersistedState().tasks[0]), baseline);
+        continue;
+      }
       const drawer = view.host.querySelector('[aria-labelledby="snippet-drawer-title"]')!; assert(drawer, mode);
       const text = drawer.textContent || '';
       if (mode === 'missing-item' || mode === 'missing-provenance') {

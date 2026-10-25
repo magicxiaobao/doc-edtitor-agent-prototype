@@ -805,6 +805,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         undefined,
         true
       );
+    } else {
+      setLocateError('无法查看本稿依据：此事实既无本稿冻结记录，也无当前事实记录，缺少可核验的依据。请结合原始材料人工核实。');
     }
   };
 
