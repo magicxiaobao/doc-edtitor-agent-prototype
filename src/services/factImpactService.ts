@@ -101,6 +101,7 @@ export interface FactImpactAnalysisResult {
   // Lists
   impactItems: FactImpactItem[];           // Changed facts only
   allReferencedItems: FactImpactItem[];     // All referenced facts (for inspector / diagnostics)
+  missingBaselineFactIds: string[];        // References outside the approved snapshot; not proof of a change
   unreferencedNewFacts: UnreferencedNewFactItem[]; // Newly added facts not referenced in current draft
 
   // Material evidence scope limitation
@@ -129,6 +130,7 @@ export function analyzeFactImpact(
       affectedBlocksCount: 0,
       impactItems: [],
       allReferencedItems: [],
+      missingBaselineFactIds: [],
       unreferencedNewFacts: [],
       affectedBlockIds: [],
     };
@@ -247,13 +249,8 @@ export function analyzeFactImpact(
           description: '任务事实清单中已删除此项，稿件仍在引用已删除事实',
         });
       } else {
-        if (!task.factSnapshot) {
-          differenceTags.push({
-            type: 'status_pending',
-            label: '核准状态变更：任务事实快照未锁定或已失效',
-            description: '任务事实快照已被清空或审批撤销，前序审批已失效',
-          });
-        }
+        // Task-wide approval invalidation is shown by the preparation gate;
+        // it does not mean every unchanged fact has changed its own status.
         if (latestFact.status === 'pending') {
           differenceTags.push({
             type: 'status_pending',
@@ -308,7 +305,7 @@ export function analyzeFactImpact(
         // 3. Period
         const snapPeriod = (snapItem.period || '').trim();
         const latestPeriod = (latestFact.period || '').trim();
-        if (snapPeriod && latestPeriod && snapPeriod !== latestPeriod) {
+        if (snapPeriod !== latestPeriod) {
           differenceTags.push({
             type: 'period',
             label: '统计期间变化',
@@ -329,9 +326,7 @@ export function analyzeFactImpact(
 
         // 5. Primary Evidence
         if (
-          snapItem.primaryEvidenceId &&
-          latestFact.primaryEvidenceId &&
-          snapItem.primaryEvidenceId !== latestFact.primaryEvidenceId
+          (snapItem.primaryEvidenceId || '') !== (latestFact.primaryEvidenceId || '')
         ) {
           differenceTags.push({
             type: 'primary_evidence',
@@ -355,15 +350,11 @@ export function analyzeFactImpact(
     const draftMetricScope = snapItem?.metricScope || (hasSnapshotBaseline ? '无单独口径' : '基准缺失');
     const draftEvidenceId = snapItem?.primaryEvidenceId;
 
-    let draftDocName = '未知材料文档';
-    let draftLocation = '段落索引';
-    if (snapItem?.provenance) {
+    let draftDocName = '未保存当时出处原文';
+    let draftLocation = '快照未记录';
+    if (snapItem?.provenance && (!draftEvidenceId || snapItem.provenance.evidenceId === draftEvidenceId)) {
       draftDocName = snapItem.provenance.sourceDocName;
       draftLocation = snapItem.provenance.location || '段落索引';
-    } else if (draftEvidenceId) {
-      const res = resolveDocAndLocation(draftEvidenceId);
-      draftDocName = res.docName;
-      draftLocation = res.location;
     }
 
     // Format Latest task information
@@ -399,6 +390,7 @@ export function analyzeFactImpact(
 
       if (unresolvedConflict) {
         latestStatusLabel = '存在未裁决冲突';
+        latestConfirmedValue = '冲突未裁决，暂无采信值';
       }
 
       latestPeriod = latestFact.period;
@@ -441,6 +433,7 @@ export function analyzeFactImpact(
 
   // Filter only items with differences
   const impactItems = allItems.filter((i) => i.hasDifference);
+  const missingBaselineFactIds = allItems.filter(i => !i.hasFrozenSnapshot && i.referencingBlocks.length > 0).map(i => i.factId);
 
   // De-duplicated count of unique changed facts
   const changedFactsCount = impactItems.length;
@@ -513,6 +506,7 @@ export function analyzeFactImpact(
     affectedBlocksCount,
     impactItems,
     allReferencedItems: allItems,
+    missingBaselineFactIds,
     unreferencedNewFacts,
     materialEvidenceScope,
     affectedBlockIds,

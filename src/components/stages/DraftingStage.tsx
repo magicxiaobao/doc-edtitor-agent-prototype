@@ -114,7 +114,7 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence?: boolean) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
@@ -142,10 +142,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const factImpact = useMemo(() => analyzeFactImpact(task, currentDraft), [task, currentDraft]);
   const [showFactImpactModal, setShowFactImpactModal] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
+  const impactLocateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clear locate error when switching task or draft
   useEffect(() => {
     setLocateError(null);
+    setShowFactImpactModal(false);
+    return () => {
+      if (impactLocateTimer.current !== null) clearTimeout(impactLocateTimer.current);
+    };
   }, [task.id, currentDraft?.id]);
 
   // Collapsible panels
@@ -764,10 +769,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       setShowTabletInspectorDrawer(true);
     }
 
-    setTimeout(() => {
+    if (impactLocateTimer.current !== null) clearTimeout(impactLocateTimer.current);
+    impactLocateTimer.current = setTimeout(() => {
       const el =
-        document.querySelector(`[data-testid="textarea-block-${blockId}"]`) ||
-        document.querySelector(`[data-testid="block-card-${blockId}"]`) ||
+        document.getElementById(`paragraph-textarea-${blockId}`) ||
+        document.getElementById(`block-card-${blockId}`) ||
         document.getElementById(`block-${blockId}`);
       if (el) {
         if (typeof el.scrollIntoView === 'function') {
@@ -785,7 +791,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setShowFactImpactModal(false);
     const fact = findDraftFact(task, currentDraft, item.factId);
     if (fact) {
-      const resolved = resolveDraftFactEvidence(fact, currentDraft, task);
+      const resolved = resolveDraftFactEvidence(fact, currentDraft, task, {freezeSnapshot: true});
       onViewSnippet(
         resolved.effectiveSnippet || {
           id: resolved.effectiveEvidenceId || '',
@@ -795,7 +801,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           period: resolved.effectivePeriod,
           text: '',
         },
-        fact
+        fact,
+        undefined,
+        true
       );
     }
   };

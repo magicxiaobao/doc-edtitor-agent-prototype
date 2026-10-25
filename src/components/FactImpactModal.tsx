@@ -48,9 +48,12 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     if (isOpen) {
       previousActiveElementRef.current = document.activeElement as HTMLElement | null;
       modalRef.current?.focus();
-    } else if (previousActiveElementRef.current) {
-      previousActiveElementRef.current.focus({ preventScroll: true });
     }
+    return () => {
+      if (isOpen && previousActiveElementRef.current?.isConnected) {
+        previousActiveElementRef.current.focus({ preventScroll: true });
+      }
+    };
   }, [isOpen]);
 
   // Handle Escape key to close
@@ -61,6 +64,17 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
         e.preventDefault();
         e.stopPropagation();
         onClose();
+      } else if (e.key === 'Tab') {
+        const panel = modalRef.current;
+        if (!panel) return;
+        const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]')]
+          .filter(el => !el.closest('[hidden], [inert], [aria-hidden="true"]'));
+        const first = controls[0], last = controls[controls.length - 1];
+        const active = document.activeElement;
+        if (!first) { e.preventDefault(); panel.focus(); }
+        else if (!panel.contains(active) || active === panel || (e.shiftKey ? active === first : active === last)) {
+          e.preventDefault(); (e.shiftKey ? last : first).focus();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown, { capture: true });
@@ -163,9 +177,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                     段正文需复核
                   </span>
                 </div>
-                <span className="text-xs text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded font-medium">
-                  严格按 Fact ID 与 Block ID 映射，未臆测数字
-                </span>
               </div>
               <p className="text-xs text-amber-800 leading-relaxed">
                 主笔调整已核准事实后，当前稿件所采用的历史快照与任务最新状态不一致。本面板仅负责比对与逐段定位，不自动改写正文、不自动改数值、不自动覆盖稿件快照。
@@ -178,7 +189,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                 <span>未发现已关联事实的差异</span>
               </div>
               <p className="text-xs text-emerald-800 leading-relaxed">
-                当前稿件正文引用的全部已核准事实，其数值、单位、统计期间、统计口径与主出处均与任务最新事实保持一致。
+                已有快照基准的关联事实未检出差异；未收入快照的引用及定性表述仍需人工核对。
               </p>
               <p className="text-xs text-emerald-700/90">
                 提示：本检查仅覆盖已建立引用关联的事实，未引用或定性表述内容请结合材料原文人工核对。
@@ -187,6 +198,19 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
           )}
 
           {/* Scope limitation alert for unlinked material evidence */}
+          {analysis.hasDraft && !task.factSnapshot && (
+            <p className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+              任务事实清单尚未重新确认，起草前置审批未就绪；本项为任务整体审批状态，不计为每条事实发生变化。
+            </p>
+          )}
+          {analysis.missingBaselineFactIds.length > 0 && (
+            <div data-testid="fact-impact-baseline-limit" className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 space-y-1">
+              <p className="font-semibold">部分引用缺少快照基准，需人工核实</p>
+              {analysis.allReferencedItems.filter(item => analysis.missingBaselineFactIds.includes(item.factId)).map(item => (
+                <p key={item.factId}>{item.metric}：本稿核准快照未收录；关联{item.referencingBlocks.map(b => `第${b.blockOrder}段`).join('、')}。无法确认当时采用依据，不据此推断事实发生变化。</p>
+              ))}
+            </div>
+          )}
           {analysis.materialEvidenceScope && (
             <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-lg text-xs text-blue-900 space-y-1">
               <div className="flex items-center gap-1.5 font-semibold text-blue-800">
