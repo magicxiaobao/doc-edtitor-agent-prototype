@@ -680,9 +680,13 @@ export function findDraftFact(task: Task, draft: DraftVersion | undefined, id: s
 export function resolveDraftFactEvidence(
   fact: Fact,
   draft: DraftVersion | undefined,
-  task: Task
+  task: Task,
+  options?: { freezeSnapshot?: boolean }
 ): ResolvedDraftFactEvidence {
   const isHistoricalOrFinal = Boolean(draft?.isHistoricalSnapshot || draft?.isFinal);
+  // Explicit draft-evidence inspection also freezes working-draft provenance,
+  // without changing the draft's actual editability or historical status.
+  const useFrozenSnapshot = isHistoricalOrFinal || Boolean(options?.freezeSnapshot);
   const snapItem = draft?.snapshotMetadata?.factSnapshot?.items?.find(
     (item) => item.factId === fact.id
   ) || null;
@@ -690,8 +694,8 @@ export function resolveDraftFactEvidence(
 
   const adoptedValue = snapItem
     ? `${snapItem.selectedConflictValue || snapItem.value} ${snapItem.unit}`
-    : isHistoricalOrFinal
-    ? '历史快照未收录此事实'
+    : useFrozenSnapshot
+    ? (isHistoricalOrFinal ? '历史快照未收录此事实' : '本稿快照未收录此事实')
     : `${fact.selectedConflictValue || fact.value} ${fact.unit}`;
 
   const latestFact = task.facts.find(f => f.id === fact.id);
@@ -709,7 +713,7 @@ export function resolveDraftFactEvidence(
   let isEvidenceMissingInSnapshot = false;
   let isEvidencePrunedOrUnavailable = false;
 
-  if (isHistoricalOrFinal) {
+  if (useFrozenSnapshot) {
     if (snapItem) {
       effectivePeriod = snapItem.period || '未记录期间';
       effectiveMetricScope = snapItem.metricScope || '无单独口径';
@@ -724,7 +728,7 @@ export function resolveDraftFactEvidence(
           text: snapItem.provenance.text,
         };
         isEvidencePrunedOrUnavailable = false;
-      } else if (effectiveEvidenceId) {
+      } else if (effectiveEvidenceId && !options?.freezeSnapshot) {
         effectiveSnippet = task.snippets.find((s) => s.id === effectiveEvidenceId) || null;
         if (!effectiveSnippet) {
           isEvidencePrunedOrUnavailable = true;
@@ -765,7 +769,7 @@ export function resolveDraftFactEvidence(
   }
 
   const shouldUseFrozenProvenance = Boolean(
-    (isHistoricalOrFinal || !latestFact) &&
+    (useFrozenSnapshot || !latestFact) &&
     snapItem?.provenance &&
     (!effectiveEvidenceId || snapItem.provenance.evidenceId === effectiveEvidenceId)
   );
@@ -816,6 +820,6 @@ export function resolveDraftFactEvidence(
     hasEvidenceDiff,
     isEvidenceMissingInSnapshot,
     isEvidencePrunedOrUnavailable,
-    isSnapshotMissingFact: isHistoricalOrFinal && !snapItem,
+    isSnapshotMissingFact: useFrozenSnapshot && !snapItem,
   };
 }

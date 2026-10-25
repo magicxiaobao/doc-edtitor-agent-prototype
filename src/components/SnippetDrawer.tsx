@@ -6,6 +6,7 @@ import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 interface SnippetDrawerProps {
   snippet: EvidenceSnippet | null;
   sourceOnly?: boolean;
+  freezeDraftEvidence?: boolean;
   documents: SourceDocument[];
   onClose: () => void;
   fact?: Fact | null;
@@ -17,6 +18,7 @@ interface SnippetDrawerProps {
 export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   snippet,
   sourceOnly = false,
+  freezeDraftEvidence = false,
   documents,
   onClose,
   fact,
@@ -44,7 +46,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   // P2: Use shared evidence resolution logic
   const resolvedData =
     resolvedFact && task
-      ? resolveDraftFactEvidence(resolvedFact, currentDraft || undefined, task)
+      ? resolveDraftFactEvidence(resolvedFact, currentDraft || undefined, task, {freezeSnapshot: freezeDraftEvidence && !sourceOnly})
       : null;
 
   const isHistoricalOrFinal = !sourceOnly && Boolean(
@@ -54,6 +56,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   );
 
   const snapItem = resolvedData ? resolvedData.snapItem : null;
+  const isFrozenView = !sourceOnly && (isHistoricalOrFinal || freezeDraftEvidence);
   const hasSnapshotDiff = resolvedData ? resolvedData.hasSnapshotDiff : false;
   const hasFrozenItem = resolvedData ? resolvedData.hasFrozenItem : false;
   const isCurrentFactDeleted = resolvedData?.isCurrentFactDeleted || false;
@@ -90,14 +93,14 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   })();
 
   const hasFrozenProvenance = Boolean(
-    (isHistoricalOrFinal || isCurrentFactDeleted) &&
+    (isFrozenView || isCurrentFactDeleted) &&
     resolvedData?.provenance &&
     (!resolvedData.effectiveEvidenceId || resolvedData.provenance.evidenceId === resolvedData.effectiveEvidenceId)
   );
 
   const liveDoc = resolvedSnippet ? documents.find((d) => d.id === resolvedSnippet.sourceDocId) : undefined;
   // Adoption and frozen provenance freeze the excerpt, not the source document's entire content.
-  const resolvedDoc = (adoptedEvidence || hasFrozenProvenance) ? undefined : liveDoc;
+  const resolvedDoc = (adoptedEvidence || hasFrozenProvenance || freezeDraftEvidence) ? undefined : liveDoc;
 
   return (
     <div
@@ -151,7 +154,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="p-2 bg-white rounded border border-slate-200 space-y-0.5">
                 <span className="text-xs text-slate-400 block">
-                  {isHistoricalOrFinal ? '稿件冻结采用值（快照）' : '当前稿采用值'}
+                  {isFrozenView ? '稿件冻结采用值（快照）' : '当前稿采用值'}
                 </span>
                 <span className={`font-bold font-mono text-sm ${hasFrozenItem ? 'text-slate-900' : isHistoricalOrFinal ? 'text-slate-400 text-xs italic font-sans' : 'text-slate-900'}`}>
                   {adoptedValue}
@@ -160,7 +163,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
                   <span className="text-xs text-slate-400 block font-normal">
                     期间：{frozenPeriod || '未记录'} · 口径：{frozenMetricScope || '无单独口径'}
                   </span>
-                ) : isHistoricalOrFinal ? (
+                ) : isFrozenView ? (
                   <span className="text-xs text-amber-600 block font-normal">
                     快照中无此事实冻结项，不可回溯当时值
                   </span>
@@ -199,14 +202,14 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
             {/* Metric Scope Comparison: Frozen vs Current */}
             <div className="text-xs text-slate-600 space-y-0.5">
-              {isHistoricalOrFinal && frozenMetricScope && (
+              {isFrozenView && frozenMetricScope && (
                 <div>
                   冻结统计口径：<strong className="text-slate-700 font-medium">{frozenMetricScope}</strong>
                 </div>
               )}
               {!isCurrentFactDeleted && resolvedFact.metricScope && (
                 <div>
-                  {isHistoricalOrFinal && frozenMetricScope ? '当前最新统计口径：' : '统计口径：'}
+                  {isFrozenView && frozenMetricScope ? '当前最新统计口径：' : '统计口径：'}
                   <strong className="text-slate-700 font-medium">{resolvedFact.metricScope}</strong>
                 </div>
               )}
@@ -252,7 +255,9 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
               <span>来源追溯真实限制说明</span>
             </div>
             <p className="text-xs text-amber-800">
-              {isHistoricalOrFinal
+              {freezeDraftEvidence
+                ? (snapItem ? '本稿快照未保存当时的原文片段，无法核验冻结出处；不以当前材料原文代替。' : '本稿快照未记录此事实，缺少比较基准；不以任务最新依据代替。')
+                : isHistoricalOrFinal
                 ? (frozenEvidenceId
                     ? `该历史快照已完整记录原始证据ID【${frozenEvidenceId}】，但材料库中该证据原文已清理或归档不可用。系统严格遵循存证隔离，绝不直接冒充展示最新证据材料。`
                     : '该历史版本快照中未记录此事实当时的原始证据片段ID。系统保持真实限制说明，不伪造虚假出处或直接冒充使用最新证据材料。')

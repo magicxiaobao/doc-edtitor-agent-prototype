@@ -44,12 +44,14 @@ export function App() {
   const [viewingSnippet, setViewingSnippet] = useState<EvidenceSnippet | null>(null);
   const [viewingFact, setViewingFact] = useState<Fact | null>(null);
   const [viewingAdoptedEvidence, setViewingAdoptedEvidence] = useState<AdoptedEvidenceRecord | null>(null);
+  const [viewingFrozenEvidence, setViewingFrozenEvidence] = useState(false);
   const [reviewNavIntent, setReviewNavIntent] = useState<ReviewNavigationIntent | null>(null);
 
-  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord) => {
+  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence = false) => {
     setViewingSnippet(snippet);
     setViewingFact(fact || null);
     setViewingAdoptedEvidence(adoptedEvidence || null);
+    setViewingFrozenEvidence(freezeDraftEvidence);
   };
 
   // Requirement 8: Clear navigation intent ONLY when switching to a different task to prevent cross-task leakage
@@ -59,6 +61,7 @@ export function App() {
     if (previousTaskIdRef.current !== currentTaskId) {
       setReviewNavIntent(null);
       setViewingSnippet(null); setViewingFact(null); setViewingAdoptedEvidence(null);
+      setViewingFrozenEvidence(false);
       previousTaskIdRef.current = currentTaskId;
     }
   }, [currentTaskId]);
@@ -363,6 +366,7 @@ export function App() {
       <SnippetDrawer
         snippet={viewingSnippet}
         sourceOnly={currentTask.currentStage === 'material_fact'}
+        freezeDraftEvidence={viewingFrozenEvidence}
         fact={viewingFact}
         adoptedEvidence={viewingAdoptedEvidence}
         documents={currentTask.documents}
@@ -370,9 +374,10 @@ export function App() {
           setViewingSnippet(null);
           setViewingFact(null);
           setViewingAdoptedEvidence(null);
+          setViewingFrozenEvidence(false);
         }}
         task={currentTask}
-        currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId)}
+        currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId) || currentTask.drafts[0]}
       />
     </div>
   );
