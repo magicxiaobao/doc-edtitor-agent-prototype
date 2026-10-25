@@ -5,6 +5,7 @@ import { resolveDraftFactEvidence } from '../services/factLifecycleService';
 
 interface SnippetDrawerProps {
   snippet: EvidenceSnippet | null;
+  sourceOnly?: boolean;
   documents: SourceDocument[];
   onClose: () => void;
   fact?: Fact | null;
@@ -15,6 +16,7 @@ interface SnippetDrawerProps {
 
 export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   snippet,
+  sourceOnly = false,
   documents,
   onClose,
   fact,
@@ -28,8 +30,10 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
   const doc = snippet ? documents.find((d) => d.id === snippet.sourceDocId) : undefined;
 
-  // Retrieve fact object if snippet passed without fact
+  // Materials/RAG requests open the exact selected source, independently of
+  // the fact's chosen primary source or the currently viewed draft snapshot.
   const resolvedFact =
+    sourceOnly ? null :
     fact ||
     (!adoptedEvidence && doc?.usage !== 'style_ref' && snippet && task
       ? task.facts.find(
@@ -43,7 +47,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
       ? resolveDraftFactEvidence(resolvedFact, currentDraft || undefined, task)
       : null;
 
-  const isHistoricalOrFinal = Boolean(
+  const isHistoricalOrFinal = !sourceOnly && Boolean(
     resolvedData
       ? resolvedData.isHistoricalOrFinal
       : currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal
@@ -114,7 +118,7 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
               </h3>
               <p className="text-xs text-slate-500">
                 {resolvedFact ? `事实指标：${resolvedFact.metric}` : `依据标识：${snippet?.id}`}
-                {currentDraft ? ` · 对照版本：${currentDraft.versionNumber}` : ''}
+                {!sourceOnly && currentDraft ? ` · 对照版本：${currentDraft.versionNumber}` : ''}
               </p>
             </div>
           </div>

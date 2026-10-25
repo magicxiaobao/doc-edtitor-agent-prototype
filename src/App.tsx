@@ -362,6 +362,7 @@ export function App() {
       {/* Global Snippet Drawer for Evidence Source Tracing */}
       <SnippetDrawer
         snippet={viewingSnippet}
+        sourceOnly={currentTask.currentStage === 'material_fact'}
         fact={viewingFact}
         adoptedEvidence={viewingAdoptedEvidence}
         documents={currentTask.documents}
