@@ -211,5 +211,19 @@ await check('损坏的可选失效原因和撤回元数据被隔离，历史面�
   assert.equal(bad.workingDraft.factReviewRecords?.length,0);
 });
 
+await check('旧历史缺少冻结结论时，当前回退数据不能标记成历史冻结',()=>{
+  const r=record(),saved=createDraftSnapshot(r.updatedTask,r.workingDraft.id,'旧版快照','主笔甲');
+  delete saved.snapshotDraft.frozenFactReviewOverview;
+  saved.updatedTask.currentDraftId=saved.snapshotDraft.id;
+  saved.updatedTask.facts.find(f=>f.id==='FACT-01')!.selectedConflictValue='125';
+  const view=mount(saved.updatedTask);
+  try{
+    click(view.host,'btn-open-fact-impact');
+    assert(!view.host.textContent?.includes('保存当时的任务状态（冻结）'));
+    assert(view.host.textContent?.includes('无法还原当时'));
+    assert(view.host.textContent?.includes('任务当前状态（非历史冻结）'));
+  }finally{view.close();}
+});
+
 if(failures.length){console.error(`${failures.length} receipt groups failed`);process.exitCode=1;}
-else console.log('Task22 receipt: all 10 independent regression groups passed');
+else console.log('Task22 receipt: all 11 independent regression groups passed');

@@ -7,6 +7,7 @@ import {
   evaluateDraftFactReviews,
   getFactReviewContext,
   isValidFactReviewRecord,
+  isValidFrozenFactReviewOverview,
   DraftFactReviewOverview,
   BlockFactReviewEvaluation,
 } from '../services/factReviewService';
@@ -137,6 +138,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   if (!isOpen) return null;
 
   const isHistoricalOrFinal = Boolean(currentDraft?.isHistoricalSnapshot || currentDraft?.isFinal);
+  const hasFrozenReviewConclusion=isHistoricalOrFinal&&isValidFrozenFactReviewOverview(currentDraft?.frozenFactReviewOverview);
   const isAuthor = activeRole === '主笔甲';
 
   const handleNotesChange = (blockId: string, value: string) => {
@@ -314,11 +316,16 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             </div>
           )}
 
-          {isHistoricalOrFinal&&reviewOverview.blockEvaluations.length>0&&(
+          {hasFrozenReviewConclusion&&reviewOverview.blockEvaluations.length>0&&(
             <div className="p-3 bg-slate-50 border border-slate-200 rounded text-sm" data-testid="frozen-review-summary">
               保存当时的人工复核：已记录 {reviewOverview.reviewedCount} 段 · 待处理 {reviewOverview.pendingCount} 段。
               以下历史留痕保持当时状态；上方依据差异另与任务当前事实比较。
             </div>
+          )}
+          {isHistoricalOrFinal&&!hasFrozenReviewConclusion&&(
+            <p role="status" className="p-3 bg-amber-50 text-sm text-amber-900" data-testid="missing-frozen-review-summary">
+              此版本缺少保存当时的复核结论，无法还原当时进度。原记录仅供查看；以下回退依据反映任务当前状态，不能视为历史冻结数据。
+            </p>
           )}
           {!isHistoricalOrFinal&&analysis.changedFactsCount===0&&reviewOverview.blockEvaluations.length>0&&(
             <p className="text-sm">人工复核：已记录 {reviewOverview.reviewedCount} 段 · 待处理 {reviewOverview.pendingCount} 段；原有记录继续保留供核对。</p>
@@ -392,7 +399,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             <div id="fact-review-section" className="space-y-4" data-testid="fact-review-section">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                  <span>{isHistoricalOrFinal ? '保存当时的段落复核留痕' : '受影响段落逐段人工复核'}</span>
+                  <span>{hasFrozenReviewConclusion ? '保存当时的段落复核留痕'
+                    : isHistoricalOrFinal ? '历史复核参考（当时结论未保存）' : '受影响段落逐段人工复核'}</span>
                   <span className="text-xs text-slate-500 font-normal">
                     （按正文段落独立核对与留痕）
                   </span>
@@ -538,7 +546,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
                                 <div className="bg-white p-2 rounded border border-slate-200 space-y-0.5">
                                   <span className="text-slate-400 block font-medium">
-                                    {isHistoricalOrFinal ? '保存当时的任务状态（冻结）：' : '任务最新状态：'}
+                                    {hasFrozenReviewConclusion ? '保存当时的任务状态（冻结）：'
+                                      : isHistoricalOrFinal ? '任务当前状态（非历史冻结）：' : '任务最新状态：'}
                                   </span>
                                   <div>
                                     数值：<strong className="font-mono text-blue-800">{factItem.latestConfirmedValue}</strong>
@@ -584,13 +593,15 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                         >
                           <div className="flex items-center gap-1.5 font-bold text-rose-900">
                             <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                            <span>原复核已失效，需重新核对</span>
+                            <span>{isHistoricalOrFinal&&!hasFrozenReviewConclusion ? '当时复核状态无法还原' : '原复核已失效，需重新核对'}</span>
                           </div>
                           <p className="leading-relaxed font-medium">
                             失效原因：{ev.invalidatedReason}
                           </p>
                           <p className="text-xs text-rose-800 leading-relaxed">
-                            在此记录保存后，段落正文或相关依据发生了变动，旧的人工核对结论已不再适用，该段已重新计入待处理范围，请核对最新差异后重新记录。
+                            {isHistoricalOrFinal&&!hasFrozenReviewConclusion
+                              ? '此版本未保存可还原的当时结论，不能从任务当前状态推断当时是否有效。原记录保持只读，供人工查阅。'
+                              : '在此记录保存后，段落正文或相关依据发生了变动，旧的人工核对结论已不再适用，该段已重新计入待处理范围，请核对最新差异后重新记录。'}
                           </p>
                         </div>
                       )}

@@ -286,7 +286,7 @@ export function evaluateDraftFactReviews(
       const applicability = isHistorical ? {isValid:false,invalidatedReason:'旧快照未保存当时的复核状态，仅展示历史留痕，不能推断当时已通过'} : checkReviewRecordApplicability(task, draft, block, record, blockImpacts);
       if (!applicability.isValid) {
         displayStatus = 'invalidated';
-        displayStatusLabel = '原复核已失效，需重新核对';
+        displayStatusLabel = isHistorical ? '当时复核状态无法还原' : '原复核已失效，需重新核对';
         invalidatedReason = applicability.invalidatedReason;
         isPending = true;
         isReviewed = false;
