@@ -122,7 +122,8 @@ export function isValidFactReviewRecord(value: unknown): value is ParagraphFactR
       'latestConfirmedValue','latestPeriod','latestMetricScope','latestStatus','latestDocName','latestLocation']
       .every(k=>typeof (f as unknown as Record<string,unknown>)[k]==='string')
       &&typeof f.hasFrozenSnapshot==='boolean'&&typeof f.hasConflict==='boolean'))return false;
-  if(r.status==='revoked'&&(!r.revocation||typeof r.revocation.reason!=='string'||!r.revocation.reason.trim()
+  if(r.status==='revoked'&&!r.revocation)return false;
+  if(r.revocation!==undefined&&(!r.revocation||typeof r.revocation.reason!=='string'||!r.revocation.reason.trim()
     ||typeof r.revocation.revokedAt!=='string'||!Number.isFinite(Date.parse(r.revocation.revokedAt))
     ||r.revocation.revokedBy!=='主笔甲'))return false;
   return true;
@@ -176,6 +177,7 @@ export function isValidFrozenFactReviewOverview(v: unknown): v is DraftFactRevie
         &&Array.isArray(f.differenceTags)&&f.differenceTags.every(t=>t&&typeof t.type==='string'&&typeof t.label==='string')
         &&Array.isArray(f.referencingBlocks)&&typeof f.hasFrozenSnapshot==='boolean')
       &&['pending','reviewed','deferred','invalidated'].includes(b.displayStatus)
+      &&(b.invalidatedReason===undefined||typeof b.invalidatedReason==='string')
       &&typeof b.displayStatusLabel==='string'&&typeof b.isPending==='boolean'&&typeof b.isReviewed==='boolean'
       &&(!b.record||isValidFactReviewRecord(b.record)));
 }

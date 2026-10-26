@@ -195,5 +195,21 @@ await check('提交入口重验依据，实际徽章聚焦、键盘关闭与任�
   }finally{view.close();}
 });
 
+await check('损坏的可选失效原因和撤回元数据被隔离，历史面板仍可查看',()=>{
+  const r=record();const edited=applyDraftContentChange(r.updatedTask,r.workingDraft.id,
+    bs=>bs.map(b=>b.id==='BLK-01'?{...b,content:b.content+'修改'}:b),'编辑','主笔甲');
+  const saved=createDraftSnapshot(edited.updatedTask,edited.workingDraft.id,'保存失效结论','主笔甲');
+  (saved.snapshotDraft.frozenFactReviewOverview!.blockEvaluations[0] as any).invalidatedReason={bad:'object'};
+  saved.updatedTask.currentDraftId=saved.snapshotDraft.id;
+  assert(validateTaskStructure(saved.updatedTask));
+  assert.equal(saved.snapshotDraft.frozenFactReviewOverview,undefined);
+  assert(saved.snapshotDraft.factReviewRecovery?.frozenFactReviewOverview);
+  const view=mount(saved.updatedTask);
+  try{assert.doesNotThrow(()=>click(view.host,'btn-open-fact-impact'));}finally{view.close();}
+  const bad=record();(bad.workingDraft.factReviewRecords![0] as any).revocation={revokedBy:{bad:'role'}};
+  assert(validateTaskStructure(bad.updatedTask));
+  assert.equal(bad.workingDraft.factReviewRecords?.length,0);
+});
+
 if(failures.length){console.error(`${failures.length} receipt groups failed`);process.exitCode=1;}
-else console.log('Task22 receipt: all 9 independent regression groups passed');
+else console.log('Task22 receipt: all 10 independent regression groups passed');
