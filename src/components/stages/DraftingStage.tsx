@@ -148,6 +148,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Task 22: Fact Review Records Evaluation
   const reviewOverview = useMemo(() => evaluateDraftFactReviews(task, currentDraft), [task, currentDraft]);
   const [showFactImpactModal, setShowFactImpactModal] = useState(false);
+  const [impactFocusBlockId,setImpactFocusBlockId]=useState<string|undefined>();
   const [locateError, setLocateError] = useState<string | null>(null);
   const impactLocateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -155,6 +156,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   useEffect(() => {
     setLocateError(null);
     setShowFactImpactModal(false);
+    setImpactFocusBlockId(undefined);
     return () => {
       if (impactLocateTimer.current !== null) clearTimeout(impactLocateTimer.current);
     };
@@ -818,7 +820,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   };
 
   // Task 22: Fact Review Records handlers
-  const handleSaveReviewRecord = (blockId: string, status: 'reviewed' | 'deferred', notes: string) => {
+  const handleSaveReviewRecord = (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => {
     if (!currentDraft) return;
     try {
       const res = saveFactReviewRecord({
@@ -828,16 +830,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         status,
         notes,
         activeRole,
+        expectedContextFingerprint:context,
       });
       onUpdateTask({
         drafts: res.updatedTask.drafts,
       });
     } catch (err: any) {
-      alert(err.message || '保存复核记录失败');
+      return err.message || '保存复核记录失败';
     }
   };
 
-  const handleRevokeReviewRecord = (blockId: string, reason: string) => {
+  const handleRevokeReviewRecord = (blockId: string, reason: string, context: string, recordId: string) => {
     if (!currentDraft) return;
     try {
       const res = revokeFactReviewRecord({
@@ -846,12 +849,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         targetBlockId: blockId,
         reason,
         activeRole,
+        expectedContextFingerprint:context,expectedRecordId:recordId,
       });
       onUpdateTask({
         drafts: res.updatedTask.drafts,
       });
     } catch (err: any) {
-      alert(err.message || '撤回复核记录失败');
+      return err.message || '撤回复核记录失败';
     }
   };
 
@@ -1989,7 +1993,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               {/* Task 21: Fact Impact Compact Entrance */}
               <button
                 type="button"
-                onClick={() => setShowFactImpactModal(true)}
+                onClick={() => {setImpactFocusBlockId(undefined);setShowFactImpactModal(true);}}
                 data-testid="btn-open-fact-impact"
                 className={`text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs border ${
                   factImpact.changedFactsCount > 0
@@ -2165,7 +2169,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               {/* Task 21: Fact impact button when no draft */}
               <button
                 type="button"
-                onClick={() => setShowFactImpactModal(true)}
+                onClick={() => {setImpactFocusBlockId(undefined);setShowFactImpactModal(true);}}
                 data-testid="btn-open-fact-impact"
                 className="text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1.5 cursor-pointer bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200"
                 title="尚无稿件可比较"
@@ -3047,6 +3051,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setImpactFocusBlockId(block.id);
                                   setShowFactImpactModal(true);
                                 }}
                                 data-testid={`badge-block-fact-changed-${block.id}`}
@@ -3054,7 +3059,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 title="点击查看影响该段落的事实变动详情"
                               >
                                 <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                                <span>引用事实已变动/待复核</span>
+                                <span>{reviewOverview.blockEvaluations.find(ev=>ev.blockId===block.id)?.isReviewed
+                                  ? '引用事实仍有差异' : '引用事实已变动/待复核'}</span>
                               </button>
                             )}
                             {(() => {
@@ -3065,6 +3071,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    setImpactFocusBlockId(block.id);
                                     setShowFactImpactModal(true);
                                   }}
                                   data-testid={`badge-block-review-status-${block.id}`}
@@ -4054,6 +4061,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
         onSaveReviewRecord={handleSaveReviewRecord}
         onRevokeReviewRecord={handleRevokeReviewRecord}
+        initialBlockId={impactFocusBlockId}
       />
     </div>
   );

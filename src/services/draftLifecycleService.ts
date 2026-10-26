@@ -16,6 +16,7 @@ import {
   AdoptedEvidenceRecord
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
+import {evaluateDraftFactReviews, isValidFactReviewRecord} from './factReviewService';
 import { checkPermission } from './permissionService';
 import { computeContentHash } from './mockDraftService';
 import { 
@@ -24,6 +25,17 @@ import {
   validateSelectedMaterialsQuantitativeClaims,
   arePeriodsStrictlyIdentical
 } from './materialSupplementService';
+
+function freezeFactReviews(task:Task,draft:DraftVersion): Pick<DraftVersion,
+  'factReviewRecords'|'sourceFactReviewRecords'|'factReviewRecovery'|'frozenFactReviewOverview'> {
+  return JSON.parse(JSON.stringify({factReviewRecords:draft.factReviewRecords,
+    sourceFactReviewRecords:draft.sourceFactReviewRecords,
+    factReviewRecovery:draft.factReviewRecovery,
+    frozenFactReviewOverview:evaluateDraftFactReviews(task,draft)}));
+}
+function sourceFactReviews(draft:DraftVersion|undefined) {
+  return JSON.parse(JSON.stringify([...(draft?.factReviewRecords||[]),...(draft?.sourceFactReviewRecords||[])])).filter(isValidFactReviewRecord);
+}
 
 function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
   if (Array.isArray(draft.reviewBaselineIds)) return [...draft.reviewBaselineIds];
@@ -237,7 +249,7 @@ export function acceptDraftCandidate(
           ? `${currentDraft.summary}（采纳新候选前自动归档历史快照）`
           : '采纳新候选前系统自动归档的历史快照',
         frozenReviewComments: freezeReviewComments(task, currentDraft),
-        factReviewRecords: currentDraft.factReviewRecords ? JSON.parse(JSON.stringify(currentDraft.factReviewRecords)) : undefined,
+        ...freezeFactReviews(task,currentDraft),
       };
     }
   }
@@ -259,7 +271,7 @@ export function acceptDraftCandidate(
     snapshotMetadata: candidate.snapshotMetadata || currentDraft?.snapshotMetadata,
     auditRecords: currentDraft?.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
     factReviewRecords: [], // 新工作稿需重新确认适用性
-    sourceFactReviewRecords: currentDraft?.factReviewRecords ? JSON.parse(JSON.stringify(currentDraft.factReviewRecords)) : undefined,
+    sourceFactReviewRecords: sourceFactReviews(currentDraft),
   };
 
   const updatedDrafts = currentDraft
@@ -394,7 +406,7 @@ export function applyDraftContentChange(
       snapshotMetadata: newSnapshotMetadata || targetDraft.snapshotMetadata,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
       factReviewRecords: [], // 基于历史/定稿修改产生新工作稿，不自动继承有效复核
-      sourceFactReviewRecords: targetDraft.factReviewRecords ? JSON.parse(JSON.stringify(targetDraft.factReviewRecords)) : undefined,
+      sourceFactReviewRecords: sourceFactReviews(targetDraft),
     };
 
     const updatedTask: Task = {
@@ -665,7 +677,7 @@ export function finalizeDraft(
     snapshotMetadata: currentDraft.snapshotMetadata ? JSON.parse(JSON.stringify(currentDraft.snapshotMetadata)) : undefined,
     auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
     frozenReviewComments: freezeReviewComments(task, currentDraft),
-    factReviewRecords: currentDraft.factReviewRecords ? JSON.parse(JSON.stringify(currentDraft.factReviewRecords)) : undefined,
+    ...freezeFactReviews(task,currentDraft),
   };
 
   const updatedTask: Task = {
@@ -725,7 +737,7 @@ export function createDraftSnapshot(
     snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
     auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     frozenReviewComments: freezeReviewComments(task, targetDraft),
-    factReviewRecords: targetDraft.factReviewRecords ? JSON.parse(JSON.stringify(targetDraft.factReviewRecords)) : undefined,
+    ...freezeFactReviews(task,targetDraft),
   };
 
   const updatedTask: Task = {
@@ -774,7 +786,7 @@ export function restoreDraftVersion(
     snapshotMetadata: sourceDraft.snapshotMetadata ? JSON.parse(JSON.stringify(sourceDraft.snapshotMetadata)) : undefined,
     auditRecords: sourceDraft.auditRecords ? JSON.parse(JSON.stringify(sourceDraft.auditRecords)) : [],
     factReviewRecords: [], // 恢复历史稿不自动继承为已复核
-    sourceFactReviewRecords: sourceDraft.factReviewRecords ? JSON.parse(JSON.stringify(sourceDraft.factReviewRecords)) : undefined,
+    sourceFactReviewRecords: sourceFactReviews(sourceDraft),
   };
 
   const updatedTask: Task = {
@@ -834,6 +846,7 @@ export function submitDraftForReview(
       snapshotMetadata: targetDraft.snapshotMetadata ? JSON.parse(JSON.stringify(targetDraft.snapshotMetadata)) : undefined,
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
       frozenReviewComments: freezeReviewComments(task, targetDraft),
+      ...freezeFactReviews(task,targetDraft),
     };
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }

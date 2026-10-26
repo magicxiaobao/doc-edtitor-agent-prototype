@@ -5,6 +5,8 @@ import {
 } from '../services/factImpactService';
 import {
   evaluateDraftFactReviews,
+  getFactReviewContext,
+  isValidFactReviewRecord,
   DraftFactReviewOverview,
   BlockFactReviewEvaluation,
 } from '../services/factReviewService';
@@ -38,8 +40,9 @@ interface FactImpactModalProps {
   onLocateBlock: (blockId: string, factId?: string) => void;
   onViewDraftEvidence: (item: FactImpactItem) => void;
   onJumpToFactsStage?: () => void;
-  onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string) => void;
-  onRevokeReviewRecord?: (blockId: string, reason: string) => void;
+  onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => string | void;
+  onRevokeReviewRecord?: (blockId: string, reason: string, context: string, recordId: string) => string | void;
+  initialBlockId?: string;
 }
 
 export const FactImpactModal: React.FC<FactImpactModalProps> = ({
@@ -54,6 +57,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   onJumpToFactsStage,
   onSaveReviewRecord,
   onRevokeReviewRecord,
+  initialBlockId,
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
@@ -62,27 +66,32 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [revokingBlockId, setRevokingBlockId] = useState<string | null>(null);
   const [revokeReason, setRevokeReason] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'by_paragraph' | 'by_fact'>('by_paragraph');
+  const [formContexts,setFormContexts]=useState<Record<string,string>>({});
+  const [revokeContext,setRevokeContext]=useState<{fingerprint:string;recordId:string}|null>(null);
+  const [formError,setFormError]=useState<string>('');
 
   // Reset inputs when task or draft changes
   useEffect(() => {
     setReviewNotes({});
     setRevokingBlockId(null);
     setRevokeReason('');
-  }, [task.id, currentDraft?.id]);
+    setFormContexts({});setRevokeContext(null);setFormError('');
+  }, [task.id, currentDraft?.id,activeRole]);
 
   // Capture previous focused element and restore on close
   useEffect(() => {
     if (isOpen) {
       previousActiveElementRef.current = document.activeElement as HTMLElement | null;
-      modalRef.current?.focus();
+      const card=initialBlockId?modalRef.current?.querySelector<HTMLElement>(`[data-review-block-id="${initialBlockId}"]`):null;
+      (card||modalRef.current)?.focus();
+      card?.scrollIntoView?.({block:'nearest'});
     }
     return () => {
       if (isOpen && previousActiveElementRef.current?.isConnected) {
         previousActiveElementRef.current.focus({ preventScroll: true });
       }
     };
-  }, [isOpen]);
+  }, [isOpen,initialBlockId]);
 
   // Handle Escape key to close
   useEffect(() => {
@@ -132,13 +141,17 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
   const handleNotesChange = (blockId: string, value: string) => {
     setReviewNotes((prev) => ({ ...prev, [blockId]: value }));
+    const block=currentDraft?.blocks.find(b=>b.id===blockId);
+    if(currentDraft&&block)setFormContexts(prev=>({...prev,[blockId]:getFactReviewContext(task,currentDraft,block)}));
+    setFormError('');
   };
 
   const handleSubmitReview = (blockId: string, status: 'reviewed' | 'deferred') => {
     const notes = reviewNotes[blockId] || '';
     if (!notes.trim()) return;
     if (onSaveReviewRecord) {
-      onSaveReviewRecord(blockId, status, notes.trim());
+      const error=onSaveReviewRecord(blockId, status, notes.trim(),formContexts[blockId]);
+      if(error){setFormError(error);return;}
       // Clear note for this block
       setReviewNotes((prev) => {
         const next = { ...prev };
@@ -151,7 +164,9 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const handleConfirmRevoke = (blockId: string) => {
     if (!revokeReason.trim()) return;
     if (onRevokeReviewRecord) {
-      onRevokeReviewRecord(blockId, revokeReason.trim());
+      if(!revokeContext)return;
+      const error=onRevokeReviewRecord(blockId, revokeReason.trim(),revokeContext.fingerprint,revokeContext.recordId);
+      if(error){setFormError(error);return;}
       setRevokingBlockId(null);
       setRevokeReason('');
     }
@@ -299,6 +314,19 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             </div>
           )}
 
+          {isHistoricalOrFinal&&reviewOverview.blockEvaluations.length>0&&(
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded text-sm" data-testid="frozen-review-summary">
+              保存当时的人工复核：已记录 {reviewOverview.reviewedCount} 段 · 待处理 {reviewOverview.pendingCount} 段。
+              以下历史留痕保持当时状态；上方依据差异另与任务当前事实比较。
+            </div>
+          )}
+          {!isHistoricalOrFinal&&analysis.changedFactsCount===0&&reviewOverview.blockEvaluations.length>0&&(
+            <p className="text-sm">人工复核：已记录 {reviewOverview.reviewedCount} 段 · 待处理 {reviewOverview.pendingCount} 段；原有记录继续保留供核对。</p>
+          )}
+          {currentDraft?.factReviewRecovery&&<p role="status" className="p-3 bg-amber-50 text-sm text-amber-900">
+            部分复核数据格式不完整，已隔离并保留，未计入有效人工复核；正文已保留，请重新核对。
+          </p>}
+          {formError&&<p role="alert" className="p-3 bg-rose-50 text-sm text-rose-900">{formError}</p>}
           {/* Scope limitation alert for unlinked material evidence */}
           {analysis.hasDraft && !task.factSnapshot && (
             <p className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
@@ -334,6 +362,12 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             </div>
           )}
 
+          {Array.isArray(currentDraft?.sourceFactReviewRecords)&&currentDraft.sourceFactReviewRecords.filter(isValidFactReviewRecord).length>0&&(
+            <details className="p-3 border rounded text-sm" data-testid="source-fact-reviews">
+              <summary className="cursor-pointer">来源版本的复核留痕（仅供参考，新工作稿需重新核对）</summary>
+              {currentDraft.sourceFactReviewRecords.filter(isValidFactReviewRecord).map((r,i)=>(
+                <p key={`${r.id}-${i}`} className="mt-2 whitespace-pre-wrap">第{r.blockOrder}段 · {r.reviewedBy} · {r.reviewedAt}：{r.notes}{r.revocation&&`（已撤回：${r.revocation.reason}）`}</p>))}
+            </details>)}
           {/* Section Navigation Quick Jump */}
           {reviewOverview.blockEvaluations.length > 0 && (
             <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
@@ -360,7 +394,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                 <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
                   <span>受影响段落逐段人工复核</span>
                   <span className="text-xs text-slate-500 font-normal">
-                    （以稳定 Block ID 绑定真实正文，支持独立核对与留痕）
+                    （按正文段落独立核对与留痕）
                   </span>
                 </h3>
               </div>
@@ -374,12 +408,16 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
                   const isRevokingThis = revokingBlockId === ev.blockId;
                   const currentNoteInput = reviewNotes[ev.blockId] || '';
-                  const isSubmitDisabled = !currentNoteInput.trim();
+                  const liveContext=currentDraft&&block?getFactReviewContext(task,currentDraft,block):'';
+                  const isStale=Boolean(currentNoteInput&&formContexts[ev.blockId]!==liveContext);
+                  const isSubmitDisabled = !currentNoteInput.trim()||isStale;
 
                   return (
                     <div
                       key={ev.blockId}
                       data-testid={`fact-review-block-card-${ev.blockId}`}
+                      data-review-block-id={ev.blockId}
+                      tabIndex={-1}
                       className={`border rounded-lg p-4 space-y-3.5 transition-colors ${
                         ev.displayStatus === 'reviewed'
                           ? 'border-emerald-200 bg-white shadow-2xs'
@@ -515,6 +553,16 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                         </div>
                       </div>
 
+                      {currentDraft&&Array.isArray(currentDraft.factReviewRecords)&&
+                        currentDraft.factReviewRecords.filter(isValidFactReviewRecord).filter(r=>r.blockId===ev.blockId&&r.id!==ev.record?.id).length>0&&(
+                        <details className="text-sm border rounded p-2" data-testid={`review-history-${ev.blockId}`}>
+                          <summary className="cursor-pointer">查看此前复核留痕</summary>
+                          {currentDraft.factReviewRecords.filter(isValidFactReviewRecord).filter(r=>r.blockId===ev.blockId&&r.id!==ev.record?.id).map(r=>(
+                            <div key={r.id} className="border-t mt-2 pt-2 whitespace-pre-wrap">
+                              {r.reviewedBy} · {new Date(r.reviewedAt).toLocaleString('zh-CN')}：{r.notes}
+                              {r.revocation&&<p>撤回：{r.revocation.revokedBy} · {r.revocation.revokedAt} · {r.revocation.reason}</p>}
+                            </div>))}
+                        </details>)}
                       {/* Check Limitations (Requirement 7) */}
                       {ev.limitations.length > 0 && (
                         <div className="p-2.5 bg-amber-50 rounded border border-amber-200 text-xs text-amber-900 space-y-0.5">
@@ -547,6 +595,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                         </div>
                       )}
 
+                      {isStale&&<p role="alert" className="text-sm text-rose-800">正文或依据已变化，请重新核对当前差异并更新说明后提交；原说明已保留。</p>}
                       {/* Display Existing Record if Present */}
                       {ev.record && (
                         <div
@@ -604,7 +653,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                               <div className="pt-1 flex justify-end">
                                 <button
                                   type="button"
-                                  onClick={() => setRevokingBlockId(ev.blockId)}
+                                  onClick={() => {setRevokingBlockId(ev.blockId);setRevokeReason('');setFormError('');
+                                    setRevokeContext({fingerprint:liveContext,recordId:ev.record!.id});}}
                                   data-testid={`btn-revoke-review-${ev.blockId}`}
                                   className="text-xs text-rose-700 hover:text-rose-900 font-medium flex items-center gap-1 cursor-pointer hover:underline"
                                 >
@@ -617,11 +667,12 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                           {/* Inline Revocation Form */}
                           {isRevokingThis && (
                             <div className="p-2.5 bg-rose-50 rounded border border-rose-200 space-y-2 mt-2">
-                              <label className="block text-xs font-semibold text-rose-900">
+                              <label htmlFor={`revoke-reason-${ev.blockId}`} className="block text-xs font-semibold text-rose-900">
                                 撤回原因说明（必填）：
                               </label>
                               <input
                                 type="text"
+                                id={`revoke-reason-${ev.blockId}`}
                                 value={revokeReason}
                                 onChange={(e) => setRevokeReason(e.target.value)}
                                 data-testid={`input-revoke-reason-${ev.blockId}`}

@@ -262,7 +262,7 @@ async function runTask22Tests() {
     assert(evalRevoke.reviewedCount === 0, '用例C.5: 已记录复核数归零');
     const revokedRec = resRevoke.workingDraft.factReviewRecords?.find((r) => r.blockId === 'BLK-01')!;
     assert(revokedRec.status === 'revoked', '用例C.5: 保留原记录对象并将 status 设为 revoked');
-    assert(revokedRec.revocation?.reason.includes('科室甲反馈数据有更新'), '用例C.5: 完整保留撤回原因与撤回元数据');
+    assert(revokedRec.revocation?.reason.includes('科室甲反馈数据有更新') === true, '用例C.5: 完整保留撤回原因与撤回元数据');
 
     // 6. 存储序列化与刷新恢复
     const jsonStr = JSON.stringify(resRevoke.updatedTask);

@@ -340,6 +340,8 @@ export interface DraftVersion {
   frozenReviewComments?: ReviewComment[]; // 冻结的历史审阅记录快照（防止后续意见混入旧版本）
   factReviewRecords?: ParagraphFactReviewRecord[]; // 事实变更逐段人工复核留痕记录
   sourceFactReviewRecords?: ParagraphFactReviewRecord[]; // 派生来源版本的复核留痕（只读参考，新工作稿需重新核对）
+  frozenFactReviewOverview?: DraftFactReviewOverview; // 保存版本时的结论，不随任务最新事实重算
+  factReviewRecovery?: Record<string, unknown>; // 隔离异常可选字段，正文仍可加载
 }
 
 export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';
@@ -585,6 +587,7 @@ export interface ParagraphFactReviewRecord {
   referencedFactIdsAtReview: string[];
   adoptedEvidenceIdsAtReview: string[];
   factsSummaryAtReview: FactEvidenceSummaryAtReview[];
+  contextFingerprint?: string; // 相关正文、引用及两侧依据的规范化内容；旧记录缺失时要求重核
   revocation?: {
     revokedAt: string;
     revokedBy: UserRole;
