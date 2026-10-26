@@ -1,5 +1,7 @@
 import { Task, UserRole, DraftVersion, ParagraphBlock } from '../types';
 import { createPresetTask } from './mockData';
+import {isValidFactReviewRecord, isValidFrozenFactReviewOverview} from './factReviewService';
+export {isValidFactReviewRecord} from './factReviewService';
 
 export const CURRENT_SCHEMA_VERSION = 2;
 export const STORAGE_KEY_V2 = 'doc_editor_agent_state_v2';
@@ -165,6 +167,22 @@ export function isValidModificationLog(log: any): boolean {
   return true;
 }
 
+// Repair only the new optional metadata; retain raw data for recovery and never discard body.
+function normalizeFactReviewFields(draft: DraftVersion) {
+  for (const field of ['factReviewRecords','sourceFactReviewRecords'] as const) {
+    const raw=draft[field];
+    if(raw===undefined)continue;
+    if(!Array.isArray(raw)||raw.some(r=>!isValidFactReviewRecord(r))) {
+      draft.factReviewRecovery={...draft.factReviewRecovery,[field]:raw};
+      draft[field]=Array.isArray(raw)?raw.filter(isValidFactReviewRecord):[];
+    }
+  }
+  if(draft.frozenFactReviewOverview!==undefined&&!isValidFrozenFactReviewOverview(draft.frozenFactReviewOverview)) {
+    draft.factReviewRecovery={...draft.factReviewRecovery,frozenFactReviewOverview:draft.frozenFactReviewOverview};
+    draft.frozenFactReviewOverview=undefined;
+  }
+}
+
 /**
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
@@ -200,6 +218,7 @@ export function validateTaskStructure(task: any): boolean {
     if (!Array.isArray(draft.blocks)) return false;
     if (draft.reviewBaselineIds !== undefined && (!Array.isArray(draft.reviewBaselineIds) ||
         draft.reviewBaselineIds.some((id: unknown) => typeof id !== 'string'))) return false;
+    normalizeFactReviewFields(draft);
     for (const b of draft.blocks) {
       if (!b || typeof b !== 'object') return false;
       if (typeof b.id !== 'string' || !b.id) return false;
@@ -637,6 +656,10 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             snapshotMetadata: d?.snapshotMetadata,
             auditRecords: Array.isArray(d?.auditRecords) ? d.auditRecords : [],
             frozenReviewComments: Array.isArray(d?.frozenReviewComments) ? d.frozenReviewComments : undefined,
+            factReviewRecords:d?.factReviewRecords,
+            sourceFactReviewRecords:d?.sourceFactReviewRecords,
+            frozenFactReviewOverview:d?.frozenFactReviewOverview,
+            factReviewRecovery:d?.factReviewRecovery,
           };
         });
       } else {

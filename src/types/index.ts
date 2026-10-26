@@ -338,6 +338,10 @@ export interface DraftVersion {
   auditRecords?: AuditRecord[];
   snapshotMetadata?: SnapshotMetadata;
   frozenReviewComments?: ReviewComment[]; // 冻结的历史审阅记录快照（防止后续意见混入旧版本）
+  factReviewRecords?: ParagraphFactReviewRecord[]; // 事实变更逐段人工复核留痕记录
+  sourceFactReviewRecords?: ParagraphFactReviewRecord[]; // 派生来源版本的复核留痕（只读参考，新工作稿需重新核对）
+  frozenFactReviewOverview?: DraftFactReviewOverview; // 保存版本时的结论，不随任务最新事实重算
+  factReviewRecovery?: Record<string, unknown>; // 隔离异常可选字段，正文仍可加载
 }
 
 export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';
@@ -530,4 +534,88 @@ export interface AlignedParagraphRow {
   currentBlock?: ParagraphBlock;
   candidateBlock?: ParagraphBlock;
   diffSegments?: DiffSegment[];
+}
+
+export type FactReviewStatus = 'reviewed' | 'deferred' | 'revoked';
+
+export type FactReviewAction = 'review' | 'defer' | 'revoke';
+
+export type FactReviewDisplayStatus =
+  | 'pending'      // 待复核
+  | 'reviewed'     // 已记录人工复核
+  | 'deferred'     // 暂缓处理
+  | 'invalidated'; // 原复核已失效，需重新核对
+
+export interface FactEvidenceSummaryAtReview {
+  factId: string;
+  metric: string;
+  snapshotValue: string;
+  snapshotPeriod: string;
+  snapshotMetricScope: string;
+  snapshotPrimaryEvidenceId?: string;
+  snapshotDocName: string;
+  snapshotLocation: string;
+  snapshotProvenanceText?: string;
+  hasFrozenSnapshot: boolean;
+
+  latestConfirmedValue: string;
+  latestPeriod: string;
+  latestMetricScope: string;
+  latestPrimaryEvidenceId?: string;
+  latestStatus: string;
+  latestDocName: string;
+  latestLocation: string;
+  latestSnippetText?: string;
+  hasConflict: boolean;
+  selectedConflictValue?: string;
+}
+
+export interface ParagraphFactReviewRecord {
+  id: string; // e.g. "FR-REC-..."
+  taskId: string;
+  draftId: string;
+  blockId: string;
+  blockOrder: number;
+  sectionId: string;
+  sectionTitle: string;
+  status: FactReviewStatus;
+  reviewedBy: UserRole;
+  reviewedAt: string;
+  notes: string;
+  paragraphContentAtReview: string;
+  paragraphRevisionSeqAtReview: number;
+  referencedFactIdsAtReview: string[];
+  adoptedEvidenceIdsAtReview: string[];
+  factsSummaryAtReview: FactEvidenceSummaryAtReview[];
+  contextFingerprint?: string; // 相关正文、引用及两侧依据的规范化内容；旧记录缺失时要求重核
+  revocation?: {
+    revokedAt: string;
+    revokedBy: UserRole;
+    reason: string;
+  };
+}
+
+export interface BlockFactReviewEvaluation {
+  blockId: string;
+  blockOrder: number;
+  sectionId: string;
+  sectionTitle: string;
+  changedFacts: any[];
+  record?: ParagraphFactReviewRecord;
+  displayStatus: FactReviewDisplayStatus;
+  displayStatusLabel: string;
+  invalidatedReason?: string;
+  limitations: string[];
+  isPending: boolean;
+  isReviewed: boolean;
+}
+
+export interface DraftFactReviewOverview {
+  totalAffectedBlocks: number;
+  reviewedCount: number;
+  pendingCount: number;
+  deferredCount: number;
+  invalidatedCount: number;
+  unreviewedCount: number;
+  blockEvaluations: BlockFactReviewEvaluation[];
 }
