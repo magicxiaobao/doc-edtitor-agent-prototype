@@ -34,6 +34,11 @@ import { MaterialEvidenceList } from '../MaterialEvidenceList';
 import { MaterialSupplementModal } from '../MaterialSupplementModal';
 import { FactImpactModal } from '../FactImpactModal';
 import { analyzeFactImpact, FactImpactItem } from '../../services/factImpactService';
+import {
+  saveFactReviewRecord,
+  revokeFactReviewRecord,
+  evaluateDraftFactReviews,
+} from '../../services/factReviewService';
 import { 
   requestParagraphRevisionAsync 
 } from '../../services/paragraphRevisionAdapter';
@@ -140,6 +145,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // Task 21: Fact Impact Analysis (derived deterministically from task and currentDraft snapshot)
   const factImpact = useMemo(() => analyzeFactImpact(task, currentDraft), [task, currentDraft]);
+  // Task 22: Fact Review Records Evaluation
+  const reviewOverview = useMemo(() => evaluateDraftFactReviews(task, currentDraft), [task, currentDraft]);
   const [showFactImpactModal, setShowFactImpactModal] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
   const impactLocateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -807,6 +814,44 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       );
     } else {
       setLocateError('无法查看本稿依据：此事实既无本稿冻结记录，也无当前事实记录，缺少可核验的依据。请结合原始材料人工核实。');
+    }
+  };
+
+  // Task 22: Fact Review Records handlers
+  const handleSaveReviewRecord = (blockId: string, status: 'reviewed' | 'deferred', notes: string) => {
+    if (!currentDraft) return;
+    try {
+      const res = saveFactReviewRecord({
+        task,
+        targetDraftId: currentDraft.id,
+        targetBlockId: blockId,
+        status,
+        notes,
+        activeRole,
+      });
+      onUpdateTask({
+        drafts: res.updatedTask.drafts,
+      });
+    } catch (err: any) {
+      alert(err.message || '保存复核记录失败');
+    }
+  };
+
+  const handleRevokeReviewRecord = (blockId: string, reason: string) => {
+    if (!currentDraft) return;
+    try {
+      const res = revokeFactReviewRecord({
+        task,
+        targetDraftId: currentDraft.id,
+        targetBlockId: blockId,
+        reason,
+        activeRole,
+      });
+      onUpdateTask({
+        drafts: res.updatedTask.drafts,
+      });
+    } catch (err: any) {
+      alert(err.message || '撤回复核记录失败');
     }
   };
 
@@ -3012,6 +3057,30 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 <span>引用事实已变动/待复核</span>
                               </button>
                             )}
+                            {(() => {
+                              const blockEval = reviewOverview.blockEvaluations.find((ev) => ev.blockId === block.id);
+                              if (!blockEval || blockEval.displayStatus === 'pending') return null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowFactImpactModal(true);
+                                  }}
+                                  data-testid={`badge-block-review-status-${block.id}`}
+                                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded font-semibold cursor-pointer border ${
+                                    blockEval.displayStatus === 'reviewed'
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                      : blockEval.displayStatus === 'deferred'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                      : 'bg-rose-50 text-rose-800 border-rose-300'
+                                  }`}
+                                  title={`人工复核状态：${blockEval.displayStatusLabel}（点击查看留痕详情）`}
+                                >
+                                  <span>{blockEval.displayStatusLabel}</span>
+                                </button>
+                              );
+                            })()}
                             {block.referencedFactIds.map((factId) => {
                               const fact = findDraftFact(task, currentDraft, factId);
                               if (!fact) return null;
@@ -3972,16 +4041,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onSupplementSuccess={handleSupplementSuccess}
       />
 
-      {/* Task 21: Fact Impact Overview & Block Locating Modal */}
+      {/* Task 21 & 22: Fact Impact Overview & Block Review Modal */}
       <FactImpactModal
         isOpen={showFactImpactModal}
         onClose={() => setShowFactImpactModal(false)}
         analysis={factImpact}
         currentDraft={currentDraft}
         task={task}
+        activeRole={activeRole}
         onLocateBlock={handleLocateBlock}
         onViewDraftEvidence={handleViewDraftEvidence}
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
+        onSaveReviewRecord={handleSaveReviewRecord}
+        onRevokeReviewRecord={handleRevokeReviewRecord}
       />
     </div>
   );

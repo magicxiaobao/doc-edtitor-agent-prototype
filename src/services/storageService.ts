@@ -165,6 +165,17 @@ export function isValidModificationLog(log: any): boolean {
   return true;
 }
 
+export function isValidFactReviewRecord(rec: any): boolean {
+  if (!rec || typeof rec !== 'object') return false;
+  if (typeof rec.id !== 'string' || !rec.id) return false;
+  if (typeof rec.taskId !== 'string' || !rec.taskId) return false;
+  if (typeof rec.draftId !== 'string' || !rec.draftId) return false;
+  if (typeof rec.blockId !== 'string' || !rec.blockId) return false;
+  if (typeof rec.notes !== 'string') return false;
+  if (rec.status !== 'reviewed' && rec.status !== 'deferred' && rec.status !== 'revoked') return false;
+  return true;
+}
+
 /**
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
@@ -200,6 +211,12 @@ export function validateTaskStructure(task: any): boolean {
     if (!Array.isArray(draft.blocks)) return false;
     if (draft.reviewBaselineIds !== undefined && (!Array.isArray(draft.reviewBaselineIds) ||
         draft.reviewBaselineIds.some((id: unknown) => typeof id !== 'string'))) return false;
+    if (draft.factReviewRecords !== undefined) {
+      if (!Array.isArray(draft.factReviewRecords)) return false;
+      for (const rec of draft.factReviewRecords) {
+        if (!isValidFactReviewRecord(rec)) return false;
+      }
+    }
     for (const b of draft.blocks) {
       if (!b || typeof b !== 'object') return false;
       if (typeof b.id !== 'string' || !b.id) return false;
