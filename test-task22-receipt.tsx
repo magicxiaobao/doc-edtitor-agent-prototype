@@ -53,7 +53,7 @@ await check('历史冻结保存当时的结论，最新差异消失也不隐藏�
   f.value='125'; f.selectedConflictValue='125';
   assert.equal(state(snap.updatedTask,snap.snapshotDraft)?.displayStatus,'reviewed');
   const view=mount({...snap.updatedTask,currentDraftId:snap.snapshotDraft.id});
-  try {click(view.host,'btn-open-fact-impact'); assert(view.host.textContent?.includes('保存当时'));}
+  try {click(view.host,'btn-open-fact-impact'); assert(view.host.textContent?.includes('保存当时的任务状态（冻结）'));}
   finally {view.close();}
   // All current facts equal this draft's frozen baseline: history is still inspectable.
   for (const item of snap.snapshotDraft.snapshotMetadata!.factSnapshot!.items) {

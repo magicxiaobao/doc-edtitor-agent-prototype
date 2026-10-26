@@ -392,7 +392,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             <div id="fact-review-section" className="space-y-4" data-testid="fact-review-section">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                  <span>受影响段落逐段人工复核</span>
+                  <span>{isHistoricalOrFinal ? '保存当时的段落复核留痕' : '受影响段落逐段人工复核'}</span>
                   <span className="text-xs text-slate-500 font-normal">
                     （按正文段落独立核对与留痕）
                   </span>
@@ -538,7 +538,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
                                 <div className="bg-white p-2 rounded border border-slate-200 space-y-0.5">
                                   <span className="text-slate-400 block font-medium">
-                                    任务最新状态：
+                                    {isHistoricalOrFinal ? '保存当时的任务状态（冻结）：' : '任务最新状态：'}
                                   </span>
                                   <div>
                                     数值：<strong className="font-mono text-blue-800">{factItem.latestConfirmedValue}</strong>
