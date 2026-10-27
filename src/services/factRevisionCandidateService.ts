@@ -2,8 +2,7 @@ import {
   Task,
   DraftVersion,
   ParagraphBlock,
-  Fact,
-  AdoptedEvidenceRecord,
+  FactItemSnapshot,
   FactRevisionCandidate,
   UserRole,
 } from '../types';
@@ -15,7 +14,7 @@ import {
   sourceFactReviews,
   getReviewBaselineIds,
 } from './draftLifecycleService';
-import { computeTextDiff } from './diffService';
+import { buildFactItemSnapshot, confirmFact, extractClausePeriod, arePeriodsStrictlyIdentical } from './factLifecycleService';
 
 export interface FactRevisionEligibilityResult {
   eligible: boolean;
@@ -41,6 +40,125 @@ export interface FactRevisionAcceptanceResult {
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function metricValueOffset(text: string, metric: string, value: string, unit: string): number | undefined {
+  if (!metric || !unit || !/^\d+(?:\.\d+)?$/.test(value)) return undefined;
+  // This batch supports explicit metric labels, not inferred aliases. Match the
+  // whole quantity immediately governed by that label, with a complete unit.
+  const re = new RegExp(`${escapeRegex(metric)}\\s*(?:为|共|计|达到|达|已完成|完成)?\\s*(${escapeRegex(value)})\\s*${escapeRegex(unit)}(?![\\d.．%％次人项场个套万亿])`, 'g');
+  const matches = [...text.matchAll(re)];
+  if (matches.length !== 1) return undefined;
+  const match = matches[0];
+  return match.index! + match[0].indexOf(value, metric.length);
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value)
+    .filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+// Capturing a new approval may refresh provenance time without changing its meaning.
+function semanticFact(item: FactItemSnapshot) {
+  const { capturedAt: _time, ...provenance } = item.provenance || {};
+  return { ...item, provenance: item.provenance ? provenance : undefined };
+}
+
+export function getFactRevisionContext(task: Task, draft: DraftVersion): string {
+  const evidenceIds = new Set([
+    ...task.facts.filter(f => f.status === 'confirmed').map(f => f.primaryEvidenceId),
+    ...draft.blocks.flatMap(b => (b.adoptedEvidences || []).map(e => e.evidenceId)),
+  ]);
+  const snippets = task.snippets.filter(s => evidenceIds.has(s.id));
+  const sourceIds = new Set(snippets.map(s => s.sourceDocId));
+  return canonical({ taskId: task.id, currentDraftId: task.currentDraftId, draftId: draft.id,
+    requirements: [task.title, task.docType, task.usage, task.audience, task.startDate, task.endDate,
+      task.targetWordCount, task.mandatoryCoverage, task.deadline, task.primaryAuthor],
+    blocks: draft.blocks, baseline: draft.snapshotMetadata, facts: task.facts,
+    snippets, documents: task.documents.filter(d => sourceIds.has(d.id)),
+    factSnapshot: task.factSnapshot, styleConfirmed: task.styleConfirmed,
+    styleSnapshot: task.styleSnapshot, styleRules: task.styleRules,
+    outlineConfirmed: task.outlineConfirmed, outlineSnapshot: task.outlineSnapshot, outline: task.outline });
+}
+
+function completeBasisError(task: Task, draft: DraftVersion, targetFactId: string): string | undefined {
+  const baseline = draft.snapshotMetadata!;
+  if (baseline.taskTitle !== task.title || baseline.startDate !== task.startDate ||
+      baseline.endDate !== task.endDate || baseline.targetWordCount !== task.targetWordCount) {
+    return '任务标题、统计期间或目标字数已变化，超出本批定向修订范围。';
+  }
+  // Legacy style snapshots do not store rule text. A different approval cannot be
+  // certified equivalent from matching IDs alone, so this batch fails closed.
+  if (baseline.styleSnapshot!.hash !== task.styleSnapshot!.hash ||
+      baseline.styleSnapshot!.confirmedAt !== task.styleSnapshot!.confirmedAt) {
+    return '文风审批已变化，旧稿未保存规则全文，无法证明内容一致；请使用重新起草路径。';
+  }
+  const liveSections = task.outline.map(s => ({ sectionId: s.id, title: s.title,
+    suggestedWordCount: s.suggestedWordCount, assignedFactIds: s.assignedFactIds || [] }));
+  if (canonical(liveSections) !== canonical(task.outlineSnapshot!.sections) ||
+      canonical(task.outlineSnapshot!.sections) !== canonical(baseline.outlineSnapshot!.sections)) {
+    return '大纲结构、章节篇幅或事实分配发生实质变化，超出本批范围。';
+  }
+  const outlineContent = (sections: Task['outline']) => sections.map(({ confirmed: _confirmed, ...s }) => s);
+  if (canonical(outlineContent(task.outline)) !== canonical(outlineContent(baseline.outlineSections))) {
+    return '章节要求或大纲内容发生变化，超出本批定向修订范围。';
+  }
+  const facts = task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly);
+  const oldItems = baseline.factSnapshot!.items;
+  const items = task.factSnapshot!.items;
+  const ids = (list: string[]) => [...list].sort();
+  const equalIds = (a: string[], b: string[]) => new Set(a).size === a.length &&
+    new Set(b).size === b.length && canonical(ids(a)) === canonical(ids(b));
+  if (!equalIds(facts.map(f => f.id), items.map(i => i.factId)) ||
+      !equalIds(items.map(i => i.factId), task.factSnapshot!.factIds) ||
+      !equalIds(oldItems.map(i => i.factId), baseline.factSnapshot!.factIds) ||
+      !equalIds(items.map(i => i.factId), oldItems.map(i => i.factId))) {
+    return '核准事实集合新增、删除或快照收录不完整，不能仅修订一段便推进整稿依据。';
+  }
+  for (const fact of facts) {
+    const latest = items.find(i => i.factId === fact.id)!;
+    const old = oldItems.find(i => i.factId === fact.id)!;
+    const checked = confirmFact(task, fact.id, '主笔甲');
+    if (!checked.success) return `事实【${fact.metric}】来源不合格：${checked.error}`;
+    const snippet = task.snippets.find(s => s.id === fact.primaryEvidenceId);
+    const doc = task.documents.find(d => d.id === snippet?.sourceDocId);
+    if (!snippet?.text.trim() || !doc || doc.usage !== 'current_fact' || doc.excluded ||
+        doc.parseStatus !== 'parsed' || !snippet.location.trim()) {
+      return `事实【${fact.metric}】缺少可用本期原文出处。`;
+    }
+    const compact = (text: string) => text.replace(/\s+/g, '');
+    if (!compact(doc.content).includes(compact(snippet.text))) {
+      return `事实【${fact.metric}】原文片段与当前材料内容不对应，请重新核实出处。`;
+    }
+    if (canonical(semanticFact(latest)) !== canonical(semanticFact(buildFactItemSnapshot(task, fact)))) {
+      return `事实【${fact.metric}】核准快照与当前事实或出处原文不一致，请重新确认事实清单。`;
+    }
+    if (!old.provenance?.text || old.provenance.evidenceId !== old.primaryEvidenceId) {
+      return `事实【${fact.metric}】缺少完整历史冻结出处，不能证明旧稿采用依据。`;
+    }
+    if (fact.id !== targetFactId && canonical(semanticFact(old)) !== canonical(semanticFact(latest))) {
+      return `非目标事实【${fact.metric}】的指标、裁决或出处仍有变化，超出本批范围。`;
+    }
+    if (fact.id === targetFactId && old.metric !== latest.metric) {
+      return '目标指标名称已变化，无法证明是同一数值指标。';
+    }
+  }
+  for (const block of draft.blocks) {
+    for (const evidence of block.adoptedEvidences || []) {
+      const snippet = task.snippets.find(s => s.id === evidence.evidenceId);
+      const doc = task.documents.find(d => d.id === snippet?.sourceDocId);
+      if (!evidence.associatedFactId || !facts.some(f => f.id === evidence.associatedFactId) ||
+          !snippet || !doc || doc.excluded || doc.usage !== 'current_fact' ||
+          evidence.sourceDocId !== snippet.sourceDocId || evidence.snippetText !== snippet.text ||
+          evidence.snippetLocation !== snippet.location || evidence.period !== snippet.period) {
+        return '稿件包含无法可靠关联或已经变化的材料补写存证，本批无法更新整稿依据。';
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -81,6 +199,12 @@ export function checkFactRevisionEligibility(
       reason: '当前选中的版本属于只读历史快照或已定稿版本，不可生成定向修订；请在当前可编辑工作稿中操作。',
     };
   }
+  if (currentDraft.id !== task.currentDraftId || !task.drafts.some(d => d.id === currentDraft.id)) {
+    return { eligible: false, reason: '所选稿不是任务当前工作稿，请返回当前工作稿操作。' };
+  }
+  if (canonical(currentDraft) !== canonical(task.drafts.find(d => d.id === currentDraft.id))) {
+    return { eligible: false, reason: '所选稿参数已陈旧，与任务中保存的当前稿不一致，请重新打开当前稿。' };
+  }
 
   // 3. Target block exists in current draft
   const targetBlock = currentDraft.blocks.find((b) => b.id === targetBlockId);
@@ -104,6 +228,14 @@ export function checkFactRevisionEligibility(
   }
 
   // 5. Task upstream formal confirmations
+  if (!task.factSnapshot || !Array.isArray(task.factSnapshot.items)) {
+    return {
+      eligible: false,
+      reason: '任务事实清单尚未正式核准确认，请先前往事实清单完成核准。',
+      unconfirmedUpstream: 'fact',
+    };
+  }
+
   if (!task.styleConfirmed || !task.styleSnapshot) {
     return {
       eligible: false,
@@ -120,15 +252,7 @@ export function checkFactRevisionEligibility(
     };
   }
 
-  if (!task.factSnapshot || !Array.isArray(task.factSnapshot.items)) {
-    return {
-      eligible: false,
-      reason: '任务事实清单尚未正式核准确认，请先前往事实清单完成核准。',
-      unconfirmedUpstream: 'fact',
-    };
-  }
-
-  // 6. Substantive style guidelines verification (compare active rules content)
+  // 6. Compare rule IDs here; completeBasisError also requires the frozen style approval.
   const curStyleRules = [...(task.styleSnapshot.activeRuleIds || [])].sort().join(',');
   const draftStyleRules = [...(draftStyleSnap.activeRuleIds || [])].sort().join(',');
   if (curStyleRules !== draftStyleRules) {
@@ -160,10 +284,11 @@ export function checkFactRevisionEligibility(
   const analysis: FactImpactAnalysisResult = analyzeFactImpact(task, currentDraft);
 
   // Negative condition: New unreferenced facts or missing baselines
-  if (analysis.unreferencedNewFacts && analysis.unreferencedNewFacts.length > 0) {
+  const unreferencedApproved = analysis.unreferencedNewFacts.filter(f => f.status === 'confirmed');
+  if (unreferencedApproved.length > 0) {
     return {
       eligible: false,
-      reason: `任务事实清单中存在 ${analysis.unreferencedNewFacts.length} 项未在草稿中引用的新核准事实，存在尚未处理的依据差异，无法执行单段微调。`,
+      reason: `任务事实清单中存在 ${unreferencedApproved.length} 项未被所选稿件引用的核准事实，存在尚未处理的依据差异，无法执行单段微调。`,
     };
   }
 
@@ -181,7 +306,7 @@ export function checkFactRevisionEligibility(
   if (analysis.changedFactsCount === 0) {
     return {
       eligible: false,
-      reason: '当前稿件依据与任务最新事实完全一致，无受影响的事实变动。',
+      reason: '未发现已关联事实的数值变化，本批没有可生成的定向修订。',
     };
   }
 
@@ -324,15 +449,19 @@ export function checkFactRevisionEligibility(
 
   // 11. Material supplementation reliability check on target block
   if (targetBlock.adoptedEvidences && targetBlock.adoptedEvidences.length > 0) {
-    const unlinked = targetBlock.adoptedEvidences.some(
-      (e) => !task.snippets.some((s) => s.id === e.evidenceId)
-    );
-    if (unlinked) {
-      return {
-        eligible: false,
-        reason: '目标段落包含无法明确关联的材料补写存证，超出本批可靠处理范围。',
-      };
-    }
+    return { eligible: false, reason: '目标段落包含材料补写存证，本批无法证明仅改数值即可同步补写依据。' };
+  }
+
+  const basisError = completeBasisError(task, currentDraft, changedFactItem.factId);
+  if (basisError) return { eligible: false, reason: basisError };
+  const adoptedValue = (latestFact.selectedConflictValue || latestFact.value).trim();
+  const evidenceOffset = metricValueOffset(snippet.text, latestFact.metric, adoptedValue, latestFact.unit);
+  if (evidenceOffset === undefined) {
+    return { eligible: false, reason: '最新原文无法明确支持该指标的核准数值与完整单位，请人工核实。' };
+  }
+  const evidencePeriod = extractClausePeriod(snippet.text, `${adoptedValue}${latestFact.unit}`, task.startDate, evidenceOffset);
+  if (evidencePeriod.isAmbiguous || (evidencePeriod.period && !arePeriodsStrictlyIdentical(evidencePeriod.period, latestFact.period))) {
+    return { eligible: false, reason: '最新原文中的指标统计期间不符或归属不明，请人工核实。' };
   }
 
   return {
@@ -385,93 +514,18 @@ export function generateFactRevisionCandidate(
 
   const text = currentBlock.content;
 
-  // Find all occurrences of snapValue in the target paragraph
-  interface NumberMatch {
-    idx: number;
-    hasUnit: boolean;
-    sentence: string;
-    hasMetricAffinity: boolean;
+  const offset = metricValueOffset(text, metric, snapValue, unit);
+  if (offset === undefined) {
+    return { success: false,
+      reason: '正文未找到唯一、完整且明确属于目标指标的冻结数值和单位，可能存在多处相同数值、语义归属不明或正文已偏离当时冻结值，请人工编辑。' };
   }
-
-  const matches: NumberMatch[] = [];
-  let searchIdx = 0;
-
-  while (searchIdx < text.length) {
-    const found = text.indexOf(snapValue, searchIdx);
-    if (found === -1) break;
-
-    // Check digit boundaries (e.g. 128 shouldn't match inside 2128 or 1280)
-    const isPrevDigit = found > 0 && /\d/.test(text[found - 1]);
-    const isNextDigit =
-      found + snapValue.length < text.length && /\d/.test(text[found + snapValue.length]);
-
-    if (!isPrevDigit && !isNextDigit) {
-      // Check if immediately followed by unit (with optional whitespace)
-      const after = text.slice(found + snapValue.length);
-      const unitRegex = new RegExp(`^\\s*${escapeRegex(unit)}`);
-      const hasUnit = unit ? unitRegex.test(after) : true;
-
-      // Extract clause/sentence boundaries
-      let sStart = found;
-      while (sStart > 0 && !/[。！？；\n]/.test(text[sStart - 1])) {
-        sStart--;
-      }
-      let sEnd = found + snapValue.length;
-      while (sEnd < text.length && !/[。！？；\n]/.test(text[sEnd])) {
-        sEnd++;
-      }
-      const sentence = text.slice(sStart, sEnd);
-
-      // Check metric affinity: does the sentence contain the metric name or key tokens?
-      const metricTokens = [
-        metric,
-        ...metric.split(/[\s_\-、,，]+/).filter((t) => t.length >= 2),
-      ];
-      const hasMetricAffinity = metricTokens.some((tok) => sentence.includes(tok));
-
-      matches.push({
-        idx: found,
-        hasUnit,
-        sentence,
-        hasMetricAffinity,
-      });
-    }
-
-    searchIdx = found + snapValue.length;
-  }
-
-  // 1. No occurrence of snapValue found
-  if (matches.length === 0) {
-    return {
-      success: false,
-      reason: `正文未找到冻结数值（${snapValue}）或正文已被编辑偏离当时冻结值，无法生成定向修订。`,
-    };
-  }
-
-  // 2. Filter matches that have the matching unit
-  const matchesWithUnit = unit ? matches.filter((m) => m.hasUnit) : matches;
-  if (matchesWithUnit.length === 0) {
-    return {
-      success: false,
-      reason: `段落中包含数值“${snapValue}”，但未与指标单位“${unit}”匹配，无法确定指标归属，拒绝生成。`,
-    };
-  }
-
-  // 3. Disambiguate if multiple matches
-  let chosenMatch: NumberMatch | undefined;
-  if (matchesWithUnit.length === 1) {
-    chosenMatch = matchesWithUnit[0];
-  } else {
-    // Multiple matches with the same unit: check metric semantic affinity
-    const affinityMatches = matchesWithUnit.filter((m) => m.hasMetricAffinity);
-    if (affinityMatches.length === 1) {
-      chosenMatch = affinityMatches[0];
-    } else {
-      return {
-        success: false,
-        reason: `段落中存在多处相同数值与单位表达（${snapValue}${unit}），语义归属不明，无法确定替换对象，请人工编辑。`,
-      };
-    }
+  const chosenMatch = { idx: offset };
+  // A cumulative clause's "截至9月末" is a cutoff, not a competing one-month
+  // statistical period. Keep offsets while allowing the explicit full range to govern.
+  const periodText = text.replace(/截至\s*\d{1,2}月(?:末|底)/g, cutoff => ' '.repeat(cutoff.length));
+  const paragraphPeriod = extractClausePeriod(periodText, `${snapValue}${unit}`, task.startDate, offset);
+  if (paragraphPeriod.isAmbiguous || (paragraphPeriod.period && !arePeriodsStrictlyIdentical(paragraphPeriod.period, snapItem.period))) {
+    return { success: false, reason: '正文指标明示的统计期间与冻结依据不符或归属不明，本批拒绝生成。' };
   }
 
   // 4. Perform minimal deterministic replacement
@@ -499,9 +553,6 @@ export function generateFactRevisionCandidate(
   const runId = options?.runId || `RUN-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
   const candidateId = `FACT-REV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
-  const fromSnip = snapItem.primaryEvidenceId
-    ? task.snippets.find((s) => s.id === snapItem.primaryEvidenceId)
-    : undefined;
   const toSnip = latestFact.primaryEvidenceId
     ? task.snippets.find((s) => s.id === latestFact.primaryEvidenceId)
     : undefined;
@@ -533,6 +584,7 @@ export function generateFactRevisionCandidate(
 
     revisedBlockContent: revisedContent,
     baseDraftContentHash: computeDraftBlocksHash(currentDraft!.blocks),
+    contextFingerprint: getFactRevisionContext(task, currentDraft!),
 
     metric,
     unit,
@@ -540,8 +592,8 @@ export function generateFactRevisionCandidate(
     toValue: latestValue,
 
     fromEvidenceId: snapItem.primaryEvidenceId,
-    fromDocName: snapItem.provenance?.sourceDocName || fromSnip?.docName || '出处材料',
-    fromLocation: snapItem.provenance?.location || fromSnip?.location || '段落索引',
+    fromDocName: snapItem.provenance!.sourceDocName,
+    fromLocation: snapItem.provenance!.location || '未保存定位',
 
     toEvidenceId: latestFact.primaryEvidenceId,
     toDocName: toSnip?.docName || '最新出处材料',
@@ -586,7 +638,7 @@ export function validateFactRevisionAcceptance(
     return { valid: false, reason: '安全隔离拦截：修订候选生成自其他任务，禁止跨任务采纳！' };
   }
 
-  if (activeRunId && candidate.runId !== activeRunId) {
+  if (!activeRunId || candidate.runId !== activeRunId) {
     return { valid: false, reason: '候选已失效：该候选生成自已取消或过期的运行！' };
   }
 
@@ -699,6 +751,16 @@ export function validateFactRevisionAcceptance(
     };
   }
 
+  if (!candidate.contextFingerprint || candidate.contextFingerprint !== getFactRevisionContext(task, currentDraft)) {
+    return { valid: false, reason: '正文、修订、引用、原文或审批上下文已变化，旧候选已失效，请重新生成。' };
+  }
+  const regenerated = generateFactRevisionCandidate(task, currentDraft, candidate.targetBlockId, activeRole, { runId: candidate.runId });
+  if (!regenerated.candidate) return { valid: false, reason: regenerated.reason || '候选无法重新验证' };
+  const payload = ({ id: _id, createdAt: _time, ...c }: FactRevisionCandidate) => c;
+  if (canonical(payload(candidate)) !== canonical(payload(regenerated.candidate))) {
+    return { valid: false, reason: '候选正文、目标事实或依据对照与当前可验证修订不一致，请重新生成。' };
+  }
+
   return { valid: true };
 }
 
@@ -728,7 +790,7 @@ export function acceptFactRevisionCandidate(
 
   // 1. Archive previous draft as immutable historical snapshot
   const archivedDraft: DraftVersion = {
-    ...draftToArchive,
+    ...JSON.parse(JSON.stringify(draftToArchive)),
     isWorkingDraft: false,
     isHistoricalSnapshot: true,
     summary: draftToArchive.summary
@@ -745,35 +807,12 @@ export function acceptFactRevisionCandidate(
       const nextSeq =
         (typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : 0) + 1;
 
-      // Update adopted evidence if it points to the changed fact
-      let updatedAdoptedEvidences = b.adoptedEvidences ? [...b.adoptedEvidences] : undefined;
-      if (candidate.toEvidenceId && updatedAdoptedEvidences) {
-        const newSnip = task.snippets.find((s) => s.id === candidate.toEvidenceId);
-        const newDoc = newSnip ? task.documents.find((d) => d.id === newSnip.sourceDocId) : undefined;
-        const latestFact = task.facts.find((f) => f.id === candidate.targetFactId);
-
-        updatedAdoptedEvidences = updatedAdoptedEvidences.map((ae) => {
-          if (ae.associatedFactId === candidate.targetFactId) {
-            return {
-              ...ae,
-              evidenceId: candidate.toEvidenceId!,
-              sourceDocId: newSnip?.sourceDocId || ae.sourceDocId,
-              sourceDocName: candidate.toDocName || newDoc?.name || ae.sourceDocName,
-              snippetLocation: candidate.toLocation || newSnip?.location || ae.snippetLocation,
-              snippetText: newSnip?.text || ae.snippetText,
-              metricScope: latestFact?.metricScope || ae.metricScope,
-            };
-          }
-          return ae;
-        });
-      }
-
       return {
         ...b,
         content: candidate.revisedBlockContent,
         revisionSeq: nextSeq,
         updatedAt: new Date().toISOString(),
-        adoptedEvidences: updatedAdoptedEvidences,
+        adoptedEvidences: b.adoptedEvidences ? JSON.parse(JSON.stringify(b.adoptedEvidences)) : undefined,
       };
     }
     // Deep copy other blocks without modification
@@ -819,6 +858,16 @@ export function acceptFactRevisionCandidate(
     isFinalized: false,
     status: '起草中',
     updatedAt: new Date().toISOString(),
+    modificationLogs: [{
+      id: `MOD-LOG-${candidate.id}`, taskId: task.id, draftId: newWorkingDraft.id,
+      blockId: candidate.targetBlockId, blockOrder: candidate.targetBlockOrder,
+      timestamp: new Date().toISOString(), source: 'fact_change_revision' as const,
+      sourceDescription: `事实【${candidate.metric}】定向修订：${candidate.fromValue}${candidate.unit} → ${candidate.toValue}${candidate.unit}；出处 ${candidate.fromEvidenceId} → ${candidate.toEvidenceId}；来源版本 ${draftToArchive.id}`,
+      beforeContent: candidate.originalBlockContent, afterContent: candidate.revisedBlockContent,
+      appliedBlockUpdatedAt: nextBlocks.find(b => b.id === candidate.targetBlockId)!.updatedAt,
+      appliedRevisionSeq: nextBlocks.find(b => b.id === candidate.targetBlockId)!.revisionSeq,
+      status: 'applied' as const, undoUnavailableReason: '本次同时更新整稿依据，请通过版本历史恢复完整正文与依据，不能单独撤销正文。',
+    }, ...(task.modificationLogs || [])].slice(0, 20),
   };
 
   return {

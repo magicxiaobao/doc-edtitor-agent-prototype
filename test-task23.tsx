@@ -2,6 +2,7 @@ import { dom } from './test-jsdom-env';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPresetTask } from './src/services/mockData';
+import { buildFactItemSnapshot } from './src/services/factLifecycleService';
 import {
   Task,
   DraftVersion,
@@ -91,18 +92,9 @@ async function runTask23Tests() {
     fact01.primaryEvidenceId = 'EVD-01';
     fact01.conflictResolutionReason = '采信科室甲申报口径120项';
 
-    // Upstream task factSnapshot updated to 120
-    task.factSnapshot!.items[0].selectedConflictValue = '120';
-    task.factSnapshot!.items[0].value = '120';
-    task.factSnapshot!.items[0].primaryEvidenceId = 'EVD-01';
-    task.factSnapshot!.items[0].conflictResolutionReason = '采信科室甲申报口径120项';
-    task.factSnapshot!.items[0].provenance = {
-      evidenceId: 'EVD-01',
-      sourceDocId: 'DOC-01',
-      sourceDocName: '科室甲前三季度工作情况',
-      location: '第3段',
-      text: '2026年1至9月，累计完成重点任务120项。统计范围与科室甲材料相同。',
-    };
+  // Use the same provenance builder as the real fact-list confirmation; no fabricated DOC-01.
+  task.factSnapshot!.items = task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly)
+    .map(f => buildFactItemSnapshot(task, f));
 
     return { task, draft };
   }
@@ -134,7 +126,7 @@ async function runTask23Tests() {
     assert(!genRes.candidate!.revisedBlockContent.includes('128项'), '用例A: 修订候选已替换掉128项');
 
     // 采纳修订
-    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
     assert(acceptRes.success && !!acceptRes.newWorkingDraft, '用例A: 采纳修订成功');
 
     const newDraft = acceptRes.newWorkingDraft!;
@@ -201,7 +193,7 @@ async function runTask23Tests() {
     const { task, draft } = createStandardFixture();
 
     const genRes = generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲');
-    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
     assert(acceptRes.success, '用例C: 采纳成功');
 
     const updatedTask = acceptRes.updatedTask!;
@@ -377,7 +369,7 @@ async function runTask23Tests() {
       draft.blocks[0].content = '主笔甲人工修改的正文：截至9月末完成任务128项。';
       draft.blocks[0].revisionSeq = 1;
 
-      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
       assert(!acceptRes.success, '用例F.1: 目标段落被修改后采纳被拦截');
       assert(acceptRes.reason?.includes('已被人工编辑修改') || false, '用例F.1: 明确提示正文已被修改');
       assert(draft.blocks[0].content.includes('主笔甲人工修改的正文'), '用例F.1: 主笔人工修改的正文完好保留未被覆盖');
@@ -392,7 +384,7 @@ async function runTask23Tests() {
       // 人工编辑第2段
       draft.blocks[1].content = '人工编辑第2段正文内容';
 
-      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
       assert(!acceptRes.success, '用例F.2: 其他段落被修改后采纳被拦截');
       assert(acceptRes.reason?.includes('整稿基准已发生变更') || false, '用例F.2: 明确提示整稿基准变更');
     }
@@ -407,7 +399,7 @@ async function runTask23Tests() {
       task.facts[0].selectedConflictValue = '130';
       task.facts[0].value = '130';
 
-      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+      const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
       assert(!acceptRes.success, '用例F.3: 事实再次变动后采纳被拦截');
     }
   }
@@ -424,7 +416,7 @@ async function runTask23Tests() {
 
     // G.1: 跨任务串用拦截
     const otherTask = { ...task, id: 'TASK-ANOTHER-999' };
-    const resG1 = validateFactRevisionAcceptance(otherTask, draft, cand, '主笔甲');
+    const resG1 = validateFactRevisionAcceptance(otherTask, draft, cand, '主笔甲', cand.runId);
     assert(!resG1.valid, '用例G.1: 跨任务采纳被安全拦截');
     assert(resG1.reason?.includes('跨任务') || false, '用例G.1: 提示跨任务拦截');
 
@@ -433,16 +425,16 @@ async function runTask23Tests() {
     assert(!resG2.valid, '用例G.2: 迟到或已过期的运行ID被拦截');
 
     // G.3: 角色切换：非主笔身份（如审阅乙、供稿丙）拦截
-    const resG3 = validateFactRevisionAcceptance(task, draft, cand, '审阅乙');
+    const resG3 = validateFactRevisionAcceptance(task, draft, cand, '审阅乙', cand.runId);
     assert(!resG3.valid, '用例G.3: 审阅人采纳被拦截');
     assert(resG3.reason?.includes('主笔甲') || false, '用例G.3: 提示权限受限');
 
     // G.4: 重复采纳拦截
-    const firstAccept = acceptFactRevisionCandidate(task, draft, cand, '主笔甲');
+    const firstAccept = acceptFactRevisionCandidate(task, draft, cand, '主笔甲', cand.runId);
     assert(firstAccept.success, '用例G.4: 第一次采纳成功');
 
     // 用同一个候选尝试再次采纳
-    const secondAccept = acceptFactRevisionCandidate(firstAccept.updatedTask!, draft, cand, '主笔甲');
+    const secondAccept = acceptFactRevisionCandidate(firstAccept.updatedTask!, draft, cand, '主笔甲', cand.runId);
     assert(!secondAccept.success, '用例G.4: 第二次重复采纳被拦截');
     assert(secondAccept.reason?.includes('已不是任务当前可编辑工作稿') || false, '用例G.4: 提示无法重复采纳');
   }
@@ -469,7 +461,7 @@ async function runTask23Tests() {
 
     // 2. 生成修订候选并采纳
     const genRes = generateFactRevisionCandidate(taskWithReview, draftWithReview, 'BLK-01', '主笔甲');
-    const acceptRes = acceptFactRevisionCandidate(taskWithReview, draftWithReview, genRes.candidate!, '主笔甲');
+    const acceptRes = acceptFactRevisionCandidate(taskWithReview, draftWithReview, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
     assert(acceptRes.success, '用例H: 采纳成功');
 
     const archivedDraft = acceptRes.archivedDraft!;
@@ -496,7 +488,7 @@ async function runTask23Tests() {
     const { task, draft } = createStandardFixture();
 
     const genRes = generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲');
-    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲');
+    const acceptRes = acceptFactRevisionCandidate(task, draft, genRes.candidate!, '主笔甲', genRes.candidate!.runId);
     assert(acceptRes.success, '用例I: 采纳成功');
 
     const updatedTask = acceptRes.updatedTask!;
@@ -596,7 +588,7 @@ async function runTask23Tests() {
         onViewDraftEvidence={() => {}}
         onAcceptFactRevision={(cand) => {
           acceptedCandidate = cand;
-          const res = acceptFactRevisionCandidate(currentTask, draft, cand, '主笔甲');
+          const res = acceptFactRevisionCandidate(currentTask, draft, cand, '主笔甲', cand.runId);
           currentTask = res.updatedTask!;
           return { success: true };
         }}

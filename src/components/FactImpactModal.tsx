@@ -15,7 +15,7 @@ import { DraftVersion, Task, UserRole, FactRevisionCandidate } from '../types';
 import {
   checkFactRevisionEligibility,
   generateFactRevisionCandidate,
-  acceptFactRevisionCandidate,
+  validateFactRevisionAcceptance,
 } from '../services/factRevisionCandidateService';
 import { computeTextDiff } from '../services/diffService';
 import {
@@ -51,7 +51,7 @@ interface FactImpactModalProps {
   onJumpToOutlineStage?: () => void;
   onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => string | void;
   onRevokeReviewRecord?: (blockId: string, reason: string, context: string, recordId: string) => string | void;
-  onAcceptFactRevision?: (candidate: FactRevisionCandidate) => { success: boolean; reason?: string } | void;
+  onAcceptFactRevision?: (candidate: FactRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   initialBlockId?: string;
 }
 
@@ -86,6 +86,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const [activeCandidates, setActiveCandidates] = useState<Record<string, FactRevisionCandidate>>({});
   const [revisionErrors, setRevisionErrors] = useState<Record<string, { reason: string; unconfirmedUpstream?: 'fact' | 'style' | 'outline' }>>({});
   const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
+  const activeRevisionRuns = useRef<Record<string, string>>({});
 
   // Reset inputs when task or draft changes
   useEffect(() => {
@@ -98,7 +99,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     setActiveCandidates({});
     setRevisionErrors({});
     setAcceptErrors({});
-  }, [task.id, currentDraft?.id, activeRole]);
+    activeRevisionRuns.current = {};
+  }, [isOpen, task.id, currentDraft?.id, activeRole]);
 
   // Capture previous focused element and restore on close
   useEffect(() => {
@@ -203,6 +205,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     });
     const res = generateFactRevisionCandidate(task, currentDraft, blockId, activeRole);
     if (!res.success || !res.candidate) {
+      delete activeRevisionRuns.current[blockId];
       const eligibility = checkFactRevisionEligibility(task, currentDraft, blockId, activeRole);
       setRevisionErrors((prev) => ({
         ...prev,
@@ -217,6 +220,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
         return next;
       });
     } else {
+      activeRevisionRuns.current[blockId] = res.candidate.runId;
       setRevisionErrors((prev) => {
         const next = { ...prev };
         delete next[blockId];
@@ -230,6 +234,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   };
 
   const handleCancelRevision = (blockId: string) => {
+    delete activeRevisionRuns.current[blockId];
     setActiveCandidates((prev) => {
       const next = { ...prev };
       delete next[blockId];
@@ -255,25 +260,23 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
       return next;
     });
 
-    if (onAcceptFactRevision) {
-      const res = onAcceptFactRevision(candidate);
-      if (res && !res.success) {
-        setAcceptErrors((prev) => ({
-          ...prev,
-          [blockId]: res.reason || '采纳修订失败',
-        }));
-        return;
-      }
-    } else {
-      const res = acceptFactRevisionCandidate(task, currentDraft, candidate, activeRole);
-      if (!res.success) {
-        setAcceptErrors((prev) => ({
-          ...prev,
-          [blockId]: res.reason || '采纳修订失败',
-        }));
-        return;
-      }
+    const runId = activeRevisionRuns.current[blockId];
+    const validation = validateFactRevisionAcceptance(task, currentDraft, candidate, activeRole, runId);
+    if (!isOpen || !validation.valid) {
+      setAcceptErrors(prev => ({ ...prev, [blockId]: validation.reason || '面板已关闭，候选已取消' }));
+      return;
     }
+    try {
+      const res = onAcceptFactRevision?.(candidate, runId);
+      if (!res?.success) {
+        setAcceptErrors(prev => ({ ...prev, [blockId]: res?.reason || '未完成业务写入，请重试或重新生成候选' }));
+        return;
+      }
+    } catch (error) {
+      setAcceptErrors(prev => ({ ...prev, [blockId]: error instanceof Error ? error.message : '采纳异常，请重试' }));
+      return;
+    }
+    delete activeRevisionRuns.current[blockId];
 
     // Successfully accepted: clear candidate preview
     setActiveCandidates((prev) => {
@@ -528,6 +531,9 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   const liveContext=currentDraft&&block?getFactReviewContext(task,currentDraft,block):'';
                   const isStale=Boolean(currentNoteInput&&formContexts[ev.blockId]!==liveContext);
                   const isSubmitDisabled = !currentNoteInput.trim()||isStale;
+                  const candidate = activeCandidates[ev.blockId];
+                  const candidateValidation = candidate ? validateFactRevisionAcceptance(task, currentDraft,
+                    candidate, activeRole, activeRevisionRuns.current[ev.blockId]) : undefined;
 
                   return (
                     <div
@@ -638,7 +644,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 <ArrowRight className="w-3 h-3" />
                               </button>
                             )}
-                            {revisionErrors[ev.blockId].unconfirmedUpstream === 'outline' && onJumpToOutlineStage && (
+                            {['outline', 'style'].includes(revisionErrors[ev.blockId].unconfirmedUpstream || '') && onJumpToOutlineStage && (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -648,7 +654,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 data-testid={`btn-goto-outline-stage-${ev.blockId}`}
                                 className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
                               >
-                                <span>前往大纲核准</span>
+                                <span>{revisionErrors[ev.blockId].unconfirmedUpstream === 'style' ? '前往文风核准' : '前往大纲核准'}</span>
                                 <ArrowRight className="w-3 h-3" />
                               </button>
                             )}
@@ -773,6 +779,11 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                           </div>
 
                           {/* Acceptance Error Alert */}
+                          {candidateValidation && !candidateValidation.valid && (
+                            <p role="alert" data-testid={`alert-revision-stale-${ev.blockId}`} className="text-rose-800">
+                              {candidateValidation.reason} 请使用上方入口重新生成候选。
+                            </p>
+                          )}
                           {acceptErrors[ev.blockId] && (
                             <div
                               data-testid={`alert-revision-accept-error-${ev.blockId}`}
@@ -802,6 +813,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 type="button"
                                 onClick={() => handleAcceptRevision(activeCandidates[ev.blockId])}
                                 data-testid={`btn-retry-accept-fact-revision-${ev.blockId}`}
+                                disabled={!candidateValidation?.valid || !onAcceptFactRevision}
                                 className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
@@ -812,6 +824,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 type="button"
                                 onClick={() => handleAcceptRevision(activeCandidates[ev.blockId])}
                                 data-testid={`btn-accept-fact-revision-${ev.blockId}`}
+                                disabled={!candidateValidation?.valid || !onAcceptFactRevision}
                                 className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
                               >
                                 <Check className="w-3.5 h-3.5" />

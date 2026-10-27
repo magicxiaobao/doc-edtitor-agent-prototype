@@ -259,6 +259,8 @@ export interface FactRevisionCandidate {
   // 整稿基准指纹（核验生成后整稿正文是否被人工修改）
   baseDraftContentHash: string;
 
+  contextFingerprint: string; // 正文/修订/引用、实际原文及审批内容的完整生成上下文
+
   // 事实指标与变动数值
   metric: string;
   unit: string;

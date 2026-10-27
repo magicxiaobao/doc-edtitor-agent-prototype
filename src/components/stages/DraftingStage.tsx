@@ -861,9 +861,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     }
   };
 
-  const handleAcceptFactRevision = (candidate: FactRevisionCandidate) => {
+  const handleAcceptFactRevision = (candidate: FactRevisionCandidate, activeRunId: string) => {
     try {
-      const res = acceptFactRevisionCandidate(task, currentDraft, candidate, activeRole);
+      const res = acceptFactRevisionCandidate(task, currentDraft, candidate, activeRole, activeRunId);
       if (!res.success || !res.updatedTask) {
         return { success: false, reason: res.reason || '采纳修订失败' };
       }

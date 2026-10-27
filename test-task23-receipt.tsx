@@ -3,6 +3,7 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import assert from 'node:assert/strict';
 import { createPresetTask } from './src/services/mockData';
+import { buildFactItemSnapshot } from './src/services/factLifecycleService';
 import {
   checkFactRevisionEligibility,
   generateFactRevisionCandidate,
@@ -41,18 +42,9 @@ function fixture() {
   f.primaryEvidenceId = 'EVD-01';
   f.conflictResolutionReason = '采信科室甲申报口径120项';
 
-  // Upstream snapshot updated to 120
-  task.factSnapshot!.items[0].selectedConflictValue = '120';
-  task.factSnapshot!.items[0].value = '120';
-  task.factSnapshot!.items[0].primaryEvidenceId = 'EVD-01';
-  task.factSnapshot!.items[0].conflictResolutionReason = '采信科室甲申报口径120项';
-  task.factSnapshot!.items[0].provenance = {
-    evidenceId: 'EVD-01',
-    sourceDocId: 'DOC-01',
-    sourceDocName: '科室甲前三季度工作情况',
-    location: '第3段',
-    text: '2026年1至9月，累计完成重点任务120项。统计范围与科室甲材料相同。',
-  };
+  // Use the same provenance builder as the real fact-list confirmation; no fabricated DOC-01.
+  task.factSnapshot!.items = task.facts.filter(f => f.status === 'confirmed' && !f.isHistoricOnly)
+    .map(f => buildFactItemSnapshot(task, f));
 
   return { task, draft };
 }
@@ -66,7 +58,7 @@ await check('真实128→120：只有目标段落改变，其他段落正文及�
   const candRes = generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲');
   assert.equal(candRes.success, true);
 
-  const accRes = acceptFactRevisionCandidate(task, draft, candRes.candidate!, '主笔甲');
+  const accRes = acceptFactRevisionCandidate(task, draft, candRes.candidate!, '主笔甲', candRes.candidate!.runId);
   assert.equal(accRes.success, true);
 
   const newDraft = accRes.newWorkingDraft!;
@@ -94,7 +86,7 @@ await check('候选生成、取消、失败和重试均不提前修改正文、�
 await check('采纳后旧稿冻结128与科室乙，新工作稿正文和依据均为120且指向科室甲', () => {
   const { task, draft } = fixture();
   const res = generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲');
-  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲');
+  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲', res.candidate!.runId);
   assert.equal(acc.success, true);
 
   const archived = acc.archivedDraft!;
@@ -162,7 +154,7 @@ await check('生成后人工编辑目标或其他段落，采纳被拒绝且人�
   draft.blocks[0].content = '人工编辑后的段落：重点任务128项。';
   draft.blocks[0].revisionSeq = 1;
 
-  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲');
+  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲', res.candidate!.runId);
   assert.equal(acc.success, false);
   assert(draft.blocks[0].content.includes('人工编辑后的段落'));
 });
@@ -174,17 +166,17 @@ await check('跨任务、过期运行、非主笔身份及重复采纳均无法�
   const cand = res.candidate!;
 
   // 跨任务
-  assert.equal(validateFactRevisionAcceptance({ ...task, id: 'T-OTHER' }, draft, cand, '主笔甲').valid, false);
+  assert.equal(validateFactRevisionAcceptance({ ...task, id: 'T-OTHER' }, draft, cand, '主笔甲', cand.runId).valid, false);
 
   // 非主笔
-  assert.equal(validateFactRevisionAcceptance(task, draft, cand, '审阅乙').valid, false);
+  assert.equal(validateFactRevisionAcceptance(task, draft, cand, '审阅乙', cand.runId).valid, false);
 
   // 成功采纳一次
-  const acc1 = acceptFactRevisionCandidate(task, draft, cand, '主笔甲');
+  const acc1 = acceptFactRevisionCandidate(task, draft, cand, '主笔甲', cand.runId);
   assert.equal(acc1.success, true);
 
   // 重复采纳同一候选被拒
-  const acc2 = acceptFactRevisionCandidate(acc1.updatedTask!, draft, cand, '主笔甲');
+  const acc2 = acceptFactRevisionCandidate(acc1.updatedTask!, draft, cand, '主笔甲', cand.runId);
   assert.equal(acc2.success, false);
 });
 
@@ -203,7 +195,7 @@ await check('历史归档稿冻结复核结论，新工作稿复核记录初始�
   const d = t.drafts.find((item) => item.id === draft.id)!;
 
   const res = generateFactRevisionCandidate(t, d, 'BLK-01', '主笔甲');
-  const acc = acceptFactRevisionCandidate(t, d, res.candidate!, '主笔甲');
+  const acc = acceptFactRevisionCandidate(t, d, res.candidate!, '主笔甲', res.candidate!.runId);
   assert.equal(acc.success, true);
 
   assert.equal(acc.archivedDraft!.factReviewRecords?.length, 1);
@@ -215,7 +207,7 @@ await check('历史归档稿冻结复核结论，新工作稿复核记录初始�
 await check('新工作稿定稿门禁正常执行，审阅意见未闭环严格阻断', () => {
   const { task, draft } = fixture();
   const res = generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲');
-  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲');
+  const acc = acceptFactRevisionCandidate(task, draft, res.candidate!, '主笔甲', res.candidate!.runId);
   assert.equal(acc.success, true);
 
   const fin = validateFinalizationConditions(acc.updatedTask!, acc.newWorkingDraft!.id, '主笔甲');
@@ -280,7 +272,7 @@ await check('真实组件挂载与交互完整闭环，点击生成对比、取�
         onLocateBlock={() => {}}
         onViewDraftEvidence={() => {}}
         onAcceptFactRevision={(cand) => {
-          const res = acceptFactRevisionCandidate(currentTask, draft, cand, '主笔甲');
+          const res = acceptFactRevisionCandidate(currentTask, draft, cand, '主笔甲', cand.runId);
           currentTask = res.updatedTask!;
           return { success: true };
         }}
@@ -316,5 +308,5 @@ if (failures.length > 0) {
   console.error(`Task23 receipt failed with ${failures.length} issues:`, failures);
   process.exit(1);
 } else {
-  console.log('Task23 receipt: all 11 independent regression groups passed');
+  console.log('Task23 delivery receipt: all 11 regression groups passed');
 }
