@@ -65,6 +65,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
   const [resolvingFact, setResolvingFact] = useState<Fact | null>(null);
   const [conflictChoice, setConflictChoice] = useState<string>('');
   const [conflictReason, setConflictReason] = useState<string>('');
+  const [conflictScope, setConflictScope] = useState<string>('');
 
   // Snippet to Fact Modal
   const [snippetForFact, setSnippetForFact] = useState<EvidenceSnippet | null>(null);
@@ -110,6 +111,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     setResolvingFact(null);
     setConflictChoice('');
     setConflictReason('');
+    setConflictScope('');
     setSnippetForFact(null);
     setShowAddFactModal(false);
     setShowAddMaterialModal(false);
@@ -139,6 +141,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
     // CRITICAL: Do NOT pre-select greater value, do NOT pre-fill canned reason
     setConflictChoice(fact.selectedConflictValue || (fact.status === 'excluded' ? 'exclude' : ''));
     setConflictReason(fact.conflictResolutionReason || '');
+    setConflictScope(fact.metricScope || '');
   };
 
   const handleResolveConflict = () => {
@@ -147,7 +150,8 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
       alert(perm.reason || '权限受限：仅主笔甲可裁决事实冲突');
       return;
     }
-    if (!resolvingFact || !conflictChoice) return;
+    if (!resolvingFact || !conflictChoice || !conflictReason.trim() ||
+        (conflictChoice !== 'exclude' && !conflictScope.trim())) return;
 
     const updatedFacts = task.facts.map((f) => {
       if (f.id === resolvingFact.id) {
@@ -166,7 +170,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
             status: 'confirmed' as const,
             value: conflictChoice,
             selectedConflictValue: conflictChoice,
-            metricScope: matchedCand ? matchedCand.description : f.metricScope,
+            metricScope: conflictScope.trim(),
             primaryEvidenceId: matchedCand ? matchedCand.evidenceId : f.primaryEvidenceId,
             conflictResolutionReason: conflictReason.trim() || `主笔采信${conflictChoice}${f.unit}口径`,
           };
@@ -1104,7 +1108,8 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                   return (
                     <div
                       key={cand.value}
-                      onClick={() => setConflictChoice(cand.value)}
+                      onClick={() => { setConflictChoice(cand.value); setConflictScope(cand.description); }}
+                      data-testid={`conflict-candidate-${cand.value}`}
                       className={`p-3.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between ${
                         isSelected
                           ? 'border-blue-700 bg-blue-50/70 shadow-xs ring-2 ring-blue-700'
@@ -1162,13 +1167,24 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                 </p>
               </div>
 
+              {conflictChoice !== 'exclude' && (
+                <div className="space-y-1">
+                  <label htmlFor="conflict-statistical-scope" className="font-semibold text-slate-700">本次采信统计口径</label>
+                  <input id="conflict-statistical-scope" value={conflictScope}
+                    onChange={e => setConflictScope(e.target.value)} required
+                    className="w-full p-2 border border-slate-300 rounded text-xs" />
+                  <p className="text-xs text-slate-500">默认使用所选候选说明。若仅调整采信值且统计范围相同，请人工核实并填写准确口径，在裁决理由中说明；本操作不会更新正文或稿件冻结依据。</p>
+                </div>
+              )}
+
               {/* Reason input */}
               <div className="space-y-1">
                 <div className="flex justify-between items-center">
-                  <label className="font-semibold text-slate-700">主笔裁决理由与口径依据记录：</label>
+                  <label htmlFor="conflict-decision-reason" className="font-semibold text-slate-700">主笔裁决理由与口径依据记录：</label>
                   <span className="text-[10px] text-slate-400">（必填：由主笔人工核验并记录决策依据）</span>
                 </div>
                 <textarea
+                  id="conflict-decision-reason"
                   rows={2}
                   value={conflictReason}
                   onChange={(e) => setConflictReason(e.target.value)}
@@ -1189,7 +1205,7 @@ export const MaterialsAndFactsStage: React.FC<MaterialsAndFactsStageProps> = ({
                 <button
                   type="button"
                   onClick={handleResolveConflict}
-                  disabled={!conflictChoice || !conflictReason.trim()}
+                  disabled={!conflictChoice || !conflictReason.trim() || (conflictChoice !== 'exclude' && !conflictScope.trim())}
                   className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded font-medium shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   确认采信并写入事实

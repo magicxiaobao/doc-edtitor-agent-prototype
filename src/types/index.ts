@@ -235,6 +235,59 @@ export interface RevisionSuggestion {
   };
 }
 
+export interface FactRevisionCandidate {
+  id: string;                          // 候选ID (e.g. FACT-REV-...)
+  runId: string;                       // 关联运行ID
+  taskId: string;                      // 关联任务ID
+  sourceDraftId: string;               // 来源工作稿ID
+  sourceDraftVersionNumber?: string;   // 来源版本号
+  targetBlockId: string;               // 目标段落稳定ID
+  targetBlockOrder: number;            // 目标段落序号
+  targetSectionTitle?: string;         // 目标章节标题
+  targetFactId: string;                // 目标事实ID
+  createdAt: string;                   // 生成时间 (ISO)
+
+  // 原正文与基准快照
+  originalBlockContent: string;
+  originalRevisionSeq: number;
+  originalReferencedFactIds: string[];
+  originalAdoptedEvidences?: AdoptedEvidenceRecord[];
+
+  // 修订候选正文
+  revisedBlockContent: string;
+
+  // 整稿基准指纹（核验生成后整稿正文是否被人工修改）
+  baseDraftContentHash: string;
+
+  contextFingerprint: string; // 正文/修订/引用、实际原文及审批内容的完整生成上下文
+
+  // 事实指标与变动数值
+  metric: string;
+  unit: string;
+  fromValue: string;
+  toValue: string;
+
+  // 出处材料变动
+  fromEvidenceId?: string;
+  fromDocName: string;
+  fromLocation?: string;
+  toEvidenceId?: string;
+  toDocName: string;
+  toLocation?: string;
+
+  // 审批与快照依据上下文
+  upstreamContext: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
+
+  explanation: string;
+}
+
 export interface AuditRecord {
   issueId: string;
   status: 'unresolved' | 'accepted' | 'ignored';
@@ -250,7 +303,8 @@ export type ModificationSource =
   | 'reviewer_replacement'
   | 'reviewer_replacement_fine_tuned'
   | 'material_supplementation'
-  | 'material_supplementation_fine_tuned';
+  | 'material_supplementation_fine_tuned'
+  | 'fact_change_revision';
 
 export interface ReviewCommentSnapshotBeforeChange {
   status: ReviewCommentStatus;

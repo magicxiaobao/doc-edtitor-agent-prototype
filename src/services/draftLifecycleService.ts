@@ -26,18 +26,18 @@ import {
   arePeriodsStrictlyIdentical
 } from './materialSupplementService';
 
-function freezeFactReviews(task:Task,draft:DraftVersion): Pick<DraftVersion,
+export function freezeFactReviews(task:Task,draft:DraftVersion): Pick<DraftVersion,
   'factReviewRecords'|'sourceFactReviewRecords'|'factReviewRecovery'|'frozenFactReviewOverview'> {
   return JSON.parse(JSON.stringify({factReviewRecords:draft.factReviewRecords,
     sourceFactReviewRecords:draft.sourceFactReviewRecords,
     factReviewRecovery:draft.factReviewRecovery,
     frozenFactReviewOverview:evaluateDraftFactReviews(task,draft)}));
 }
-function sourceFactReviews(draft:DraftVersion|undefined) {
+export function sourceFactReviews(draft:DraftVersion|undefined) {
   return JSON.parse(JSON.stringify([...(draft?.factReviewRecords||[]),...(draft?.sourceFactReviewRecords||[])])).filter(isValidFactReviewRecord);
 }
 
-function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
+export function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] {
   if (Array.isArray(draft.reviewBaselineIds)) return [...draft.reviewBaselineIds];
   // Compatibility for old drafts: only direct review rounds of this draft,
   // never all descendants of a mutable ancestor shared with another branch.
@@ -83,7 +83,7 @@ export function getDraftReviewComments(task: Task, draft: DraftVersion | undefin
     : getApplicableReviewComments(task, draft);
 }
 
-function freezeReviewComments(task: Task, draft: DraftVersion): ReviewComment[] | undefined {
+export function freezeReviewComments(task: Task, draft: DraftVersion): ReviewComment[] | undefined {
   // Re-saving a read-only version must preserve its original time boundary.
   const comments = draft.isHistoricalSnapshot || draft.isFinal
     ? draft.frozenReviewComments

@@ -16,8 +16,10 @@ import {
   ReviewCommentStatus,
   Fact,
   AdoptedEvidenceRecord,
-  ReviewNavigationIntent
+  ReviewNavigationIntent,
+  FactRevisionCandidate
 } from '../../types';
+import { acceptFactRevisionCandidate } from '../../services/factRevisionCandidateService';
 import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -856,6 +858,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       });
     } catch (err: any) {
       return err.message || '撤回复核记录失败';
+    }
+  };
+
+  const handleAcceptFactRevision = (candidate: FactRevisionCandidate, activeRunId: string) => {
+    try {
+      const res = acceptFactRevisionCandidate(task, currentDraft, candidate, activeRole, activeRunId);
+      if (!res.success || !res.updatedTask) {
+        return { success: false, reason: res.reason || '采纳修订失败' };
+      }
+      onUpdateTask(res.updatedTask);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, reason: err.message || '采纳修订异常' };
     }
   };
 
@@ -4059,8 +4074,10 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onLocateBlock={handleLocateBlock}
         onViewDraftEvidence={handleViewDraftEvidence}
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
+        onJumpToOutlineStage={onSelectStage ? () => onSelectStage('style_outline') : undefined}
         onSaveReviewRecord={handleSaveReviewRecord}
         onRevokeReviewRecord={handleRevokeReviewRecord}
+        onAcceptFactRevision={handleAcceptFactRevision}
         initialBlockId={impactFocusBlockId}
       />
     </div>
