@@ -120,6 +120,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+function hasUniqueBlockIds(draft: DraftVersion): boolean {
+  const ids = draft.blocks.map(block => block?.id);
+  return ids.every(id => typeof id === 'string' && id.trim().length > 0) && new Set(ids).size === ids.length;
+}
+
 // Capturing a new approval may refresh provenance time without changing its meaning.
 function semanticFact(item: FactItemSnapshot) {
   const { capturedAt: _time, ...provenance } = item.provenance || {};
@@ -283,6 +288,9 @@ export function checkFactRevisionEligibility(
       eligible: false,
       reason: '当前选中的版本属于只读历史快照或已定稿版本，不可生成定向修订；请在当前可编辑工作稿中操作。',
     };
+  }
+  if (!hasUniqueBlockIds(currentDraft)) {
+    return { eligible: false, reason: '稿件存在缺失或重复的稳定段落ID，无法唯一定位正文，已拒绝修订。' };
   }
   if (currentDraft.id !== task.currentDraftId || !task.drafts.some(d => d.id === currentDraft.id)) {
     return { eligible: false, reason: '所选稿不是任务当前工作稿，请返回当前工作稿操作。' };
@@ -979,7 +987,7 @@ export function checkMultiParagraphFactRevisionEligibility(
   maybeOptions?: { targetFactId?: string }
 ): MultiParagraphFactRevisionEligibilityResult {
   const isRole = (val: any): val is UserRole => ['主笔甲', '审阅乙', '审阅丁', '供稿丙'].includes(val);
-  let activeRole: UserRole = '主笔甲';
+  let activeRole: UserRole | undefined;
   let targetFactId: string | undefined = undefined;
 
   if (isRole(roleOrFactId)) {
@@ -1021,6 +1029,9 @@ export function checkMultiParagraphFactRevisionEligibility(
       eligible: false,
       reason: '当前选中的版本属于只读历史快照或已定稿版本，不可生成定向修订；请在当前可编辑工作稿中操作。',
     };
+  }
+  if (!hasUniqueBlockIds(currentDraft)) {
+    return { eligible: false, reason: '稿件存在缺失或重复的稳定段落ID，无法唯一定位正文，整组修订已拒绝。' };
   }
   if (currentDraft.id !== task.currentDraftId || !task.drafts.some((d) => d.id === currentDraft.id)) {
     return { eligible: false, reason: '所选稿不是任务当前工作稿，请返回当前工作稿操作。' };
@@ -1409,7 +1420,7 @@ export function generateMultiParagraphFactRevisionCandidate(
   maybeOptions?: { targetFactId?: string; runId?: string }
 ): MultiParagraphFactRevisionCandidateResult {
   const isRole = (val: any): val is UserRole => ['主笔甲', '审阅乙', '审阅丁', '供稿丙'].includes(val);
-  let activeRole: UserRole = '主笔甲';
+  let activeRole: UserRole | undefined;
   let targetFactId: string | undefined = undefined;
   let runId: string | undefined = undefined;
 
@@ -1432,6 +1443,10 @@ export function generateMultiParagraphFactRevisionCandidate(
     }
   }
   const options = { targetFactId, runId };
+
+  if (!activeRole) {
+    return { success: false, reason: '未提供有效操作身份，不能默认以主笔身份生成多段落修订候选。' };
+  }
 
   const eligibility = checkMultiParagraphFactRevisionEligibility(task, currentDraft, activeRole, options);
   if (!eligibility.eligible || !eligibility.targetFactItem || !eligibility.referencingBlocks) {

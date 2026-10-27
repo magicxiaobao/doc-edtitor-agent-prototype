@@ -714,6 +714,18 @@ export function createMultiParagraphRevisionDemoTask(): Task {
   task.drafts = [frozenInitialDraft];
   task.currentDraftId = frozenInitialDraft.id;
 
+  // The source scenario's training paragraph moved from BLK-02 to BLK-03.
+  // Keep comments attached to this demo's real draft and matching paragraph.
+  task.reviewComments = task.reviewComments.map(comment => ({
+    ...comment,
+    targetVersionId: frozenInitialDraft.id,
+    ...(comment.type === 'paragraph' && comment.targetBlockId === 'BLK-02' ? {
+      targetBlockId: 'BLK-03',
+      targetBlockOrder: 3,
+      baseParagraphText: multiDraftBlocks[2].content,
+    } : {}),
+  }));
+
   // Upstream task facts: FACT-01 is reset to conflict_pending (120 vs 128)
   // allowing user to experience the full journey: adjudicate to 120 -> confirm facts -> confirm outline -> drafting candidate
   task.facts = JSON.parse(JSON.stringify(INITIAL_FACTS));

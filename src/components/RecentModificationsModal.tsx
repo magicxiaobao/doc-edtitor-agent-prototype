@@ -67,7 +67,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                 </span>
               </h3>
               <p className="text-xs text-slate-500">
-                记录局部段落建议采纳、人工微调与审阅落实；支持安全局部撤销（与版本历史独立保存）
+                记录建议采纳、人工微调、审阅落实与事实修订；事实修订须整体恢复正文与依据。
               </p>
             </div>
           </div>
@@ -103,6 +103,13 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
             </div>
           ) : (
             currentDraftLogs.map((log) => {
+              const affected = Array.isArray(log.affectedBlocks) && log.affectedBlocks.every(item => item &&
+                typeof item.blockId === 'string' && typeof item.beforeContent === 'string' &&
+                typeof item.afterContent === 'string' &&
+                (item.sectionTitle === undefined || typeof item.sectionTitle === 'string') &&
+                (item.blockOrder === undefined || typeof item.blockOrder === 'number'))
+                ? log.affectedBlocks : [];
+              const isGroup = affected.length > 1;
               const validation = validateUndoEligibility(task, currentDraft, log.id, activeRole);
               const canUndo = validation.canUndo;
               const disabledReason = validation.reason || '';
@@ -127,9 +134,13 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-slate-900 flex items-center gap-1">
-                        第 {log.blockOrder} 段
+                        {isGroup ? `整体修订 · 共${affected.length}段` : `第 ${log.blockOrder} 段`}
                       </span>
-                      {log.source === 'material_supplementation_fine_tuned' || (log.isMaterialSupplementation && log.isFineTuned) ? (
+                      {log.source === 'fact_change_revision' ? (
+                        <span data-testid={`badge-log-source-${log.id}`} className="bg-indigo-50 text-indigo-900 border border-indigo-200 px-1.5 rounded">
+                          {isGroup ? '多段落事实修订' : '事实定向修订'}
+                        </span>
+                      ) : log.source === 'material_supplementation_fine_tuned' || (log.isMaterialSupplementation && log.isFineTuned) ? (
                         <span
                           data-testid={`badge-log-source-${log.id}`}
                           className="bg-teal-100 text-teal-900 border border-teal-300 text-xs px-1.5 py-0.2 rounded font-medium flex items-center gap-0.5"
@@ -213,6 +224,26 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   )}
 
                   {/* Snippet Before and After */}
+                  {log.source === 'fact_change_revision' && (
+                    <p className="mt-2 p-2 rounded bg-indigo-50 text-indigo-950 whitespace-pre-wrap break-words">{log.sourceDescription}</p>
+                  )}
+                  {isGroup && (
+                    <details className="mt-2 rounded border border-indigo-200 p-2">
+                      <summary className="cursor-pointer font-semibold text-indigo-900">查看全部{affected.length}段修订明细</summary>
+                      {affected.map(item => (
+                        <div key={item.blockId} data-testid={`log-affected-block-${item.blockId}`} className="mt-3 space-y-2 border-t border-indigo-100 pt-2">
+                          <p className="font-semibold">第{item.blockOrder}段 · {item.sectionTitle} [{item.blockId}]</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="rounded bg-slate-50 p-2"><strong>修改前完整正文：</strong><p className="font-serif whitespace-pre-wrap break-words">{item.beforeContent}</p></div>
+                            <div className="rounded bg-blue-50 p-2"><strong>采纳后完整正文：</strong><p className="font-serif whitespace-pre-wrap break-words">{item.afterContent}</p></div>
+                          </div>
+                        </div>
+                      ))}
+                    </details>
+                  )}
+                  {log.affectedBlocks !== undefined && !affected.length && (
+                    <p className="mt-2 text-amber-900">部分逐段明细格式不完整，保留以下汇总供人工核实。</p>
+                  )}
                   <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                     <div className="p-2 bg-slate-50 rounded border border-slate-200 text-slate-600">
                       <span className="font-bold text-slate-500 block mb-0.5">修改前：</span>
@@ -309,7 +340,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
         {/* Footer */}
         <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-xs text-slate-500">
           <span>
-            撤销规则：仅限当前工作稿最近一次未变动的局部采纳操作；后续修改或定稿将自动保护锁定。
+            局部撤销仅适用于未变动的局部采纳；事实修订请通过版本历史整体恢复正文与依据。
           </span>
           <button
             type="button"

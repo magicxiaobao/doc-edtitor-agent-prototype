@@ -135,7 +135,7 @@ export function App() {
         return;
       }
       const preset = createPresetTask('multi_paragraph_revision');
-      setTasks((prev) => [preset, ...prev]);
+      setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
       setCurrentTaskId(preset.id);
       return;
     }

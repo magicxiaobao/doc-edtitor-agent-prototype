@@ -37,7 +37,7 @@ import { resolveDraftFactEvidence } from './src/services/factLifecycleService';
 import { DraftingStage } from './src/components/stages/DraftingStage';
 import { FactImpactModal } from './src/components/FactImpactModal';
 
-function assert(condition: boolean, message: string) {
+function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     console.error(`❌ FAILED: ${message}`);
     throw new Error(`Assertion failed: ${message}`);
@@ -126,6 +126,7 @@ async function runTask24Tests() {
     // Multi-paragraph eligibility check
     const elig = checkMultiParagraphFactRevisionEligibility(task, draft, 'FACT-01', '主笔甲');
     assert(elig.eligible, '用例1: 多段修订准入判定通过');
+    assert(elig.targetBlockIds, '准入成功必须返回完整段落集合');
     assert(elig.targetBlockIds.length === 2, '用例1: 关联段落按Block ID去重后为2段');
     assert(elig.targetBlockIds.includes('BLK-01') && elig.targetBlockIds.includes('BLK-02'), '用例1: 锁定BLK-01和BLK-02');
 
@@ -135,6 +136,7 @@ async function runTask24Tests() {
 
     // Generate multi candidate
     const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
     assert(genRes.success, '用例1: 成功生成多段修订候选组');
     assert(genRes.candidateGroup!.items.length === 2, '用例1: 候选组包含2段候选');
     assert(genRes.candidateGroup!.items.every((it) => it.revisedBlockContent.includes('120项')), '用例1: 所有候选段均准确改写为120项');
@@ -180,7 +182,7 @@ async function runTask24Tests() {
     {
       const { task, draft } = createStandardMultiFixture();
       draft.blocks.find((b) => b.id === 'BLK-02')!.adoptedEvidences = [
-        { id: 'EVD-SUPP-01', snippetId: 'EVD-01', title: '补充依据', insertedAt: new Date().toISOString() },
+        { evidenceId: 'EVD-01', sourceDocId: task.snippets[0].sourceDocId, sourceDocName: task.snippets[0].docName, snippetText: task.snippets[0].text, snippetLocation: task.snippets[0].location, period: task.snippets[0].period, usage: 'current_fact', associatedFactId: 'FACT-01', contentFingerprint: 'test-adopted-evidence', capturedAt: new Date().toISOString() },
       ];
       const elig = checkMultiParagraphFactRevisionEligibility(task, draft, 'FACT-01', '主笔甲');
       assert(!elig.eligible, '用例2.2: 包含材料补写存证时整组阻断');
@@ -241,29 +243,31 @@ async function runTask24Tests() {
     {
       const { task, draft } = createStandardMultiFixture();
       const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
       assert(genRes.success, '用例4.1: 生成候选成功');
 
       // Tamper BLK-01
       draft.blocks.find((b) => b.id === 'BLK-01')!.content += ' (修改后追加文字)';
 
-      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, genRes.candidateGroup!.runId);
+      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
       assert(!valRes.valid, '用例4.1: 目标段正文发生变更后校验不通过');
 
       const accRes = acceptMultiParagraphFactRevisionCandidate(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
       assert(!accRes.success, '用例4.1: 采纳被整体拒绝');
       assert(task.drafts.length === 1, '用例4.1: 草稿未发生写入，草稿数仍为1');
-      assert(task.modificationLogs.length === 0, '用例4.1: 未写入任何修订日志');
+      assert(task.modificationLogs?.length === 0, '用例4.1: 未写入任何修订日志');
     }
 
     // 4.2 Non-target block changed after generation
     {
       const { task, draft } = createStandardMultiFixture();
       const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
 
       // Tamper non-target BLK-03
       draft.blocks.find((b) => b.id === 'BLK-03')!.content += ' 临时补充说明';
 
-      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, genRes.candidateGroup!.runId);
+      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
       assert(!valRes.valid, '用例4.2: 非目标段被修改后全稿哈希失效，校验拒绝');
     }
 
@@ -271,11 +275,12 @@ async function runTask24Tests() {
     {
       const { task, draft } = createStandardMultiFixture();
       const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
 
       // BLK-03 adds reference to FACT-01
       draft.blocks.find((b) => b.id === 'BLK-03')!.referencedFactIds.push('FACT-01');
 
-      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, genRes.candidateGroup!.runId);
+      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
       assert(!valRes.valid, '用例4.3: 引用段落集合发生变化时整体拒绝');
     }
 
@@ -283,12 +288,13 @@ async function runTask24Tests() {
     {
       const { task, draft } = createStandardMultiFixture();
       const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
 
       // Upstream changed from 120 to 118
       task.facts.find((f) => f.id === 'FACT-01')!.value = '118';
       task.factSnapshot!.items.find((it) => it.factId === 'FACT-01')!.value = '118';
 
-      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, genRes.candidateGroup!.runId);
+      const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
       assert(!valRes.valid, '用例4.4: 上游事实数值变化后候选整体失效');
     }
   }
@@ -300,12 +306,13 @@ async function runTask24Tests() {
   {
     const { task, draft } = createStandardMultiFixture();
     const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
     assert(genRes.success, '用例5: 生成候选成功');
 
     // Delete BLK-02
     draft.blocks = draft.blocks.filter((b) => b.id !== 'BLK-02');
 
-    const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, genRes.candidateGroup!.runId);
+    const valRes = validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup!, '主笔甲', genRes.candidateGroup!.runId);
     assert(!valRes.valid, '用例5: 目标段落被删除后候选失效');
   }
 
@@ -316,6 +323,7 @@ async function runTask24Tests() {
   {
     const { task, draft } = createStandardMultiFixture();
     const genRes = generateMultiParagraphFactRevisionCandidate(task, draft, 'FACT-01', '主笔甲');
+    assert(genRes.candidateGroup && validateMultiParagraphFactRevisionAcceptance(task, draft, genRes.candidateGroup, '主笔甲', genRes.candidateGroup.runId).valid, '变更前候选必须真实可采纳');
     const group = genRes.candidateGroup!;
 
     // 6.1 Role switch check
@@ -506,6 +514,7 @@ async function runTask24Tests() {
         onUpdateTask={handleUpdateTask}
         activeRole="主笔甲"
         onProceedToNextStage={() => {}}
+        onViewSnippet={() => {}}
       />
     );
 

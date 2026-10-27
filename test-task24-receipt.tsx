@@ -125,7 +125,7 @@ await check('任一段不满足确定性改写或含不支持存证时整组拒�
   const { task, draft } = multiFixture();
   // Mark BLK-02 with unsupported material supplement
   draft.blocks[1].adoptedEvidences = [
-    { id: 'EVD-SUPP-01', snippetId: 'EVD-01', title: '材料证据', insertedAt: new Date().toISOString() },
+    { evidenceId: 'EVD-01', sourceDocId: task.snippets[0].sourceDocId, sourceDocName: task.snippets[0].docName, snippetText: task.snippets[0].text, snippetLocation: task.snippets[0].location, period: task.snippets[0].period, usage: 'current_fact', associatedFactId: 'FACT-01', contentFingerprint: 'receipt-adopted-evidence', capturedAt: new Date().toISOString() },
   ];
 
   const elig = checkMultiParagraphFactRevisionEligibility(task, draft, 'FACT-01', '主笔甲');

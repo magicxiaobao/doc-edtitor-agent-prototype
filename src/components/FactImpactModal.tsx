@@ -120,6 +120,13 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     activeGroupRevisionRuns.current = {};
   }, [isOpen, task.id, currentDraft?.id, activeRole]);
 
+  useEffect(() => {
+    if (!isOpen || !Object.keys(activeGroupCandidates).length) return;
+    const group = modalRef.current?.querySelector<HTMLElement>('[data-testid^="multi-paragraph-revision-candidate-card-"]');
+    group?.focus({ preventScroll: true });
+    group?.scrollIntoView?.({ block: 'nearest' });
+  }, [isOpen, activeGroupCandidates]);
+
   // Capture previous focused element and restore on close
   useEffect(() => {
     if (isOpen) {
@@ -458,10 +465,15 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             {(() => {
               const fromToken = `${fromValue}${unit}`;
               const toToken = `${toValue}${unit}`;
-              const fromIdx = originalContent.indexOf(fromToken);
-              const toIdx = revisedContent.indexOf(toToken);
+              // Identify the occurrence that actually produces the full candidate.
+              // An earlier identical quantity may belong to a different metric.
+              let fromIdx = originalContent.indexOf(fromToken);
+              while (fromIdx !== -1 &&
+                originalContent.slice(0, fromIdx) + toToken + originalContent.slice(fromIdx + fromToken.length) !== revisedContent) {
+                fromIdx = originalContent.indexOf(fromToken, fromIdx + fromToken.length);
+              }
 
-              if (fromIdx !== -1 && toIdx !== -1) {
+              if (fromIdx !== -1) {
                 const prefix = originalContent.slice(0, fromIdx);
                 const suffix = originalContent.slice(fromIdx + fromToken.length);
                 return (
@@ -781,6 +793,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                     item.referencingBlocks.some((b) => b.blockId === ev.blockId) && item.referencingBlocks.length > 1
                   );
                   const multiFactId = multiFactItem?.factId;
+                  const isGroupHost = multiFactItem?.referencingBlocks[0]?.blockId === ev.blockId;
                   const groupCandidate = multiFactId ? activeGroupCandidates[multiFactId] : undefined;
                   const groupValidation = (groupCandidate && multiFactId) ? validateMultiParagraphFactRevisionAcceptance(task, currentDraft, groupCandidate, activeRole, activeGroupRevisionRuns.current[multiFactId]) : undefined;
 
@@ -841,7 +854,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                               <span>按最新事实生成关联段落修订候选</span>
                             </button>
                           )}
-                          {!isHistoricalOrFinal && isAuthor && (
+                          {!isHistoricalOrFinal && isAuthor && !multiFactItem && (
                             <button
                               type="button"
                               onClick={() => handleGenerateRevision(ev.blockId)}
@@ -931,7 +944,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                       )}
 
                       {/* Multi-Paragraph Ineligibility / Generation Error Alert */}
-                      {multiFactId && groupRevisionErrors[multiFactId] && (
+                      {isGroupHost && multiFactId && groupRevisionErrors[multiFactId] && (
                         <div
                           data-testid={`alert-multi-revision-ineligible-${multiFactId}`}
                           className="p-3 bg-indigo-50 border border-indigo-300 rounded text-xs text-indigo-950 space-y-2"
@@ -984,9 +997,10 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                       )}
 
                       {/* Multi-Paragraph Candidate Comparison Panel */}
-                      {multiFactId && groupCandidate && (
+                      {isGroupHost && multiFactId && groupCandidate && (
                         <div
                           data-testid={`multi-paragraph-revision-candidate-card-${multiFactId}`}
+                          tabIndex={-1}
                           className="p-3.5 bg-indigo-50/70 border-2 border-indigo-400 rounded-lg text-xs space-y-3 shadow-sm"
                         >
                           <div className="flex items-center justify-between border-b border-indigo-200 pb-2 flex-wrap gap-2">
