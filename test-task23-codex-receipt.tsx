@@ -237,5 +237,27 @@ await check('16 旧稿局部快照字段缺失或损坏时明确拒绝，不抛�
   for (const mutate of mutations) { const { task, draft } = fixture(); mutate(task, draft);
     assert.doesNotThrow(() => reject(task, draft, '部分基准不完整必须安全拒绝')); }
 });
+await check('17 评审回归：累计截止年月必须与冻结期间结束日一致', () => {
+  for (const text of ['截至6月末，累计完成重点任务128项。',
+    '2026年1至9月，截至6月末，累计完成重点任务128项。',
+    '截至2025年9月末，累计完成重点任务128项。']) {
+    const { task, draft } = fixture(); draft.blocks[0].content = text;
+    assert.equal(generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲').success, false, text);
+  }
+  { const { task, draft } = fixture(); task.snippets[0].text = '截至6月末，累计完成重点任务120项。';
+    task.documents[0].content += '\n' + task.snippets[0].text; approve(task);
+    reject(task, draft, '来源截止月份与核准期间不一致'); }
+  { const { task, draft } = fixture(); draft.blocks[0].content = '截至2026年9月末，累计完成重点任务128项。';
+    assert.ok(candidate(task, draft).revisedBlockContent.includes('120项')); }
+});
+await check('18 评审回归：完整单位终止边界拒绝速率和复合单位的前缀匹配', () => {
+  for (const suffix of ['/年', '／年', '每年', '·年', ' 年']) {
+    const { task, draft } = fixture(); draft.blocks[0].content = `2026年1至9月，累计完成重点任务128项${suffix}。`;
+    assert.equal(generateFactRevisionCandidate(task, draft, 'BLK-01', '主笔甲').success, false, suffix);
+    const source = fixture(); source.task.snippets[0].text = `2026年1至9月，累计完成重点任务120项${suffix}。`;
+    source.task.documents[0].content += '\n' + source.task.snippets[0].text; approve(source.task);
+    reject(source.task, source.draft, `原文复合单位${suffix}`);
+  }
+});
 if (failures.length) throw new Error(`${failures.length} Codex groups failed: ${failures.join(', ')}`);
-console.log('Task23 Codex receipt: all 16 groups passed');
+console.log('Task23 Codex receipt: all 18 groups passed');

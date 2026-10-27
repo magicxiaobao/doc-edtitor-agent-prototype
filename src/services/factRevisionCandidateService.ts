@@ -17,7 +17,8 @@ import {
   sourceFactReviews,
   getReviewBaselineIds,
 } from './draftLifecycleService';
-import { buildFactItemSnapshot, confirmFact, extractClausePeriod, arePeriodsStrictlyIdentical } from './factLifecycleService';
+import { buildFactItemSnapshot, confirmFact, extractClausePeriod, arePeriodsStrictlyIdentical,
+  parsePeriodDateRange } from './factLifecycleService';
 
 export interface FactRevisionEligibilityResult {
   eligible: boolean;
@@ -49,11 +50,28 @@ function metricValueOffset(text: string, metric: string, value: string, unit: st
   if (!metric || !unit || !/^\d+(?:\.\d+)?$/.test(value)) return undefined;
   // This batch supports explicit metric labels, not inferred aliases. Match the
   // whole quantity immediately governed by that label, with a complete unit.
-  const re = new RegExp(`${escapeRegex(metric)}\\s*(?:为|共|计|达到|达|已完成|完成)?\\s*(${escapeRegex(value)})\\s*${escapeRegex(unit)}(?![\\d.．%％次人项场个套万亿])`, 'g');
+  const re = new RegExp(`${escapeRegex(metric)}\\s*(?:为|共|计|达到|达|已完成|完成)?\\s*(${escapeRegex(value)})\\s*${escapeRegex(unit)}(?=\\s*(?:[，,。；;！？!?、）)\\]】]|$))`, 'g');
   const matches = [...text.matchAll(re)];
   if (matches.length !== 1) return undefined;
   const match = matches[0];
   return match.index! + match[0].indexOf(value, metric.length);
+}
+
+function supportedMetricPeriod(text: string, quantity: string, period: string, fallbackYear: string, offset: number): boolean {
+  const cutoffPattern = /截至\s*(?:(\d{4})年)?(\d{1,2})月(?:末|底)/g;
+  const cutoffs = [...text.matchAll(cutoffPattern)];
+  const range = parsePeriodDateRange(period);
+  if (cutoffs.length) {
+    if (!range) return false;
+    const end = range.end;
+    const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
+    if (cutoffs.some(match => Number(match[2]) !== end.getUTCMonth() + 1 ||
+        (match[1] && Number(match[1]) !== end.getUTCFullYear()) || end.getUTCDate() !== lastDay)) return false;
+  }
+  // Only a verified end-of-period cutoff may be removed from range extraction.
+  const periodText = text.replace(cutoffPattern, cutoff => ' '.repeat(cutoff.length));
+  const extracted = extractClausePeriod(periodText, quantity, fallbackYear, offset);
+  return !extracted.isAmbiguous && (!extracted.period || arePeriodsStrictlyIdentical(extracted.period, period));
 }
 
 function canonical(value: unknown): string {
@@ -490,8 +508,7 @@ export function checkFactRevisionEligibility(
   if (evidenceOffset === undefined) {
     return { eligible: false, reason: '最新原文无法明确支持该指标的核准数值与完整单位，请人工核实。' };
   }
-  const evidencePeriod = extractClausePeriod(snippet.text, `${adoptedValue}${latestFact.unit}`, task.startDate, evidenceOffset);
-  if (evidencePeriod.isAmbiguous || (evidencePeriod.period && !arePeriodsStrictlyIdentical(evidencePeriod.period, latestFact.period))) {
+  if (!supportedMetricPeriod(snippet.text, `${adoptedValue}${latestFact.unit}`, latestFact.period, task.startDate, evidenceOffset)) {
     return { eligible: false, reason: '最新原文中的指标统计期间不符或归属不明，请人工核实。' };
   }
 
@@ -551,11 +568,7 @@ export function generateFactRevisionCandidate(
       reason: '正文未找到唯一、完整且明确属于目标指标的冻结数值和单位，可能存在多处相同数值、语义归属不明或正文已偏离当时冻结值，请人工编辑。' };
   }
   const chosenMatch = { idx: offset };
-  // A cumulative clause's "截至9月末" is a cutoff, not a competing one-month
-  // statistical period. Keep offsets while allowing the explicit full range to govern.
-  const periodText = text.replace(/截至\s*\d{1,2}月(?:末|底)/g, cutoff => ' '.repeat(cutoff.length));
-  const paragraphPeriod = extractClausePeriod(periodText, `${snapValue}${unit}`, task.startDate, offset);
-  if (paragraphPeriod.isAmbiguous || (paragraphPeriod.period && !arePeriodsStrictlyIdentical(paragraphPeriod.period, snapItem.period))) {
+  if (!supportedMetricPeriod(text, `${snapValue}${unit}`, snapItem.period, task.startDate, offset)) {
     return { success: false, reason: '正文指标明示的统计期间与冻结依据不符或归属不明，本批拒绝生成。' };
   }
 
