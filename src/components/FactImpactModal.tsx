@@ -11,7 +11,13 @@ import {
   DraftFactReviewOverview,
   BlockFactReviewEvaluation,
 } from '../services/factReviewService';
-import { DraftVersion, Task, UserRole } from '../types';
+import { DraftVersion, Task, UserRole, FactRevisionCandidate } from '../types';
+import {
+  checkFactRevisionEligibility,
+  generateFactRevisionCandidate,
+  acceptFactRevisionCandidate,
+} from '../services/factRevisionCandidateService';
+import { computeTextDiff } from '../services/diffService';
 import {
   X,
   AlertTriangle,
@@ -29,6 +35,7 @@ import {
   RotateCcw,
   PauseCircle,
   History,
+  Sparkles,
 } from 'lucide-react';
 
 interface FactImpactModalProps {
@@ -41,8 +48,10 @@ interface FactImpactModalProps {
   onLocateBlock: (blockId: string, factId?: string) => void;
   onViewDraftEvidence: (item: FactImpactItem) => void;
   onJumpToFactsStage?: () => void;
+  onJumpToOutlineStage?: () => void;
   onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => string | void;
   onRevokeReviewRecord?: (blockId: string, reason: string, context: string, recordId: string) => string | void;
+  onAcceptFactRevision?: (candidate: FactRevisionCandidate) => { success: boolean; reason?: string } | void;
   initialBlockId?: string;
 }
 
@@ -56,8 +65,10 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   onLocateBlock,
   onViewDraftEvidence,
   onJumpToFactsStage,
+  onJumpToOutlineStage,
   onSaveReviewRecord,
   onRevokeReviewRecord,
+  onAcceptFactRevision,
   initialBlockId,
 }) => {
   const modalRef = useRef<HTMLDivElement>(null);
@@ -71,13 +82,23 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const [revokeContext,setRevokeContext]=useState<{fingerprint:string;recordId:string}|null>(null);
   const [formError,setFormError]=useState<string>('');
 
+  // Fact revision candidate state keyed by blockId
+  const [activeCandidates, setActiveCandidates] = useState<Record<string, FactRevisionCandidate>>({});
+  const [revisionErrors, setRevisionErrors] = useState<Record<string, { reason: string; unconfirmedUpstream?: 'fact' | 'style' | 'outline' }>>({});
+  const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
+
   // Reset inputs when task or draft changes
   useEffect(() => {
     setReviewNotes({});
     setRevokingBlockId(null);
     setRevokeReason('');
-    setFormContexts({});setRevokeContext(null);setFormError('');
-  }, [task.id, currentDraft?.id,activeRole]);
+    setFormContexts({});
+    setRevokeContext(null);
+    setFormError('');
+    setActiveCandidates({});
+    setRevisionErrors({});
+    setAcceptErrors({});
+  }, [task.id, currentDraft?.id, activeRole]);
 
   // Capture previous focused element and restore on close
   useEffect(() => {
@@ -172,6 +193,94 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
       setRevokingBlockId(null);
       setRevokeReason('');
     }
+  };
+
+  const handleGenerateRevision = (blockId: string) => {
+    setAcceptErrors((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    const res = generateFactRevisionCandidate(task, currentDraft, blockId, activeRole);
+    if (!res.success || !res.candidate) {
+      const eligibility = checkFactRevisionEligibility(task, currentDraft, blockId, activeRole);
+      setRevisionErrors((prev) => ({
+        ...prev,
+        [blockId]: {
+          reason: res.reason || eligibility.reason || '生成修订候选失败',
+          unconfirmedUpstream: eligibility.unconfirmedUpstream,
+        },
+      }));
+      setActiveCandidates((prev) => {
+        const next = { ...prev };
+        delete next[blockId];
+        return next;
+      });
+    } else {
+      setRevisionErrors((prev) => {
+        const next = { ...prev };
+        delete next[blockId];
+        return next;
+      });
+      setActiveCandidates((prev) => ({
+        ...prev,
+        [blockId]: res.candidate!,
+      }));
+    }
+  };
+
+  const handleCancelRevision = (blockId: string) => {
+    setActiveCandidates((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setRevisionErrors((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setAcceptErrors((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+  };
+
+  const handleAcceptRevision = (candidate: FactRevisionCandidate) => {
+    const blockId = candidate.targetBlockId;
+    setAcceptErrors((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+
+    if (onAcceptFactRevision) {
+      const res = onAcceptFactRevision(candidate);
+      if (res && !res.success) {
+        setAcceptErrors((prev) => ({
+          ...prev,
+          [blockId]: res.reason || '采纳修订失败',
+        }));
+        return;
+      }
+    } else {
+      const res = acceptFactRevisionCandidate(task, currentDraft, candidate, activeRole);
+      if (!res.success) {
+        setAcceptErrors((prev) => ({
+          ...prev,
+          [blockId]: res.reason || '采纳修订失败',
+        }));
+        return;
+      }
+    }
+
+    // Successfully accepted: clear candidate preview
+    setActiveCandidates((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
   };
 
   return (
@@ -463,8 +572,20 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                           </span>
                         </div>
 
-                        {/* Top Block Actions: Locate & View Evidence */}
+                        {/* Top Block Actions: Locate & Fact Revision */}
                         <div className="flex items-center gap-2">
+                          {!isHistoricalOrFinal && isAuthor && (
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateRevision(ev.blockId)}
+                              data-testid={`btn-generate-fact-revision-${ev.blockId}`}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                              title="按任务最新核准事实生成该段落的定向修订候选"
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                              <span>按最新事实生成修订候选</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onLocateBlock(ev.blockId, ev.changedFacts[0]?.factId)}
@@ -483,11 +604,223 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                         <div className="flex items-center justify-between text-slate-400">
                           <span>当前正文内容摘要：</span>
                           <span className="font-mono">
-                            修订版本号：{block?.revisionSeq || 1}
+                            修订版本号：{typeof block?.revisionSeq === 'number' && Number.isFinite(block.revisionSeq) ? block.revisionSeq : 0}
                           </span>
                         </div>
                         <p className="text-slate-800 font-serif">“{excerpt}”</p>
                       </div>
+
+                      {/* Ineligibility / Generation Error Alert */}
+                      {revisionErrors[ev.blockId] && (
+                        <div
+                          data-testid={`alert-revision-ineligible-${ev.blockId}`}
+                          className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-2"
+                        >
+                          <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>未满足定向修订准入条件</span>
+                          </div>
+                          <p className="leading-relaxed font-medium">
+                            {revisionErrors[ev.blockId].reason}
+                          </p>
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            {revisionErrors[ev.blockId].unconfirmedUpstream === 'fact' && onJumpToFactsStage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  onJumpToFactsStage();
+                                }}
+                                data-testid={`btn-goto-facts-stage-${ev.blockId}`}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
+                              >
+                                <span>前往事实清单核准</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            )}
+                            {revisionErrors[ev.blockId].unconfirmedUpstream === 'outline' && onJumpToOutlineStage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  onJumpToOutlineStage();
+                                }}
+                                data-testid={`btn-goto-outline-stage-${ev.blockId}`}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
+                              >
+                                <span>前往大纲核准</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleCancelRevision(ev.blockId)}
+                              className="px-2 py-1 text-xs text-slate-600 hover:bg-amber-100 rounded cursor-pointer font-medium"
+                            >
+                              关闭提示
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Candidate Comparison Panel (Requirement 3, 4, 5) */}
+                      {activeCandidates[ev.blockId] && (
+                        <div
+                          data-testid={`fact-revision-candidate-card-${ev.blockId}`}
+                          className="p-3.5 bg-blue-50/70 border-2 border-blue-400 rounded-lg text-xs space-y-3 shadow-sm"
+                        >
+                          <div className="flex items-center justify-between border-b border-blue-200 pb-2 flex-wrap gap-2">
+                            <div className="flex items-center gap-1.5 font-bold text-blue-900 text-sm">
+                              <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
+                              <span>事实变更定向修订候选（仅影响第{ev.blockOrder}段）</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
+                              <span>任务: {activeCandidates[ev.blockId].taskId}</span>
+                              <span>·</span>
+                              <span>基准版本: {activeCandidates[ev.blockId].sourceDraftVersionNumber || activeCandidates[ev.blockId].sourceDraftId}</span>
+                              <span>·</span>
+                              <span>段落: [{activeCandidates[ev.blockId].targetBlockId}]</span>
+                            </div>
+                          </div>
+
+                          {/* Metric & Value Change */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2.5 bg-white rounded border border-blue-200">
+                            <div>
+                              <span className="text-slate-400 block text-2xs">事实指标与数值变化</span>
+                              <div className="font-semibold text-slate-800 text-xs mt-0.5">
+                                {activeCandidates[ev.blockId].metric}：
+                                <span className="text-slate-500 line-through mr-1 font-mono">
+                                  {activeCandidates[ev.blockId].fromValue} {activeCandidates[ev.blockId].unit}
+                                </span>
+                                <span className="text-blue-600 font-mono font-bold">
+                                  → {activeCandidates[ev.blockId].toValue} {activeCandidates[ev.blockId].unit}
+                                </span>
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-2xs">依据出处材料变更</span>
+                              <div className="text-xs text-slate-700 mt-0.5 space-y-0.5">
+                                <div>
+                                  旧冻结出处：
+                                  <span className="text-slate-600">
+                                    {activeCandidates[ev.blockId].fromDocName}（{activeCandidates[ev.blockId].fromLocation}）
+                                  </span>
+                                </div>
+                                <div>
+                                  拟采用新出处：
+                                  <strong className="text-blue-700">
+                                    {activeCandidates[ev.blockId].toDocName}（{activeCandidates[ev.blockId].toLocation}）
+                                  </strong>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Text Diff View */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-slate-600 font-semibold">
+                              <span>正文差异对比（最小范围确定性替换，保留单位及前后表述）：</span>
+                              <span className="text-2xs text-slate-400 font-normal">红色删除线为原表述，绿色粗体为候选表述</span>
+                            </div>
+                            <div
+                              data-testid={`revision-diff-view-${ev.blockId}`}
+                              className="p-3 bg-white rounded border border-slate-300 font-serif leading-relaxed text-slate-900 text-xs"
+                            >
+                              {computeTextDiff(
+                                activeCandidates[ev.blockId].originalBlockContent,
+                                activeCandidates[ev.blockId].revisedBlockContent
+                              ).map((seg, sIdx) => {
+                                if (seg.type === 'removed') {
+                                  return (
+                                    <span
+                                      key={sIdx}
+                                      className="bg-rose-100 text-rose-800 line-through decoration-rose-500 px-0.5 rounded font-mono"
+                                    >
+                                      {seg.text}
+                                    </span>
+                                  );
+                                }
+                                if (seg.type === 'added') {
+                                  return (
+                                    <span
+                                      key={sIdx}
+                                      className="bg-emerald-100 text-emerald-800 font-bold px-0.5 rounded font-mono"
+                                    >
+                                      {seg.text}
+                                    </span>
+                                  );
+                                }
+                                return <span key={sIdx}>{seg.text}</span>;
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Scope & Lifecycle Notice */}
+                          <div className="p-2.5 bg-blue-100/60 rounded border border-blue-200 text-2xs text-blue-900 space-y-1 leading-relaxed">
+                            <div className="font-semibold flex items-center gap-1">
+                              <Info className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              <span>本次操作范围与依据说明：</span>
+                            </div>
+                            <p>
+                              1. <strong>仅修改第{ev.blockOrder}段</strong>（Block ID: {activeCandidates[ev.blockId].targetBlockId}），其余所有段落正文、事实引用与材料存证保持原样。
+                            </p>
+                            <p>
+                              2. 确认采纳将<strong>归档当前草稿为只读历史快照</strong>（保留旧正文、旧依据与当时人工复核结论），并<strong>创建新工作稿</strong>。
+                            </p>
+                            <p>
+                              3. 新工作稿绑定完整核准的最新事实快照（{activeCandidates[ev.blockId].toValue} {activeCandidates[ev.blockId].unit}）；新稿复核记录初始化为空，不自动继承“已复核”签名，后续仍需按规定通过审阅与核校定稿门禁。
+                            </p>
+                          </div>
+
+                          {/* Acceptance Error Alert */}
+                          {acceptErrors[ev.blockId] && (
+                            <div
+                              data-testid={`alert-revision-accept-error-${ev.blockId}`}
+                              className="p-2.5 bg-rose-50 border border-rose-300 rounded text-xs text-rose-950 space-y-1"
+                            >
+                              <div className="flex items-center gap-1 font-bold text-rose-900">
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                                <span>采纳失败</span>
+                              </div>
+                              <p>{acceptErrors[ev.blockId]}</p>
+                            </div>
+                          )}
+
+                          {/* Candidate Actions */}
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleCancelRevision(ev.blockId)}
+                              data-testid={`btn-cancel-fact-revision-${ev.blockId}`}
+                              className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded cursor-pointer font-medium"
+                            >
+                              取消
+                            </button>
+
+                            {acceptErrors[ev.blockId] ? (
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptRevision(activeCandidates[ev.blockId])}
+                                data-testid={`btn-retry-accept-fact-revision-${ev.blockId}`}
+                                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>重试采纳</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptRevision(activeCandidates[ev.blockId])}
+                                data-testid={`btn-accept-fact-revision-${ev.blockId}`}
+                                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>采纳修订并创建新工作稿</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Merged Facts Differences Affecting This Block */}
                       <div className="space-y-2">
