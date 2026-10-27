@@ -21,7 +21,7 @@ interface NavbarProps {
   onSelectTask: (taskId: string) => void;
   activeRole: UserRole;
   onSelectRole: (role: UserRole) => void;
-  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review') => void;
+  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision') => void;
   onResetData: () => void;
 }
 
@@ -190,8 +190,27 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span className="font-semibold text-emerald-300">4. 审阅意见与篇幅冲突</span>
                     <span className="text-xs text-slate-400">审阅批注、篇幅协调与定稿导出</span>
                   </button>
+                  <button
+                    data-testid="btn-load-scenario-multi-fact"
+                    onClick={() => onLoadScenario('multi_paragraph_revision')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white flex flex-col cursor-pointer border-t border-slate-800"
+                  >
+                    <span className="font-semibold text-purple-300">5. 单事实多段落修订演示 (128项→120项)</span>
+                    <span className="text-xs text-slate-400">单事实影响两段、整体原子采纳与留痕</span>
+                  </button>
                 </div>
               </div>
+
+              {/* Explicit create demo task button */}
+              <button
+                data-testid="btn-create-multi-fact-demo-task"
+                onClick={() => onLoadScenario('multi_paragraph_revision')}
+                className="flex items-center gap-1.5 px-3 py-1 bg-purple-900/90 hover:bg-purple-800 border border-purple-700 rounded text-purple-100 text-xs font-medium transition-colors cursor-pointer"
+                title="显式创建单事实多段落一致修订演示任务（不自动覆盖已有任务）"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>创建多段修订演示任务</span>
+              </button>
 
               {/* Reset button */}
               <button

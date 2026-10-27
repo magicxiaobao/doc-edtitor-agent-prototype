@@ -7,6 +7,10 @@ import {
   StyleSnapshot,
   OutlineSnapshot,
   FactRevisionCandidate,
+  MultiParagraphFactRevisionCandidate,
+  ParagraphRevisionCandidateItem,
+  MultiParagraphRevisionLogItem,
+  ParagraphModificationLog,
   UserRole,
 } from '../types';
 import { analyzeFactImpact, FactImpactAnalysisResult, FactImpactItem } from './factImpactService';
@@ -40,6 +44,32 @@ export interface FactRevisionAcceptanceResult {
   updatedTask?: Task;
   newWorkingDraft?: DraftVersion;
   archivedDraft?: DraftVersion;
+}
+
+export interface MultiParagraphFactRevisionEligibilityResult {
+  eligible: boolean;
+  reason?: string;
+  targetFactId?: string;
+  targetFactItem?: FactImpactItem;
+  referencingBlocks?: ParagraphBlock[];
+  targetBlockIds?: string[];
+  unconfirmedUpstream?: 'fact' | 'style' | 'outline';
+  blockingReasons?: string[];
+}
+
+export interface MultiParagraphFactRevisionCandidateResult {
+  success: boolean;
+  reason?: string;
+  candidateGroup?: MultiParagraphFactRevisionCandidate;
+}
+
+export interface MultiParagraphFactRevisionAcceptanceResult {
+  success: boolean;
+  reason?: string;
+  updatedTask?: Task;
+  newWorkingDraft?: DraftVersion;
+  archivedDraft?: DraftVersion;
+  modificationLog?: ParagraphModificationLog;
 }
 
 function escapeRegex(str: string): string {
@@ -88,6 +118,11 @@ function canonical(value: unknown): string {
     .filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
+}
+
+function hasUniqueBlockIds(draft: DraftVersion): boolean {
+  const ids = draft.blocks.map(block => block?.id);
+  return ids.every(id => typeof id === 'string' && id.trim().length > 0) && new Set(ids).size === ids.length;
 }
 
 // Capturing a new approval may refresh provenance time without changing its meaning.
@@ -253,6 +288,9 @@ export function checkFactRevisionEligibility(
       eligible: false,
       reason: '当前选中的版本属于只读历史快照或已定稿版本，不可生成定向修订；请在当前可编辑工作稿中操作。',
     };
+  }
+  if (!hasUniqueBlockIds(currentDraft)) {
+    return { eligible: false, reason: '稿件存在缺失或重复的稳定段落ID，无法唯一定位正文，已拒绝修订。' };
   }
   if (currentDraft.id !== task.currentDraftId || !task.drafts.some(d => d.id === currentDraft.id)) {
     return { eligible: false, reason: '所选稿不是任务当前工作稿，请返回当前工作稿操作。' };
@@ -927,5 +965,918 @@ export function acceptFactRevisionCandidate(
     updatedTask,
     newWorkingDraft,
     archivedDraft,
+  };
+}
+
+/**
+ * Checks whether the current draft meets the strict batch 2 criteria
+ * for targeted multi-paragraph fact revision candidate generation:
+ * - Working draft, author role
+ * - Full frozen baseline on draft; task latest facts, style, outline formally approved
+ * - Exactly one fact changed across the entire draft, and that fact references at least 2 blocks
+ * - Numerical value change with consistent unit, period, and metric scope
+ * - Latest fact confirmed, conflicts resolved, valid source document and snippet
+ * - Each referencing block satisfies deterministic rewrite conditions
+ * - Blocks with material supplementation evidence block the entire group
+ */
+export function checkMultiParagraphFactRevisionEligibility(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  roleOrFactId: UserRole | string,
+  maybeOptionsOrRole?: UserRole | string | { targetFactId?: string },
+  maybeOptions?: { targetFactId?: string }
+): MultiParagraphFactRevisionEligibilityResult {
+  const isRole = (val: any): val is UserRole => ['主笔甲', '审阅乙', '审阅丁', '供稿丙'].includes(val);
+  let activeRole: UserRole | undefined;
+  let targetFactId: string | undefined = undefined;
+
+  if (isRole(roleOrFactId)) {
+    activeRole = roleOrFactId;
+    if (typeof maybeOptionsOrRole === 'string') {
+      targetFactId = maybeOptionsOrRole;
+    } else if (maybeOptionsOrRole && typeof maybeOptionsOrRole === 'object') {
+      targetFactId = maybeOptionsOrRole.targetFactId;
+    }
+  } else {
+    targetFactId = roleOrFactId;
+    if (isRole(maybeOptionsOrRole)) {
+      activeRole = maybeOptionsOrRole;
+    }
+    if (maybeOptions && maybeOptions.targetFactId) {
+      targetFactId = maybeOptions.targetFactId;
+    }
+  }
+  const options = targetFactId ? { targetFactId } : undefined;
+
+  // 1. Operator role: Must be primary author
+  if (activeRole !== '主笔甲') {
+    return {
+      eligible: false,
+      reason: `权限受限：当前操作身份为【${activeRole}】，多段落定向修订仅允许主笔甲执行。`,
+    };
+  }
+
+  // 2. Draft existence and mutability
+  if (!currentDraft || !currentDraft.blocks || currentDraft.blocks.length === 0) {
+    return {
+      eligible: false,
+      reason: '当前尚无可比较或可编辑的草稿版本。',
+    };
+  }
+
+  if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || currentDraft.isWorkingDraft === false) {
+    return {
+      eligible: false,
+      reason: '当前选中的版本属于只读历史快照或已定稿版本，不可生成定向修订；请在当前可编辑工作稿中操作。',
+    };
+  }
+  if (!hasUniqueBlockIds(currentDraft)) {
+    return { eligible: false, reason: '稿件存在缺失或重复的稳定段落ID，无法唯一定位正文，整组修订已拒绝。' };
+  }
+  if (currentDraft.id !== task.currentDraftId || !task.drafts.some((d) => d.id === currentDraft.id)) {
+    return { eligible: false, reason: '所选稿不是任务当前工作稿，请返回当前工作稿操作。' };
+  }
+  if (canonical(currentDraft) !== canonical(task.drafts.find((d) => d.id === currentDraft.id))) {
+    return { eligible: false, reason: '所选稿参数已陈旧，与任务中保存的当前稿不一致，请重新打开当前稿。' };
+  }
+
+  // 3. Draft baseline snapshots integrity
+  const draftFactSnap = currentDraft.snapshotMetadata?.factSnapshot;
+  const draftStyleSnap = currentDraft.snapshotMetadata?.styleSnapshot;
+  const draftOutlineSnap = currentDraft.snapshotMetadata?.outlineSnapshot;
+
+  if (
+    !validFactBasis(draftFactSnap) ||
+    !validStyleBasis(draftStyleSnap) ||
+    !validOutlineBasis(draftOutlineSnap) ||
+    !Array.isArray(currentDraft.snapshotMetadata?.outlineSections) ||
+    !currentDraft.snapshotMetadata.outlineSections.every(
+      (s) => s && typeof s.id === 'string' && typeof s.title === 'string'
+    )
+  ) {
+    return {
+      eligible: false,
+      reason: '草稿缺少完整冻结依据基准（事实快照、文风快照或大纲快照缺失），无法验证依据一致性。',
+    };
+  }
+
+  // 4. Task upstream formal confirmations
+  if (!validFactBasis(task.factSnapshot)) {
+    return {
+      eligible: false,
+      reason: '任务事实清单尚未正式核准确认，请先前往事实清单完成核准。',
+      unconfirmedUpstream: 'fact',
+    };
+  }
+
+  if (!task.styleConfirmed || !validStyleBasis(task.styleSnapshot)) {
+    return {
+      eligible: false,
+      reason: '任务文风规范尚未正式核准确认，请先核准文风。',
+      unconfirmedUpstream: 'style',
+    };
+  }
+
+  if (!task.outlineConfirmed || !validOutlineBasis(task.outlineSnapshot)) {
+    return {
+      eligible: false,
+      reason: '任务大纲结构尚未正式核准确认，请先核准大纲。',
+      unconfirmedUpstream: 'outline',
+    };
+  }
+
+  // 5. Compare rule IDs
+  const curStyleRules = [...(task.styleSnapshot.activeRuleIds || [])].sort().join(',');
+  const draftStyleRules = [...(draftStyleSnap.activeRuleIds || [])].sort().join(',');
+  if (curStyleRules !== draftStyleRules) {
+    return {
+      eligible: false,
+      reason: '任务文风规范发生了实质变化（启用规则不一致），超出本批定向修订范围，请重新起草或调整文风。',
+    };
+  }
+
+  // 6. Substantive outline verification
+  const curSections = task.outlineSnapshot.sections || [];
+  const draftSections = draftOutlineSnap.sections || [];
+  if (
+    curSections.length !== draftSections.length ||
+    curSections.some(
+      (s, i) =>
+        s.sectionId !== draftSections[i]?.sectionId ||
+        s.title !== draftSections[i]?.title ||
+        JSON.stringify(s.assignedFactIds || []) !== JSON.stringify(draftSections[i]?.assignedFactIds || [])
+    )
+  ) {
+    return {
+      eligible: false,
+      reason: '任务大纲结构或章节要求发生了实质变化，超出本批定向修订范围，请人工编辑或重新起草。',
+    };
+  }
+
+  // 7. Analyze fact impact across the entire draft
+  const analysis: FactImpactAnalysisResult = analyzeFactImpact(task, currentDraft);
+
+  const unreferencedApproved = analysis.unreferencedNewFacts.filter((f) => f.status === 'confirmed');
+  if (unreferencedApproved.length > 0) {
+    return {
+      eligible: false,
+      reason: `任务事实清单中存在 ${unreferencedApproved.length} 项未被所选稿件引用的核准事实，存在尚未处理的依据差异，无法执行定向修订。`,
+    };
+  }
+
+  const missingBaselineConfirmedFacts = (analysis.missingBaselineFactIds || []).filter(
+    (id) => task.facts.find((f) => f.id === id)?.status === 'confirmed'
+  );
+  if (missingBaselineConfirmedFacts.length > 0) {
+    return {
+      eligible: false,
+      reason: '草稿引用的核准事实中存在缺少冻结基准的事项，无法验证历史依据一致性。',
+    };
+  }
+
+  if (analysis.changedFactsCount === 0) {
+    return {
+      eligible: false,
+      reason: '未发现已关联事实的数值变化，本批没有可生成的定向修订。',
+    };
+  }
+
+  if (analysis.changedFactsCount > 1) {
+    return {
+      eligible: false,
+      reason: `整份稿件存在多项事实变更（共 ${analysis.changedFactsCount} 项），超出本批单事实定向修订支持范围，请人工编辑或重新起草。`,
+    };
+  }
+
+  const changedFactItem = analysis.impactItems[0];
+  if (!changedFactItem) {
+    return {
+      eligible: false,
+      reason: '未检测到具体的变更事实项。',
+    };
+  }
+
+  if (options?.targetFactId && options.targetFactId !== changedFactItem.factId) {
+    return {
+      eligible: false,
+      reason: `当前选中的事实【${options.targetFactId}】并非当前变更的事实【${changedFactItem.metric}】。`,
+    };
+  }
+
+  // 8. Inspect difference tags for unsupported changes
+  for (const tag of changedFactItem.differenceTags) {
+    if (tag.type === 'unit') {
+      const msg = `指标单位发生变化（${changedFactItem.draftSnapshotValue} → ${changedFactItem.latestConfirmedValue}），超出本批定向修订范围。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+    if (tag.type === 'period') {
+      const msg = `统计期间发生变化（${changedFactItem.draftPeriod} → ${changedFactItem.latestPeriod}），超出本批定向修订范围。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+    if (tag.type === 'metric_scope') {
+      const msg = `统计口径发生变化（${changedFactItem.draftMetricScope} → ${changedFactItem.latestMetricScope}），超出本批定向修订范围。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+    if (tag.type === 'status_pending') {
+      return {
+        eligible: false,
+        reason: '最新事实已被撤销核准（待确认），尚未正式核准，无法采纳。',
+      };
+    }
+    if (tag.type === 'status_excluded') {
+      return {
+        eligible: false,
+        reason: '最新事实已被任务排除，不应作为核准依据。',
+      };
+    }
+    if (tag.type === 'status_gap') {
+      return {
+        eligible: false,
+        reason: '最新事实已标记为材料缺口，缺少充足材料支撑。',
+      };
+    }
+    if (tag.type === 'status_deleted') {
+      return {
+        eligible: false,
+        reason: '任务事实清单中已删除此事实，草稿仍在引用已删除项。',
+      };
+    }
+    if (tag.type === 'conflict_unresolved') {
+      return {
+        eligible: false,
+        reason: '最新事实存在未裁决冲突，尚未确定最终采信口径与数值。',
+      };
+    }
+    if (tag.type === 'missing_baseline') {
+      return {
+        eligible: false,
+        reason: '缺少快照冻结项基准，需人工核实。',
+      };
+    }
+  }
+
+  const hasValueDifference = changedFactItem.differenceTags.some((t) => t.type === 'value');
+  if (!hasValueDifference) {
+    return {
+      eligible: false,
+      reason: '事实数值未发生变动，无需生成数值修订候选。',
+    };
+  }
+
+  // 9. Verify latest fact status and evidence validity
+  const latestFact = task.facts.find((f) => f.id === changedFactItem.factId);
+  if (!latestFact || latestFact.status !== 'confirmed') {
+    return {
+      eligible: false,
+      reason: `最新事实【${changedFactItem.metric}】尚未核准（状态：${latestFact?.status || '缺失'}），无法采纳。`,
+    };
+  }
+
+  if (latestFact.hasConflict && !latestFact.selectedConflictValue) {
+    return {
+      eligible: false,
+      reason: `最新事实【${latestFact.metric}】存在未裁决冲突，尚未确定最终采信值。`,
+    };
+  }
+
+  const snippet = task.snippets.find((s) => s.id === latestFact.primaryEvidenceId);
+  if (!snippet) {
+    return {
+      eligible: false,
+      reason: '最新事实关联的主出处材料不存在或已失效，无有效原文来源。',
+    };
+  }
+
+  const doc = task.documents.find((d) => d.id === snippet.sourceDocId);
+  if (!doc || (doc as any).isDeleted) {
+    return {
+      eligible: false,
+      reason: '最新事实关联的材料文档已删除或失效，无有效原文出处。',
+    };
+  }
+
+  if (!snippet.text || !snippet.text.trim()) {
+    return {
+      eligible: false,
+      reason: '最新事实关联的主出处材料未包含有效原文摘要。',
+    };
+  }
+
+  // 10. Collect all referencing blocks strictly by Fact ID and Block ID references
+  // Deduplicate repeated references within the same block by block.id
+  const referencingBlocks: ParagraphBlock[] = [];
+  const seenBlockIds = new Set<string>();
+  for (const block of currentDraft.blocks) {
+    const isDirectRef = (block.referencedFactIds || []).includes(changedFactItem.factId);
+    const isAdoptedRef = (block.adoptedEvidences || []).some(
+      (e) => e.associatedFactId === changedFactItem.factId
+    );
+    if ((isDirectRef || isAdoptedRef) && !seenBlockIds.has(block.id)) {
+      seenBlockIds.add(block.id);
+      referencingBlocks.push(block);
+    }
+  }
+
+  // Check if any referencing block contains unsupported material supplementation
+  for (const block of referencingBlocks) {
+    if (block.adoptedEvidences && block.adoptedEvidences.length > 0) {
+      const msg = `关联段落（第${block.order}段 [${block.id}]）包含材料补写存证，本批不支持材料补写存证的自动更新，整组修订已阻断。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+  }
+
+  if (referencingBlocks.length < 2) {
+    const msg = `目标事实【${changedFactItem.metric}】仅关联 ${referencingBlocks.length} 个段落，多段落修订要求关联至少 2 个段落；单段落请使用单段定向修订路径。`;
+    return {
+      eligible: false,
+      reason: msg,
+      blockingReasons: [msg],
+    };
+  }
+
+  const basisError = completeBasisError(task, currentDraft, changedFactItem.factId);
+  if (basisError) return { eligible: false, reason: basisError, blockingReasons: [basisError] };
+
+  const adoptedValue = (latestFact.selectedConflictValue || latestFact.value).trim();
+  const evidenceOffset = metricValueOffset(snippet.text, latestFact.metric, adoptedValue, latestFact.unit);
+  if (evidenceOffset === undefined) {
+    const msg = '最新原文无法明确支持该指标的核准数值与完整单位，请人工核实。';
+    return { eligible: false, reason: msg, blockingReasons: [msg] };
+  }
+  if (
+    !supportedMetricPeriod(
+      snippet.text,
+      `${adoptedValue}${latestFact.unit}`,
+      latestFact.period,
+      task.startDate,
+      evidenceOffset
+    )
+  ) {
+    const msg = '最新原文中的指标统计期间不符或归属不明，请人工核实。';
+    return { eligible: false, reason: msg, blockingReasons: [msg] };
+  }
+
+  const snapItem = currentDraft.snapshotMetadata!.factSnapshot!.items.find(
+    (i) => i.factId === latestFact.id
+  )!;
+  const snapValue = (snapItem.selectedConflictValue || snapItem.value || '').trim();
+  const latestValue = (latestFact.selectedConflictValue || latestFact.value || '').trim();
+  const unit = (snapItem.unit || latestFact.unit || '').trim();
+  const metric = (snapItem.metric || latestFact.metric || '').trim();
+
+  if (!snapValue || !latestValue || snapValue === latestValue) {
+    return {
+      eligible: false,
+      reason: '事实数值未发生实质变动，无需生成修订候选。',
+    };
+  }
+
+  // 11. Verify deterministic rewrite conditions on each referencing block
+  for (const block of referencingBlocks) {
+    // Blocking condition: Any referencing block containing material supplementation evidence blocks the entire group
+    if (block.adoptedEvidences && block.adoptedEvidences.length > 0) {
+      const msg = `关联段落（第${block.order}段 [${block.id}]）包含材料补写存证，本批不支持材料补写存证的自动更新，整组修订已阻断。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+
+    const text = block.content;
+    const offset = metricValueOffset(text, metric, snapValue, unit);
+    if (offset === undefined) {
+      const msg = `关联段落（第${block.order}段 [${block.id}]）正文未找到唯一、完整且明确属于目标指标【${metric}】的冻结数值（${snapValue}）和单位（${unit}），可能存在多处相同数值、语义归属不明、包含否定/计划/目标限定或正文已偏离当时冻结值，整组拒绝采纳。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+
+    if (!supportedMetricPeriod(text, `${snapValue}${unit}`, snapItem.period, task.startDate, offset)) {
+      const msg = `关联段落（第${block.order}段 [${block.id}]）正文指标明示的统计期间与冻结依据不符或归属不明，整组拒绝采纳。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+
+    const revisedContent =
+      text.slice(0, offset) + latestValue + text.slice(offset + snapValue.length);
+
+    const prefixMatch = revisedContent.slice(0, offset) === text.slice(0, offset);
+    const suffixMatch =
+      revisedContent.slice(offset + latestValue.length) === text.slice(offset + snapValue.length);
+    const replacedValueMatch =
+      revisedContent.slice(offset, offset + latestValue.length) === latestValue &&
+      text.slice(offset, offset + snapValue.length) === snapValue;
+
+    if (!prefixMatch || !suffixMatch || !replacedValueMatch) {
+      const msg = `关联段落（第${block.order}段 [${block.id}]）改写结果偏离最小范围修改原则，已安全拦截。`;
+      return {
+        eligible: false,
+        reason: msg,
+        blockingReasons: [msg],
+      };
+    }
+  }
+
+  return {
+    eligible: true,
+    targetFactId: changedFactItem.factId,
+    targetFactItem: changedFactItem,
+    referencingBlocks,
+    targetBlockIds: referencingBlocks.map((b) => b.id),
+  };
+}
+
+/**
+ * Generates deterministic multi-paragraph revision candidates for all referencing blocks.
+ * If ANY block fails validation, the entire group is rejected and no partial result is returned.
+ */
+export function generateMultiParagraphFactRevisionCandidate(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  roleOrFactId: UserRole | string,
+  maybeOptionsOrRole?: UserRole | string | { targetFactId?: string; runId?: string },
+  maybeOptions?: { targetFactId?: string; runId?: string }
+): MultiParagraphFactRevisionCandidateResult {
+  const isRole = (val: any): val is UserRole => ['主笔甲', '审阅乙', '审阅丁', '供稿丙'].includes(val);
+  let activeRole: UserRole | undefined;
+  let targetFactId: string | undefined = undefined;
+  let runId: string | undefined = undefined;
+
+  if (isRole(roleOrFactId)) {
+    activeRole = roleOrFactId;
+    if (typeof maybeOptionsOrRole === 'string') {
+      targetFactId = maybeOptionsOrRole;
+    } else if (maybeOptionsOrRole && typeof maybeOptionsOrRole === 'object') {
+      targetFactId = maybeOptionsOrRole.targetFactId;
+      runId = maybeOptionsOrRole.runId;
+    }
+  } else {
+    targetFactId = roleOrFactId;
+    if (isRole(maybeOptionsOrRole)) {
+      activeRole = maybeOptionsOrRole;
+    }
+    if (maybeOptions) {
+      if (maybeOptions.targetFactId) targetFactId = maybeOptions.targetFactId;
+      if (maybeOptions.runId) runId = maybeOptions.runId;
+    }
+  }
+  const options = { targetFactId, runId };
+
+  if (!activeRole) {
+    return { success: false, reason: '未提供有效操作身份，不能默认以主笔身份生成多段落修订候选。' };
+  }
+
+  const eligibility = checkMultiParagraphFactRevisionEligibility(task, currentDraft, activeRole, options);
+  if (!eligibility.eligible || !eligibility.targetFactItem || !eligibility.referencingBlocks) {
+    return {
+      success: false,
+      reason: eligibility.reason || '多段落准入校验未通过',
+    };
+  }
+
+  const changedItem = eligibility.targetFactItem;
+  const referencingBlocks = eligibility.referencingBlocks;
+  const latestFact = task.facts.find((f) => f.id === changedItem.factId)!;
+  const snapItem = currentDraft!.snapshotMetadata!.factSnapshot!.items.find(
+    (i) => i.factId === latestFact.id
+  )!;
+
+  const snapValue = (snapItem.selectedConflictValue || snapItem.value || '').trim();
+  const latestValue = (latestFact.selectedConflictValue || latestFact.value || '').trim();
+  const unit = (snapItem.unit || latestFact.unit || '').trim();
+  const metric = (snapItem.metric || latestFact.metric || '').trim();
+
+  const items: ParagraphRevisionCandidateItem[] = referencingBlocks.map((block) => {
+    const text = block.content;
+    const offset = metricValueOffset(text, metric, snapValue, unit)!;
+    const revisedContent = text.slice(0, offset) + latestValue + text.slice(offset + snapValue.length);
+
+    return {
+      targetBlockId: block.id,
+      targetBlockOrder: block.order,
+      targetSectionTitle:
+        task.outline.find((o) => o.id === block.sectionId)?.title ||
+        currentDraft!.snapshotMetadata?.outlineSections?.find((o) => o.id === block.sectionId)?.title ||
+        '正文章节',
+      originalBlockContent: block.content,
+      originalRevisionSeq:
+        typeof block.revisionSeq === 'number' && Number.isFinite(block.revisionSeq) ? block.revisionSeq : 0,
+      originalReferencedFactIds: [...block.referencedFactIds],
+      revisedBlockContent: revisedContent,
+      diffExplanation: `指标【${metric}】数值由 ${snapValue}${unit} 更新为 ${latestValue}${unit}`,
+    };
+  });
+
+  const finalRunId = runId || options?.runId || `RUN-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  const candidateGroupId = `FACT-REV-GROUP-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+  const toSnip = latestFact.primaryEvidenceId
+    ? task.snippets.find((s) => s.id === latestFact.primaryEvidenceId)
+    : undefined;
+
+  const candidateGroup: MultiParagraphFactRevisionCandidate = {
+    id: candidateGroupId,
+    runId: finalRunId,
+    taskId: task.id,
+    sourceDraftId: currentDraft!.id,
+    sourceDraftVersionNumber: currentDraft!.versionNumber,
+    targetFactId: latestFact.id,
+    metric,
+    unit,
+    fromValue: snapValue,
+    toValue: latestValue,
+    period: latestFact.period,
+
+    fromEvidenceId: snapItem.primaryEvidenceId,
+    fromDocName: snapItem.provenance!.sourceDocName,
+    fromLocation: snapItem.provenance!.location || '未保存定位',
+
+    toEvidenceId: latestFact.primaryEvidenceId,
+    toDocName: toSnip?.docName || '最新出处材料',
+    toLocation: toSnip?.location || '段落索引',
+
+    items,
+    targetBlockIds: items.map((i) => i.targetBlockId),
+
+    baseDraftContentHash: computeDraftBlocksHash(currentDraft!.blocks),
+    contextFingerprint: getFactRevisionContext(task, currentDraft!),
+
+    upstreamContext: {
+      factSnapshotConfirmedAt: task.factSnapshot?.confirmedAt,
+      factSnapshotHash: task.factSnapshot?.hash,
+      styleConfirmedAt: task.styleSnapshot?.confirmedAt,
+      styleHash: task.styleSnapshot?.hash,
+      outlineConfirmedAt: task.outlineSnapshot?.confirmedAt,
+      outlineHash: task.outlineSnapshot?.hash,
+    },
+
+    createdAt: new Date().toISOString(),
+    explanation: `经核实，指标【${metric}】已核准采信 ${latestValue}${unit}（原稿采用：${snapValue}${unit}）。已针对全部 ${items.length} 个关联段落执行一致性定向修订，保留原文单位及前后表述。`,
+  };
+
+  return {
+    success: true,
+    candidateGroup,
+  };
+}
+
+/**
+ * Validates multi-paragraph candidate adoption preconditions:
+ * - Isolation: Task ID, Run ID, source draft ID
+ * - Freshness: Draft blocks unchanged, all target blocks' content, revisionSeq, and references untouched
+ * - Group integrity: Referencing block set unchanged (no additions or removals since generation)
+ * - Eligibility: Upstream approvals unchanged, no new fact/evidence discrepancies
+ */
+export function validateMultiParagraphFactRevisionAcceptance(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  candidateGroup: MultiParagraphFactRevisionCandidate,
+  activeRole: UserRole,
+  activeRunId?: string | null
+): { valid: boolean; reason?: string } {
+  if (activeRole !== '主笔甲') {
+    return { valid: false, reason: '权限受限：仅主笔甲有权采纳修订并创建新工作稿！' };
+  }
+
+  if (candidateGroup.taskId !== task.id) {
+    return { valid: false, reason: '安全隔离拦截：修订候选生成自其他任务，禁止跨任务采纳！' };
+  }
+
+  if (!activeRunId || candidateGroup.runId !== activeRunId) {
+    return { valid: false, reason: '候选已失效：该候选生成自已取消或过期的运行！' };
+  }
+
+  if (!currentDraft || currentDraft.id !== candidateGroup.sourceDraftId) {
+    return { valid: false, reason: '版本已变更：当前草稿已切换，旧候选已失效！' };
+  }
+
+  if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || currentDraft.isWorkingDraft === false) {
+    return { valid: false, reason: '当前版本已是只读快照或定稿，禁止直接采纳写入！' };
+  }
+
+  if (currentDraft.id !== task.currentDraftId) {
+    return { valid: false, reason: '当前草稿已不是任务当前可编辑工作稿，禁止重复采纳！' };
+  }
+
+  // Validate each target block
+  for (const item of candidateGroup.items) {
+    const currentBlock = currentDraft.blocks.find((b) => b.id === item.targetBlockId);
+    if (!currentBlock) {
+      return {
+        valid: false,
+        reason: `目标段落（第${item.targetBlockOrder}段 [${item.targetBlockId}]）已在当前草稿中被删除，候选已失效！`,
+      };
+    }
+
+    if (currentBlock.content !== item.originalBlockContent) {
+      return {
+        valid: false,
+        reason: `基准正文已变更：目标段落（第${item.targetBlockOrder}段 [${item.targetBlockId}]）正文已被人工编辑修改，采纳候选将覆盖人工修改！已安全拦截。`,
+      };
+    }
+
+    const currentSeq =
+      typeof currentBlock.revisionSeq === 'number' && Number.isFinite(currentBlock.revisionSeq)
+        ? currentBlock.revisionSeq
+        : 0;
+    if (currentSeq !== item.originalRevisionSeq) {
+      return {
+        valid: false,
+        reason: `目标段落（第${item.targetBlockOrder}段 [${item.targetBlockId}]）修订版本号已递增，表明发生过其他修改，候选已失效！`,
+      };
+    }
+
+    const curRefIds = [...currentBlock.referencedFactIds].sort().join(',');
+    const origRefIds = [...item.originalReferencedFactIds].sort().join(',');
+    if (curRefIds !== origRefIds) {
+      return {
+        valid: false,
+        reason: `目标段落（第${item.targetBlockOrder}段 [${item.targetBlockId}]）事实引用关系已发生变动，候选已失效！`,
+      };
+    }
+  }
+
+  // Validate the completeness of the referencing blocks set (no added or omitted references)
+  const currentReferencingBlockIds = currentDraft.blocks
+    .filter(
+      (b) =>
+        (b.referencedFactIds || []).includes(candidateGroup.targetFactId) ||
+        (b.adoptedEvidences || []).some((e) => e.associatedFactId === candidateGroup.targetFactId)
+    )
+    .map((b) => b.id)
+    .sort()
+    .join(',');
+  const candidateBlockIds = [...candidateGroup.targetBlockIds].sort().join(',');
+  if (currentReferencingBlockIds !== candidateBlockIds) {
+    return {
+      valid: false,
+      reason: '当前草稿关联段落集合发生变动（存在新增或遗漏的引用段落），候选已失效！请重新生成。',
+    };
+  }
+
+  // Whole draft hash check: ensure other paragraphs were not modified
+  const currentDraftHash = computeDraftBlocksHash(currentDraft.blocks);
+  if (currentDraftHash !== candidateGroup.baseDraftContentHash) {
+    return {
+      valid: false,
+      reason: '草稿非目标段落已被人工编辑修改，整稿基准已发生变更，候选已失效！请重新生成。',
+    };
+  }
+
+  // Fact freshness check
+  const currentFact = task.facts.find((f) => f.id === candidateGroup.targetFactId);
+  const currentFactValue = (currentFact?.selectedConflictValue || currentFact?.value || '').trim();
+  if (
+    !currentFact ||
+    currentFactValue !== candidateGroup.toValue ||
+    currentFact.primaryEvidenceId !== candidateGroup.toEvidenceId
+  ) {
+    return {
+      valid: false,
+      reason: '目标事实最新核准数值或出处已再次变更，候选已失效！请重新生成。',
+    };
+  }
+
+  // Upstream approval context check
+  if (
+    candidateGroup.upstreamContext.factSnapshotConfirmedAt !== task.factSnapshot?.confirmedAt ||
+    (candidateGroup.upstreamContext.factSnapshotHash &&
+      task.factSnapshot?.hash &&
+      candidateGroup.upstreamContext.factSnapshotHash !== task.factSnapshot.hash)
+  ) {
+    return {
+      valid: false,
+      reason: '任务事实核准版本已变更，候选已失效！请重新生成。',
+    };
+  }
+
+  if (
+    candidateGroup.upstreamContext.styleConfirmedAt !== task.styleSnapshot?.confirmedAt ||
+    (candidateGroup.upstreamContext.styleHash &&
+      task.styleSnapshot?.hash &&
+      candidateGroup.upstreamContext.styleHash !== task.styleSnapshot.hash)
+  ) {
+    return {
+      valid: false,
+      reason: '任务文风核准版本已变更，候选已失效！请重新生成。',
+    };
+  }
+
+  if (
+    candidateGroup.upstreamContext.outlineConfirmedAt !== task.outlineSnapshot?.confirmedAt ||
+    (candidateGroup.upstreamContext.outlineHash &&
+      task.outlineSnapshot?.hash &&
+      candidateGroup.upstreamContext.outlineHash !== task.outlineSnapshot.hash)
+  ) {
+    return {
+      valid: false,
+      reason: '任务大纲核准版本已变更，候选已失效！请重新生成。',
+    };
+  }
+
+  // Full re-check of eligibility
+  const eligibility = checkMultiParagraphFactRevisionEligibility(task, currentDraft, activeRole, {
+    targetFactId: candidateGroup.targetFactId,
+  });
+  if (!eligibility.eligible) {
+    return {
+      valid: false,
+      reason: `采纳校验失败：${eligibility.reason}`,
+    };
+  }
+
+  if (
+    !candidateGroup.contextFingerprint ||
+    candidateGroup.contextFingerprint !== getFactRevisionContext(task, currentDraft)
+  ) {
+    return {
+      valid: false,
+      reason: '正文、修订、引用、原文或审批上下文已变化，旧候选已失效，请重新生成。',
+    };
+  }
+
+  const regenerated = generateMultiParagraphFactRevisionCandidate(task, currentDraft, activeRole, {
+    targetFactId: candidateGroup.targetFactId,
+    runId: candidateGroup.runId,
+  });
+  if (!regenerated.candidateGroup) {
+    return { valid: false, reason: regenerated.reason || '多段落候选无法重新验证' };
+  }
+
+  const payload = ({ id: _id, createdAt: _time, ...c }: MultiParagraphFactRevisionCandidate) => c;
+  if (canonical(payload(candidateGroup)) !== canonical(payload(regenerated.candidateGroup))) {
+    return {
+      valid: false,
+      reason: '候选正文、目标事实或依据对照与当前可验证修订不一致，请重新生成。',
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Atomically adopts the multi-paragraph fact revision candidate group:
+ * 1. Archives old draft as historical snapshot with frozen old text, snapshot, and reviews
+ * 2. Creates a single new working draft with ONLY target blocks changed and updated snapshotMetadata
+ * 3. Initializes review records to empty, preserving old conclusions as source references
+ * 4. Writes a single consolidated atomic modification log with shared operation ID
+ * 5. Updates task.drafts and task.currentDraftId in a single atomic transaction
+ */
+export function acceptMultiParagraphFactRevisionCandidate(
+  task: Task,
+  currentDraft: DraftVersion | undefined,
+  candidateGroup: MultiParagraphFactRevisionCandidate,
+  activeRole: UserRole,
+  activeRunId?: string | null
+): MultiParagraphFactRevisionAcceptanceResult {
+  const validation = validateMultiParagraphFactRevisionAcceptance(
+    task,
+    currentDraft,
+    candidateGroup,
+    activeRole,
+    activeRunId
+  );
+  if (!validation.valid) {
+    return {
+      success: false,
+      reason: validation.reason || '采纳校验失败',
+    };
+  }
+
+  const draftToArchive = currentDraft!;
+
+  // 1. Archive previous draft as immutable historical snapshot
+  const archivedDraft: DraftVersion = {
+    ...JSON.parse(JSON.stringify(draftToArchive)),
+    isWorkingDraft: false,
+    isHistoricalSnapshot: true,
+    summary: draftToArchive.summary
+      ? `${draftToArchive.summary}（采纳事实多段落定向修订前系统自动归档历史快照）`
+      : '采纳事实多段落定向修订前系统自动归档的历史快照',
+    frozenReviewComments: freezeReviewComments(task, draftToArchive),
+    ...freezeFactReviews(task, draftToArchive),
+  };
+
+  // 2. Build updated blocks for new working draft
+  const targetItemMap = new Map(candidateGroup.items.map((item) => [item.targetBlockId, item]));
+  const nextBlocks: ParagraphBlock[] = draftToArchive.blocks.map((b) => {
+    const item = targetItemMap.get(b.id);
+    if (item) {
+      const nextSeq =
+        (typeof b.revisionSeq === 'number' && Number.isFinite(b.revisionSeq) ? b.revisionSeq : 0) + 1;
+      return {
+        ...b,
+        content: item.revisedBlockContent,
+        revisionSeq: nextSeq,
+        updatedAt: new Date().toISOString(),
+        adoptedEvidences: b.adoptedEvidences ? JSON.parse(JSON.stringify(b.adoptedEvidences)) : undefined,
+      };
+    }
+    return JSON.parse(JSON.stringify(b));
+  });
+
+  const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳事实多段落定向修订)`;
+
+  // 3. Create brand-new working draft bound to the verified latest approved snapshot
+  const newWorkingDraft: DraftVersion = {
+    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    versionNumber: nextVersionNumber,
+    createdAt: new Date().toISOString(),
+    author: activeRole,
+    summary: `基于【${draftToArchive.versionNumber}】归档后采纳事实【${candidateGroup.metric}】多段落（共${candidateGroup.items.length}段）定向修订生成的工作稿`,
+    blocks: nextBlocks,
+    isFinal: false,
+    isHistoricalSnapshot: false,
+    isWorkingDraft: true,
+    sourceDraftId: draftToArchive.id,
+    reviewBaselineIds: getReviewBaselineIds(task, draftToArchive),
+    snapshotMetadata: {
+      ...draftToArchive.snapshotMetadata!,
+      factSnapshot: JSON.parse(JSON.stringify(task.factSnapshot)),
+      styleSnapshot: JSON.parse(JSON.stringify(task.styleSnapshot)),
+      outlineSnapshot: JSON.parse(JSON.stringify(task.outlineSnapshot)),
+    },
+    auditRecords: [], // Cleared so new draft undergoes fresh audit gate check
+    factReviewRecords: [], // Initialized to empty, does NOT auto-sign "reviewed"
+    sourceFactReviewRecords: sourceFactReviews(draftToArchive), // Retained for provenance inspection
+  };
+
+  // 4. Build single consolidated atomic modification log
+  const modLog: ParagraphModificationLog = {
+    id: `MOD-LOG-${candidateGroup.id}`,
+    taskId: task.id,
+    draftId: newWorkingDraft.id,
+    blockId: candidateGroup.targetBlockIds.join(','),
+    blockOrder: candidateGroup.items[0]?.targetBlockOrder,
+    timestamp: new Date().toISOString(),
+    source: 'fact_change_revision' as const,
+    sourceDescription: `事实【${candidateGroup.metric}】多段落定向修订（共影响${candidateGroup.items.length}段：${candidateGroup.items.map((i) => `第${i.targetBlockOrder}段`).join('、')}）：${candidateGroup.fromValue}${candidateGroup.unit} → ${candidateGroup.toValue}${candidateGroup.unit}；出处 ${candidateGroup.fromEvidenceId} → ${candidateGroup.toEvidenceId}；来源版本 ${draftToArchive.id}`,
+    beforeContent: candidateGroup.items.map((i) => `[第${i.targetBlockOrder}段] ${i.originalBlockContent}`).join('\n\n'),
+    afterContent: candidateGroup.items.map((i) => `[第${i.targetBlockOrder}段] ${i.revisedBlockContent}`).join('\n\n'),
+    affectedBlocks: candidateGroup.items.map((i) => ({
+      blockId: i.targetBlockId,
+      blockOrder: i.targetBlockOrder,
+      sectionTitle: i.targetSectionTitle,
+      beforeContent: i.originalBlockContent,
+      afterContent: i.revisedBlockContent,
+      appliedRevisionSeq: nextBlocks.find((b) => b.id === i.targetBlockId)!.revisionSeq,
+    })),
+    affectedBlockIds: candidateGroup.targetBlockIds,
+    targetFactId: candidateGroup.targetFactId,
+    metric: candidateGroup.metric,
+    fromValue: candidateGroup.fromValue,
+    toValue: candidateGroup.toValue,
+    unit: candidateGroup.unit,
+    fromEvidenceId: candidateGroup.fromEvidenceId,
+    toEvidenceId: candidateGroup.toEvidenceId,
+    sourceDraftId: draftToArchive.id,
+    status: 'applied' as const,
+    undoUnavailableReason: '本次为多段落一致修订且同时更新整稿依据，禁止单独撤销正文；请通过版本历史恢复完整正文与依据。',
+  };
+
+  // 5. Update task atomically
+  const updatedDrafts = [
+    newWorkingDraft,
+    ...task.drafts.map((d) => (d.id === draftToArchive.id ? archivedDraft : d)),
+  ];
+
+  const updatedTask: Task = {
+    ...task,
+    drafts: updatedDrafts,
+    currentDraftId: newWorkingDraft.id,
+    isFinalized: false,
+    status: '起草中',
+    updatedAt: new Date().toISOString(),
+    modificationLogs: [modLog, ...(task.modificationLogs || [])].slice(0, 20),
+  };
+
+  return {
+    success: true,
+    updatedTask,
+    newWorkingDraft,
+    archivedDraft,
+    modificationLog: modLog,
   };
 }

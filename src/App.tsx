@@ -127,7 +127,18 @@ export function App() {
     setCurrentTaskId(newTask.id);
   };
 
-  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review') => {
+  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision') => {
+    if (scenario === 'multi_paragraph_revision') {
+      const existing = tasks.find((t) => t.id === 'TASK-DEMO-MULTI-PARAGRAPH-REVISION');
+      if (existing) {
+        setCurrentTaskId(existing.id);
+        return;
+      }
+      const preset = createPresetTask('multi_paragraph_revision');
+      setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
+      setCurrentTaskId(preset.id);
+      return;
+    }
     const preset = createPresetTask(scenario);
     setTasks((prev) => [preset, ...prev.filter((t) => t.id !== preset.id)]);
     setCurrentTaskId(preset.id);
