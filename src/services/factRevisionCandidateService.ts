@@ -54,6 +54,14 @@ function metricValueOffset(text: string, metric: string, value: string, unit: st
   const matches = [...text.matchAll(re)];
   if (matches.length !== 1) return undefined;
   const match = matches[0];
+  const before = text.slice(0, match.index!);
+  const sentenceStart = Math.max(...['。', '；', ';', '！', '!', '？', '?', '\n'].map(mark => before.lastIndexOf(mark))) + 1;
+  const governingPrefix = text.slice(sentenceStart, match.index!);
+  // Do not turn a planned, predicted, conditional or negated occurrence of an
+  // actual-performance metric into evidence for an accomplished quantity.
+  if (/(?:计划|规划|预计|预期|预测|预估|目标|预算|拟|将|力争|争取|希望|建议|应|需|须|假设|假定|如果|若|测算|估计|可能|或许|未|没有|不|非|无|至多|至少|超过|近似|约)/.test(governingPrefix)) {
+    return undefined;
+  }
   return match.index! + match[0].indexOf(value, metric.length);
 }
 

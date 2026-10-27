@@ -259,5 +259,17 @@ await check('18 评审回归：完整单位终止边界拒绝速率和复合单�
     reject(source.task, source.draft, `原文复合单位${suffix}`);
   }
 });
+await check('19 评审回归：计划、预测、目标、否定等限定不能冒充同一实绩指标', () => {
+  for (const qualifier of ['计划', '预计', '预期', '目标是', '力争', '拟', '未能', '尚未', '没有', '并非', '尚无', '不会', '假定', '估计', '可能']) {
+    const { task, draft } = fixture(); task.snippets[0].text = `2026年1至9月，${qualifier}累计完成重点任务120项。`;
+    task.documents[0].content += '\n' + task.snippets[0].text; approve(task);
+    reject(task, draft, `原文限定语${qualifier}`);
+    const body = fixture(); body.draft.blocks[0].content = `2026年1至9月，${qualifier}累计完成重点任务128项。`;
+    assert.equal(generateFactRevisionCandidate(body.task, body.draft, 'BLK-01', '主笔甲').success, false, qualifier);
+  }
+  const { task, draft } = fixture(); task.snippets[0].text = '计划在2026年1至9月，累计完成重点任务120项。';
+  task.documents[0].content += '\n' + task.snippets[0].text; approve(task);
+  reject(task, draft, '限定语在前一分句也不能忽略');
+});
 if (failures.length) throw new Error(`${failures.length} Codex groups failed: ${failures.join(', ')}`);
-console.log('Task23 Codex receipt: all 18 groups passed');
+console.log('Task23 Codex receipt: all 19 groups passed');
