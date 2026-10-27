@@ -1,4 +1,4 @@
-import { Task, SourceDocument, EvidenceSnippet, Fact, StyleRule, OutlineSection, DraftVersion, ReviewComment } from '../types';
+import { Task, SourceDocument, EvidenceSnippet, Fact, StyleRule, OutlineSection, DraftVersion, ReviewComment, ParagraphBlock } from '../types';
 
 export const INITIAL_DOCUMENTS: SourceDocument[] = [
   {
@@ -320,7 +320,10 @@ export const INITIAL_OUTLINE: OutlineSection[] = [
   },
 ];
 
-export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review'): Task {
+export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision'): Task {
+  if (scenario === 'multi_paragraph_revision') {
+    return createMultiParagraphRevisionDemoTask();
+  }
   const baseTask: Task = {
     id: `TASK-${Date.now().toString(36)}`,
     title: '某单位2026年前三季度工作总结',
@@ -615,4 +618,115 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   ];
 
   return baseTask;
+}
+
+export function createMultiParagraphRevisionDemoTask(): Task {
+  const task = createPresetTask('under_review');
+  task.id = 'TASK-DEMO-MULTI-PARAGRAPH-REVISION';
+  task.title = '某单位2026年前三季度工作总结 (单事实多段落修订演示)';
+  task.docType = '工作总结';
+  task.usage = '向单位主要负责人及上级主管机关作前三季度工作推进情况专题汇报';
+  task.audience = '单位主要领导、班子成员及各科室负责人';
+  task.startDate = '2026-01-01';
+  task.endDate = '2026-09-30';
+  task.targetWordCount = 3000;
+  task.primaryAuthor = '主笔甲';
+  task.currentStage = 'material_fact';
+  task.status = '事实待确认';
+
+  // Draft blocks: BLK-01 and BLK-02 both reference FACT-01 (128 items in frozen baseline)
+  // BLK-03, BLK-04, BLK-05 serve as control blocks that must NOT be modified
+  const multiDraftBlocks: ParagraphBlock[] = [
+    {
+      id: 'BLK-01',
+      sectionId: 'SEC-01',
+      order: 1,
+      content: '2026年1至9月，全系统紧紧围绕年度核心工作目标，强化统筹联动与机制创新。截至9月末，累计完成重点任务128项，各项既定序时指标平稳达成，重点攻坚成效显著。',
+      referencedFactIds: ['FACT-01'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-02',
+      sectionId: 'SEC-01',
+      order: 2,
+      content: '在重点任务督查督办方面，对照年度综合攻坚清单全面核查推进，截至9月末累计完成重点任务128项，均已录入全流程闭环台账并实行动态销号。',
+      referencedFactIds: ['FACT-01'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-03',
+      sectionId: 'SEC-01',
+      order: 3,
+      content: '在队伍履职能力建设方面，立足基层实际需要，深化分级分类专业实操培养。前三季度累计组织专题培训16场，累计参训800人次，有效增强了骨干人员政策理解与规范执行水平。',
+      referencedFactIds: ['FACT-02', 'FACT-03'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-04',
+      sectionId: 'SEC-01',
+      order: 4,
+      content: '在大兴调查研究方面，紧扣一线重难点诉求，深入基层点位听取呼声，累计开展专题调研12次，推动形成针对性制度改进与业务流程优化举措。',
+      referencedFactIds: ['FACT-04'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-05',
+      sectionId: 'SEC-02',
+      order: 5,
+      content: '在看到成绩的同时，对照高质量履职标准仍存在部分短板：一是跨科室常态化沟通机制仍待完善；二是服务满意度虽然定性感受有所提升，但目前尚缺少定量数据测评体系支撑，精准施策能力仍显不足。',
+      referencedFactIds: ['FACT-06'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-06',
+      sectionId: 'SEC-03',
+      order: 6,
+      content: '下一步，将聚焦四季度冲刺攻坚：一是锚定未结项关键指标持续发力，确保全面达成年度目标；二是常态化深化专题培训与精准调研成果转化；三是加紧补齐量化测评机制短板，全面提升服务质效与群众获得感。',
+      referencedFactIds: [],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+  ];
+
+  // Frozen initial draft with 128 items baseline
+  const frozenFactSnapshot = JSON.parse(JSON.stringify(task.factSnapshot));
+  const frozenInitialDraft: DraftVersion = {
+    id: 'DRAFT-MULTI-v1.0',
+    versionNumber: 'v1.0 (多段引用审阅快照)',
+    createdAt: '2026-10-07T09:15:00.000Z',
+    author: '主笔甲',
+    summary: '包含双段引用重点任务指标的初稿版本，已完成128项基准冻结',
+    blocks: multiDraftBlocks,
+    isWorkingDraft: true,
+    isHistoricalSnapshot: false,
+    isFinal: false,
+    snapshotMetadata: {
+      taskTitle: task.title,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      targetWordCount: task.targetWordCount,
+      factSnapshot: frozenFactSnapshot,
+      styleSnapshot: task.styleSnapshot,
+      outlineSnapshot: task.outlineSnapshot,
+      outlineSections: JSON.parse(JSON.stringify(task.outline)),
+    },
+  };
+
+  task.drafts = [frozenInitialDraft];
+  task.currentDraftId = frozenInitialDraft.id;
+
+  // Upstream task facts: FACT-01 is reset to conflict_pending (120 vs 128)
+  // allowing user to experience the full journey: adjudicate to 120 -> confirm facts -> confirm outline -> drafting candidate
+  task.facts = JSON.parse(JSON.stringify(INITIAL_FACTS));
+  task.facts[0].status = 'pending';
+  task.facts[0].selectedConflictValue = undefined;
+  task.facts[0].conflictResolutionReason = undefined;
+
+  // Clear task-level snapshots so user must adjudicate and confirm upstream before generating candidate
+  task.factSnapshot = undefined;
+  task.outlineConfirmed = false;
+  task.outlineSnapshot = undefined;
+
+  task.modificationLogs = [];
+
+  return task;
 }

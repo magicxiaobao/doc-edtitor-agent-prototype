@@ -288,6 +288,66 @@ export interface FactRevisionCandidate {
   explanation: string;
 }
 
+export interface ParagraphRevisionCandidateItem {
+  targetBlockId: string;
+  targetBlockOrder: number;
+  targetSectionTitle?: string;
+  originalBlockContent: string;
+  originalRevisionSeq: number;
+  originalReferencedFactIds: string[];
+  revisedBlockContent: string;
+  diffExplanation?: string;
+}
+
+export interface MultiParagraphFactRevisionCandidate {
+  id: string;                          // 候选组ID (e.g. FACT-REV-GROUP-...)
+  runId: string;                       // 关联运行ID
+  taskId: string;                      // 关联任务ID
+  sourceDraftId: string;               // 来源工作稿ID
+  sourceDraftVersionNumber?: string;   // 来源版本号
+  targetFactId: string;                // 目标事实ID
+  metric: string;
+  unit: string;
+  fromValue: string;
+  toValue: string;
+  period: string;
+
+  fromEvidenceId?: string;
+  fromDocName: string;
+  fromLocation?: string;
+
+  toEvidenceId?: string;
+  toDocName: string;
+  toLocation?: string;
+
+  items: ParagraphRevisionCandidateItem[];
+  targetBlockIds: string[];
+
+  baseDraftContentHash: string;
+  contextFingerprint: string;
+
+  upstreamContext: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
+
+  createdAt: string;
+  explanation: string;
+}
+
+export interface MultiParagraphRevisionLogItem {
+  blockId: string;
+  blockOrder?: number;
+  sectionTitle?: string;
+  beforeContent: string;
+  afterContent: string;
+  appliedRevisionSeq?: number;
+}
+
 export interface AuditRecord {
   issueId: string;
   status: 'unresolved' | 'accepted' | 'ignored';
@@ -358,6 +418,16 @@ export interface ParagraphModificationLog {
   postAdoptionCommentState?: ReviewCommentSnapshotAfterChange; // 采纳后意见状态存证（核验后续是否被再次编辑、回复或重绑）
   appliedBlockUpdatedAt?: string;      // 采纳写入时目标段落的 updatedAt 时间戳（核验后续正文是否被再次修改）
   appliedRevisionSeq?: number;         // 采纳时的修改序号
+  affectedBlocks?: MultiParagraphRevisionLogItem[]; // 多段落整体修订时，记录全部段落明细
+  affectedBlockIds?: string[];         // 多段落关联全部段落ID列表
+  targetFactId?: string;               // 关联事实ID
+  metric?: string;                     // 指标名称
+  fromValue?: string;                  // 修改前事实值
+  toValue?: string;                    // 修改后事实值
+  unit?: string;                       // 指标单位
+  fromEvidenceId?: string;             // 来源旧出处
+  toEvidenceId?: string;               // 目标新出处
+  sourceDraftId?: string;              // 来源草稿ID
   status: 'applied' | 'undone';        // 状态：已应用 / 已安全撤销
   undoneAt?: string;                   // 撤销时间
   undoneBy?: string;                   // 撤销操作人
