@@ -3,6 +3,9 @@ import {
   DraftVersion,
   ParagraphBlock,
   FactItemSnapshot,
+  FactSnapshot,
+  StyleSnapshot,
+  OutlineSnapshot,
   FactRevisionCandidate,
   UserRole,
 } from '../types';
@@ -65,6 +68,32 @@ function canonical(value: unknown): string {
 function semanticFact(item: FactItemSnapshot) {
   const { capturedAt: _time, ...provenance } = item.provenance || {};
   return { ...item, provenance: item.provenance ? provenance : undefined };
+}
+
+const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(v => typeof v === 'string');
+function validFactBasis(snapshot: FactSnapshot | undefined): snapshot is FactSnapshot {
+  return Boolean(snapshot && typeof snapshot.hash === 'string' && snapshot.hash &&
+    typeof snapshot.confirmedAt === 'string' && snapshot.confirmedAt && strings(snapshot.factIds) &&
+    Array.isArray(snapshot.items) && snapshot.items.length && snapshot.items.every(item => item &&
+      ['factId', 'metric', 'value', 'unit', 'period', 'metricScope', 'primaryEvidenceId'].every(
+        field => typeof (item as unknown as Record<string, unknown>)[field] === 'string') &&
+      (item.selectedConflictValue === undefined || typeof item.selectedConflictValue === 'string') &&
+      item.provenance && ['evidenceId', 'sourceDocId', 'sourceDocName', 'text'].every(
+        field => typeof (item.provenance as unknown as Record<string, unknown>)[field] === 'string') &&
+      ['location', 'period', 'capturedAt'].every(field => {
+        const value = (item.provenance as unknown as Record<string, unknown>)[field];
+        return value === undefined || typeof value === 'string';
+      })));
+}
+function validStyleBasis(snapshot: StyleSnapshot | undefined): snapshot is StyleSnapshot {
+  return Boolean(snapshot && typeof snapshot.hash === 'string' && snapshot.hash &&
+    typeof snapshot.confirmedAt === 'string' && snapshot.confirmedAt && strings(snapshot.activeRuleIds));
+}
+function validOutlineBasis(snapshot: OutlineSnapshot | undefined): snapshot is OutlineSnapshot {
+  return Boolean(snapshot && typeof snapshot.hash === 'string' && snapshot.hash &&
+    typeof snapshot.confirmedAt === 'string' && snapshot.confirmedAt && Array.isArray(snapshot.sections) &&
+    snapshot.sections.every(s => s && typeof s.sectionId === 'string' && typeof s.title === 'string' &&
+      Number.isFinite(s.suggestedWordCount) && strings(s.assignedFactIds)));
 }
 
 export function getFactRevisionContext(task: Task, draft: DraftVersion): string {
@@ -220,7 +249,9 @@ export function checkFactRevisionEligibility(
   const draftStyleSnap = currentDraft.snapshotMetadata?.styleSnapshot;
   const draftOutlineSnap = currentDraft.snapshotMetadata?.outlineSnapshot;
 
-  if (!draftFactSnap || !Array.isArray(draftFactSnap.items) || !draftStyleSnap || !draftOutlineSnap) {
+  if (!validFactBasis(draftFactSnap) || !validStyleBasis(draftStyleSnap) || !validOutlineBasis(draftOutlineSnap) ||
+      !Array.isArray(currentDraft.snapshotMetadata?.outlineSections) ||
+      !currentDraft.snapshotMetadata.outlineSections.every(s => s && typeof s.id === 'string' && typeof s.title === 'string')) {
     return {
       eligible: false,
       reason: '草稿缺少完整冻结依据基准（事实快照、文风快照或大纲快照缺失），无法验证依据一致性。',
@@ -228,7 +259,7 @@ export function checkFactRevisionEligibility(
   }
 
   // 5. Task upstream formal confirmations
-  if (!task.factSnapshot || !Array.isArray(task.factSnapshot.items)) {
+  if (!validFactBasis(task.factSnapshot)) {
     return {
       eligible: false,
       reason: '任务事实清单尚未正式核准确认，请先前往事实清单完成核准。',
@@ -236,7 +267,7 @@ export function checkFactRevisionEligibility(
     };
   }
 
-  if (!task.styleConfirmed || !task.styleSnapshot) {
+  if (!task.styleConfirmed || !validStyleBasis(task.styleSnapshot)) {
     return {
       eligible: false,
       reason: '任务文风规范尚未正式核准确认，请先核准文风。',
@@ -244,7 +275,7 @@ export function checkFactRevisionEligibility(
     };
   }
 
-  if (!task.outlineConfirmed || !task.outlineSnapshot) {
+  if (!task.outlineConfirmed || !validOutlineBasis(task.outlineSnapshot)) {
     return {
       eligible: false,
       reason: '任务大纲结构尚未正式核准确认，请先核准大纲。',

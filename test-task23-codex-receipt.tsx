@@ -227,5 +227,15 @@ await check('15 正文或原文明示的统计期间不符、片段不属于材�
   { const { task, draft } = fixture(); task.documents[0].content = '这份材料没有该指标或对应原文。';
     reject(task, draft, '原文片段不属于当前来源材料'); }
 });
+await check('16 旧稿局部快照字段缺失或损坏时明确拒绝，不抛异常或伪造完整基准', () => {
+  const mutations: ((t: Task, d: DraftVersion) => void)[] = [
+    (_t, d) => { Reflect.deleteProperty(d.snapshotMetadata!, 'outlineSections'); },
+    t => { Reflect.deleteProperty(t.factSnapshot!, 'factIds'); },
+    (_t, d) => { Object.assign(d.snapshotMetadata!.factSnapshot!.items[0].provenance!, { text: { broken: true } }); },
+    t => { Object.defineProperty(t.factSnapshot!.items, 0, { value: null }); },
+  ];
+  for (const mutate of mutations) { const { task, draft } = fixture(); mutate(task, draft);
+    assert.doesNotThrow(() => reject(task, draft, '部分基准不完整必须安全拒绝')); }
+});
 if (failures.length) throw new Error(`${failures.length} Codex groups failed: ${failures.join(', ')}`);
-console.log('Task23 Codex receipt: all 15 groups passed');
+console.log('Task23 Codex receipt: all 16 groups passed');
