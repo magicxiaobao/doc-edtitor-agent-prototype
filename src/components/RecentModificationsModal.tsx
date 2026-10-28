@@ -110,6 +110,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                 (item.blockOrder === undefined || typeof item.blockOrder === 'number'))
                 ? log.affectedBlocks : [];
               const isGroup = affected.length > 1;
+              const isMultiFactGroup = Array.isArray(log.affectedFacts) && log.affectedFacts.length > 1;
               const validation = validateUndoEligibility(task, currentDraft, log.id, activeRole);
               const canUndo = validation.canUndo;
               const disabledReason = validation.reason || '';
@@ -134,11 +135,15 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-slate-900 flex items-center gap-1">
-                        {isGroup ? `整体修订 · 共${affected.length}段` : `第 ${log.blockOrder} 段`}
+                        {isMultiFactGroup
+                          ? `成组修订 · 2项事实、${affected.length || (log.affectedBlockIds || []).length}段`
+                          : isGroup
+                          ? `整体修订 · 共${affected.length}段`
+                          : `第 ${log.blockOrder} 段`}
                       </span>
                       {log.source === 'fact_change_revision' ? (
                         <span data-testid={`badge-log-source-${log.id}`} className="bg-indigo-50 text-indigo-900 border border-indigo-200 px-1.5 rounded">
-                          {isGroup ? '多段落事实修订' : '事实定向修订'}
+                          {isMultiFactGroup ? '两项事实成组修订' : isGroup ? '多段落事实修订' : '事实定向修订'}
                         </span>
                       ) : log.source === 'material_supplementation_fine_tuned' || (log.isMaterialSupplementation && log.isFineTuned) ? (
                         <span
@@ -226,6 +231,50 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   {/* Snippet Before and After */}
                   {log.source === 'fact_change_revision' && (
                     <p className="mt-2 p-2 rounded bg-indigo-50 text-indigo-950 whitespace-pre-wrap break-words">{log.sourceDescription}</p>
+                  )}
+                  {Array.isArray(log.affectedFacts) && log.affectedFacts.length > 0 && (
+                    <div className="mt-2.5 p-2.5 rounded bg-sky-50/70 border border-sky-200 text-xs space-y-2">
+                      <div className="font-semibold text-sky-950 flex items-center justify-between">
+                        <span>两项事实前后数值与出处留痕明细（共 {log.affectedFacts.length} 项事实）：</span>
+                        <span className="text-2xs text-sky-700 font-normal">原子绑定最新核准快照</span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {log.affectedFacts.map((fact) => (
+                          <div
+                            key={fact.factId}
+                            data-testid={`log-affected-fact-${fact.factId}`}
+                            className="p-2 bg-white rounded border border-sky-200 space-y-1 shadow-2xs"
+                          >
+                            <div className="font-bold text-slate-800 flex items-center justify-between">
+                              <span>【{fact.metric}】</span>
+                              <span className="text-2xs font-mono text-slate-400">[{fact.factId}]</span>
+                            </div>
+                            <div className="text-xs">
+                              <span className="text-slate-500 line-through mr-1 font-mono">
+                                {fact.fromValue}{fact.unit}
+                              </span>
+                              <span className="text-sky-700 font-mono font-bold">
+                                → {fact.toValue}{fact.unit}
+                              </span>
+                              {fact.period && <span className="text-2xs text-slate-500 ml-1.5">（期间：{fact.period}）</span>}
+                            </div>
+                            <div className="text-2xs text-slate-600 space-y-0.5">
+                              <div>
+                                旧依据：{fact.fromDocName || '未记录'}（{fact.fromLocation || '未记录'}）
+                              </div>
+                              <div>
+                                新依据：<span className="text-sky-800 font-medium">{fact.toDocName || '最新出处'}（{fact.toLocation || '最新定位'}）</span>
+                              </div>
+                              {fact.referencingBlockIds && fact.referencingBlockIds.length > 0 && (
+                                <div className="text-slate-400">
+                                  关联段落：{fact.referencingBlockIds.join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                   {isGroup && (
                     <details className="mt-2 rounded border border-indigo-200 p-2">

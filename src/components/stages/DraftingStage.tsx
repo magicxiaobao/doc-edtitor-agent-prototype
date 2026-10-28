@@ -18,9 +18,14 @@ import {
   AdoptedEvidenceRecord,
   ReviewNavigationIntent,
   FactRevisionCandidate,
-  MultiParagraphFactRevisionCandidate
+  MultiParagraphFactRevisionCandidate,
+  MultiFactGroupRevisionCandidate
 } from '../../types';
-import { acceptFactRevisionCandidate, acceptMultiParagraphFactRevisionCandidate } from '../../services/factRevisionCandidateService';
+import {
+  acceptFactRevisionCandidate,
+  acceptMultiParagraphFactRevisionCandidate,
+  acceptMultiFactGroupRevisionCandidate,
+} from '../../services/factRevisionCandidateService';
 import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -885,6 +890,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return { success: true };
     } catch (err: any) {
       return { success: false, reason: err.message || '采纳多段落修订异常' };
+    }
+  };
+
+  const handleAcceptMultiFactGroupRevision = (candidateGroup: MultiFactGroupRevisionCandidate, activeRunId: string) => {
+    try {
+      const res = acceptMultiFactGroupRevisionCandidate(task, currentDraft, candidateGroup, activeRole, activeRunId);
+      if (!res.success || !res.updatedTask) {
+        return { success: false, reason: res.reason || '采纳多事实成组修订失败' };
+      }
+      onUpdateTask(res.updatedTask);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, reason: err.message || '采纳多事实成组修订异常' };
     }
   };
 
@@ -4093,6 +4111,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onRevokeReviewRecord={handleRevokeReviewRecord}
         onAcceptFactRevision={handleAcceptFactRevision}
         onAcceptMultiParagraphFactRevision={handleAcceptMultiParagraphFactRevision}
+        onAcceptMultiFactGroupRevision={handleAcceptMultiFactGroupRevision}
         initialBlockId={impactFocusBlockId}
       />
     </div>

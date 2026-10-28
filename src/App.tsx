@@ -127,7 +127,7 @@ export function App() {
     setCurrentTaskId(newTask.id);
   };
 
-  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision') => {
+  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision') => {
     if (scenario === 'multi_paragraph_revision') {
       const existing = tasks.find((t) => t.id === 'TASK-DEMO-MULTI-PARAGRAPH-REVISION');
       if (existing) {
@@ -135,6 +135,17 @@ export function App() {
         return;
       }
       const preset = createPresetTask('multi_paragraph_revision');
+      setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
+      setCurrentTaskId(preset.id);
+      return;
+    }
+    if (scenario === 'multi_fact_group_revision') {
+      const existing = tasks.find((t) => t.id === 'TASK-DEMO-MULTI-FACT-GROUP-REVISION');
+      if (existing) {
+        setCurrentTaskId(existing.id);
+        return;
+      }
+      const preset = createPresetTask('multi_fact_group_revision');
       setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
       setCurrentTaskId(preset.id);
       return;

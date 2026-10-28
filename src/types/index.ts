@@ -339,6 +339,62 @@ export interface MultiParagraphFactRevisionCandidate {
   explanation: string;
 }
 
+export interface FactRevisionItem {
+  factId: string;
+  metric: string;
+  unit: string;
+  period: string;
+  fromValue: string;
+  toValue: string;
+  fromEvidenceId?: string;
+  fromDocName: string;
+  fromLocation?: string;
+  toEvidenceId?: string;
+  toDocName: string;
+  toLocation?: string;
+  referencingBlockIds: string[];
+}
+
+export interface MultiFactGroupRevisionCandidate {
+  id: string;                          // 候选组ID (e.g. FACT-GROUP-REV-...)
+  runId: string;                       // 关联运行ID
+  taskId: string;                      // 关联任务ID
+  sourceDraftId: string;               // 来源工作稿ID
+  sourceDraftVersionNumber?: string;   // 来源版本号
+  facts: FactRevisionItem[];           // 本批必须有且仅有2项事实
+  targetFactIds: string[];             // 目标事实ID列表 [factId1, factId2]
+  items: ParagraphRevisionCandidateItem[]; // 全部关联段落（按order排序）
+  targetBlockIds: string[];            // 全部关联段落稳定ID
+  baseDraftContentHash: string;
+  contextFingerprint: string;
+  upstreamContext: {
+    factSnapshotConfirmedAt?: string;
+    factSnapshotHash?: string;
+    styleConfirmedAt?: string;
+    styleHash?: string;
+    outlineConfirmedAt?: string;
+    outlineHash?: string;
+  };
+  createdAt: string;
+  explanation: string;
+}
+
+export interface FactRevisionLogItem {
+  factId: string;
+  metric: string;
+  unit: string;
+  period?: string;
+  fromValue: string;
+  toValue: string;
+  fromEvidenceId?: string;
+  fromDocName?: string;
+  fromLocation?: string;
+  toEvidenceId?: string;
+  toDocName?: string;
+  toLocation?: string;
+  referencingBlockIds?: string[];
+}
+
 export interface MultiParagraphRevisionLogItem {
   blockId: string;
   blockOrder?: number;
@@ -420,7 +476,9 @@ export interface ParagraphModificationLog {
   appliedRevisionSeq?: number;         // 采纳时的修改序号
   affectedBlocks?: MultiParagraphRevisionLogItem[]; // 多段落整体修订时，记录全部段落明细
   affectedBlockIds?: string[];         // 多段落关联全部段落ID列表
-  targetFactId?: string;               // 关联事实ID
+  affectedFacts?: FactRevisionLogItem[]; // 多事实成组修订时，记录各事实前后值、出处及关联段落明细
+  targetFactIds?: string[];            // 多事实关联ID列表
+  targetFactId?: string;               // 关联事实ID（单事实修订时保留）
   metric?: string;                     // 指标名称
   fromValue?: string;                  // 修改前事实值
   toValue?: string;                    // 修改后事实值

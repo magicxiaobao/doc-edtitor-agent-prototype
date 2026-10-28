@@ -880,3 +880,98 @@ npm run build
 - `npm run build` 成功，JS约1222.55kB，保留既有大包提示；`git diff --check`通过。未修改依赖或锁文件，没有引入新存储框架。
 
 **证据边界**：本节均为代码、自动化及JSDOM组件证据；Task24没有本轮云浏览器、真实复制、独立屏幕阅读器或桌面Word/WPS实测。必须PR最新HEAD review通过、合并后等用户通知AI Studio同步，再真实验收多段预览/取消/采纳、完整日志、冻结出处、切换与#82。#83/#82保持Open，#57继续Open，Word/WPS为NOT_RUN。#40不重做。此前Task23同步后限定云浏览器及#79收尾已在#80/#79记录completed；上文14.7的Open为历史阶段记录。
+
+---
+
+## 16. 任务25实施记录：多事实成组定向修订（第一批：两项事实、关联段落互不重叠）
+
+- **起始基线 SHA**：`57a8188418c3ad9e3e980449ea191f5e769d11b3`
+- **建议分支**：`feat/task25-multi-fact-group-revision`
+- **交付目标**：当当前工作稿有且仅有两项事实发生受支持的数值变化，且两项事实各自关联的段落集合互不重叠时，生成一份完整的成组修订候选。主笔检查全部原文、修订候选和出处后，一次整体采纳，只产生一个新工作稿。
+
+### 16.1 核心业务边界与规则
+
+1. **两项事实与段落不重叠准入**：
+   - 当前工作稿存在且仅存在 2 项事实发生受支持的数值变化；
+   - 比较基准严格取自当前所选稿件自身的 `snapshotMetadata.factSnapshot`；
+   - 两项事实各自关联的段落集合交集严格为空（`{blocks1} ∩ {blocks2} === ∅`）；
+   - 若两项事实共同关联同一段落，或发生 3 项及以上事实变动，或仅有单项事实变动，整组安全阻断并提供明确说明与人工处理提示；
+   - 全稿事实严格一致性核验：非目标事实、核准集合、出处或其他依据存在未处理变化时整组阻断。
+2. **段落引用与未变事实保护**：
+   - 目标段落同时引用未变更事实（如 BLK-03 同时引用未变更的 FACT-03 800人次）时，确定性改写保留该未变数值、引用和依据不变；
+   - 目标段落若包含材料补写存证（`adoptedEvidences`），整组安全阻断。
+3. **确定性改写**：
+   - 沿用任务 23、24 确定性改写规则：明确指标归属、唯一旧值和完整单位、与冻结值一致、期间一致；
+   - 杜绝计划、预测、目标、条件、否定、小数子串、复合单位误改；任一事实或任一段落改写失败，整组立即拒绝，不产生部分结果。
+4. **单候选卡片与 Issue #82 防歧义**：
+   - 整组候选仅展示一份统一候选卡片（`multi-fact-group-revision-candidate-card`），展示基准版本、2项事实与去重后的受影响段落数；
+   - 独立呈现两项事实卡片（旧值/新值/单位/期间/旧出处/最新出处）；
+   - 独立呈现每个目标段落的章节、段号、稳定 Block ID，以及清晰分离的【原文】、【修订候选】与词法级删改标记（`[删: ...] [改: ...]`），杜绝数字连读歧义（如“1280项”）；
+   - 提供定位正文、查看本稿冻结出处与查看最新出处入口；仅提供“全部采纳并创建新工作稿”与取消操作。
+5. **原子更新与完整留痕**：
+   - 采纳时重新验证任务ID、工作稿ID、主笔角色、有效 `runId`、整稿内容哈希、所有关联段落、审批状态与候选推导一致性；
+   - 旧工作稿归档为不可变历史快照（`isHistoricalSnapshot: true`），冻结旧正文、旧依据与人工复核留痕；
+   - 只创建 1 个新工作稿（`currentDraftId` 原子切换），仅修改目标段落，每段 `revisionSeq` 递增 1，无关对照段落完全不变；
+   - 新工作稿一次性绑定最新完整事实快照，复核记录初始化为空列表，旧记录沉淀至 `sourceFactReviewRecords` 供追溯；
+   - 生成 1 条成组 `ParagraphModificationLog`，扩展 `affectedFacts` 结构化记录两项事实的明细，扩展 `affectedBlocks` 记录全部段落明细；标记禁止单段撤销；
+   - 最近修改记录弹窗完整呈现两项事实与全部受影响段落。
+6. **独立演示任务**：
+   - 新增独立演示任务 `TASK-DEMO-MULTI-FACT-GROUP-REVISION`（`multi_fact_group_revision`），显式创建与复用，不覆盖用户已有任务；
+   - 场景编排：旧稿冻结重点任务 128项（关联 BLK-01、BLK-02）、培训 16场（关联 BLK-03），BLK-03 同时包含未变更的 800人次；最新材料分别提供 120项、18场的有效原文；初始两项事实待裁决，支持从材料核验、裁决确认、大纲确认到生成候选、取消、整体采纳、查看修改日志与版本恢复的全流程操作。
+
+### 16.2 核心改动文件
+
+1. **`src/types/index.ts`**：
+   - 新增 `FactRevisionItem`、`MultiFactGroupRevisionCandidate`、`FactRevisionLogItem` 类型；
+   - `ParagraphModificationLog` 扩展 `affectedFacts?: FactRevisionLogItem[]` 和 `targetFactIds?: string[]`。
+2. **`src/services/factRevisionCandidateService.ts`**：
+   - 实现 `checkMultiFactGroupRevisionEligibility`：检查两项事实数值变更、段落无重叠、非目标事实严格一致、大纲文风审批有效；
+   - 实现 `generateMultiFactGroupRevisionCandidate`：多事实多段落确定性改写推导、Issue #82 词法级删改标记生成、出处比对；
+   - 实现 `validateMultiFactGroupRevisionAcceptance`：验证整稿上下文指纹、`runId`、所有段落、审批状态与改写一致性；
+   - 实现 `acceptMultiFactGroupRevisionCandidate`：原子创建单个新工作稿、归档旧工作稿、绑定最新快照、生成结构化成组日志。
+3. **`src/services/mockData.ts`**：
+   - 新增 `createMultiFactGroupRevisionDemoTask`（包含 SRC-07/EVD-07 18场新出处、两项事实冲突候选、自洽段落与冻结依据）；
+   - 在 `createPresetTask` 注册 `'multi_fact_group_revision'`。
+4. **`src/components/FactImpactModal.tsx`**：
+   - 新增两事实成组定向修订入口（顶部主入口与变动段落快捷入口）；
+   - 渲染成组修订候选卡片、2项事实对照卡片、各段落完整原文/候选/删改对比、定位正文、查看出处、取消与原子采纳回调。
+5. **`src/components/stages/DraftingStage.tsx`**：
+   - 接入 `handleAcceptMultiFactGroupRevision`，执行采纳并原子更新 Task。
+6. **`src/components/RecentModificationsModal.tsx`**：
+   - 识别成组修改日志，结构化展示两项事实前后数值及所有关联段落明细。
+7. **`src/components/Navbar.tsx` & `src/App.tsx`**：
+   - 导航栏增加演示场景入口“两事实成组定向修订 (120项/18场)”，显式创建/复用。
+8. **测试套件**：
+   - `test-task25.tsx`（12 组核心业务与真实组件交互测试 A~L）；
+   - `test-task25-receipt.tsx`（7 组实施方自测验收检查表）；
+   - `package.json` 添加 `"test:task25"` 与 `"test:task25:receipt"`。
+
+### 16.3 自动化测试与验证结果
+
+1. **任务25 专项自动化套件 (`test-task25.tsx`) 12 组全部通过 (100%)**：
+   - `[A]` 两事实分别关联1段、以及一项关联多段成功生成候选组（BLK-01/02改120项，BLK-03改18场）；
+   - `[B]` 共享段落重叠、三项事实变动、仅单项事实变动安全阻断；
+   - `[C]` BLK-03 未变事实（800人次）正文、引用与依据关系严格保持不变；
+   - `[D]` 单位/期间/口径变动、缺少冻结出处、含补写存证整组阻断；
+   - `[E]` 计划/预测/否定/偏离冻结值等确定性改写失败时整组阻断；
+   - `[F]` 审批失效、出处缺少原文、存在未裁决冲突或非主笔角色整组阻断；
+   - `[G]` 整体采纳一次性完成：只建 1 个新稿，仅目标段落 revisionSeq 递增，未变段落完全一致；
+   - `[H]` 新稿正确绑定最新快照，历史复核记录不作为有效留痕继承，核校门禁按新事实生效；
+   - `[I]` 修改日志结构化记录两项事实与关联段落，最近修改记录弹窗完整展示；
+   - `[J]` 禁止单段撤销；版本恢复后正文与依据完整回退，重新进行事实差异比较；
+   - `[K]` 真实组件测试：事实影响面板展示两事实统一入口、事实卡片、段落删改标记、出处查看、定位正文、整体采纳、取消与清理；
+   - `[L]` 独立演示任务真实交互：从两项事实材料核对、裁决、确认大纲、生成候选、取消后重新生成、整体采纳到查看完整日志。
+2. **任务25 交付验收测试 (`test-task25-receipt.tsx`) 7 组检查全部通过**。
+3. **既有回归套件无损检验**：
+   - Task 23 专项测试（`test-task23.tsx` 11 组全部通过）；
+   - Task 23 Codex 验收测试（`test-task23-codex-receipt.tsx` 19 组全部通过）；
+   - Task 24 专项测试（`test-task24.tsx` 9 组全部通过）；
+   - Task 24 交付验收测试（`test-task24-receipt.tsx` 8 组全部通过）；
+   - TypeScript 严格类型检查（`npm run typecheck`）0 错误；
+   - 生产环境构建打包（`compile_applet`）成功通过。
+
+### 16.4 证据边界与说明
+
+1. **实施方自测性质**：本报告记录实施方源码实现与自动化测试结果，不替代 Codex 独立验收；
+2. **物理设备限制**：受容器环境无真实桌面客户端及屏幕阅读器限制，真实屏幕阅读器及本地 Microsoft Word / WPS 桌面排版保持为 **NOT_RUN**（由 issue #57 跟踪）；
+3. **工作区保护**：工作区未跟踪的既有产物（如 `task23-fact-change-revision.*`、`task24-multi-paragraph-fact-revision.*`）保持完好，未覆盖未修改。

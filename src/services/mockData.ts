@@ -320,9 +320,12 @@ export const INITIAL_OUTLINE: OutlineSection[] = [
   },
 ];
 
-export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision'): Task {
+export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision'): Task {
   if (scenario === 'multi_paragraph_revision') {
     return createMultiParagraphRevisionDemoTask();
+  }
+  if (scenario === 'multi_fact_group_revision') {
+    return createMultiFactGroupRevisionDemoTask();
   }
   const baseTask: Task = {
     id: `TASK-${Date.now().toString(36)}`,
@@ -734,6 +737,287 @@ export function createMultiParagraphRevisionDemoTask(): Task {
   task.facts[0].conflictResolutionReason = undefined;
 
   // Clear task-level snapshots so user must adjudicate and confirm upstream before generating candidate
+  task.factSnapshot = undefined;
+  task.outlineConfirmed = false;
+  task.outlineSnapshot = undefined;
+
+  task.modificationLogs = [];
+
+  return task;
+}
+
+export function createMultiFactGroupRevisionDemoTask(): Task {
+  const task = createPresetTask('under_review');
+  task.id = 'TASK-DEMO-MULTI-FACT-GROUP-REVISION';
+  task.title = '某单位2026年前三季度工作总结 (两事实成组定向修订演示)';
+  task.docType = '工作总结';
+  task.usage = '向单位主要负责人及上级主管机关作前三季度工作推进情况专题汇报';
+  task.audience = '单位主要领导、班子成员及各科室负责人';
+  task.startDate = '2026-01-01';
+  task.endDate = '2026-09-30';
+  task.targetWordCount = 3000;
+  task.primaryAuthor = '主笔甲';
+  task.currentStage = 'material_fact';
+  task.status = '事实待确认';
+
+  // Add source doc SRC-07 and snippet EVD-07 for 18 training sessions
+  const newTrainDoc: SourceDocument = {
+    id: 'SRC-07',
+    name: '教育培训处前三季度培训汇总',
+    source: '教育培训处',
+    period: '2026年1-9月',
+    usage: 'current_fact',
+    parseStatus: 'parsed',
+    fileType: 'txt',
+    content: `第一段：立足业务实际与干部队伍履职需要，年初制定了专项业务培训规划方案。
+
+第二段：重点围绕履职规范、业务流程、信息化系统实操等开展分级分类培训。
+
+第三段：统筹师资力量，强化培训考评与效果跟踪，确保学以致用。
+
+第四段：2026年1至9月，组织专题培训18场。各期培训严谨高效，反响良好。`,
+    paragraphCount: 4,
+    wordCount: 156,
+  };
+
+  const newTrainSnippet: EvidenceSnippet = {
+    id: 'EVD-07',
+    sourceDocId: 'SRC-07',
+    docName: '教育培训处前三季度培训汇总',
+    location: '第4段',
+    period: '2026年1至9月',
+    text: '2026年1至9月，组织专题培训18场。',
+  };
+
+  task.documents = [
+    ...JSON.parse(JSON.stringify(INITIAL_DOCUMENTS)),
+    newTrainDoc,
+  ];
+
+  task.snippets = [
+    ...JSON.parse(JSON.stringify(INITIAL_SNIPPETS)),
+    newTrainSnippet,
+  ];
+
+  // Draft blocks:
+  // BLK-01 and BLK-02 reference FACT-01 (128 items in baseline)
+  // BLK-03 references FACT-02 (16 sessions in baseline) AND FACT-03 (800 attendees, untouched)
+  // BLK-04, BLK-05, BLK-06 are control blocks that must NOT be modified
+  const groupDraftBlocks: ParagraphBlock[] = [
+    {
+      id: 'BLK-01',
+      sectionId: 'SEC-01',
+      order: 1,
+      content: '2026年1至9月，全系统紧紧围绕年度核心工作目标，强化统筹联动与机制创新。截至9月末，累计完成重点任务128项，各项既定序时指标平稳达成，重点攻坚成效显著。',
+      referencedFactIds: ['FACT-01'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-02',
+      sectionId: 'SEC-01',
+      order: 2,
+      content: '在重点任务督查督办方面，对照年度综合攻坚清单全面核查推进，截至9月末累计完成重点任务128项，均已录入全流程闭环台账并实行动态销号。',
+      referencedFactIds: ['FACT-01'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-03',
+      sectionId: 'SEC-01',
+      order: 3,
+      content: '在队伍履职能力建设方面，立足基层实际需要，深化分级分类专业实操培养。2026年1至9月，组织专题培训16场，累计参训800人次，有效增强了骨干人员政策理解与规范执行水平。',
+      referencedFactIds: ['FACT-02', 'FACT-03'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-04',
+      sectionId: 'SEC-01',
+      order: 4,
+      content: '在大兴调查研究方面，紧扣一线重难点诉求，深入基层点位听取呼声，累计开展专题调研12次，推动形成针对性制度改进与业务流程优化举措。',
+      referencedFactIds: ['FACT-04'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-05',
+      sectionId: 'SEC-02',
+      order: 5,
+      content: '在看到成绩的同时，对照高质量履职标准仍存在部分短板：一是跨科室常态化沟通机制仍待完善；二是服务满意度虽然定性感受有所提升，但目前尚缺少定量数据测评体系支撑，精准施策能力仍显不足。',
+      referencedFactIds: ['FACT-06'],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+    {
+      id: 'BLK-06',
+      sectionId: 'SEC-03',
+      order: 6,
+      content: '下一步，将聚焦四季度冲刺攻坚：一是锚定未结项关键指标持续发力，确保全面达成年度目标；二是常态化深化专题培训与精准调研成果转化；三是加紧补齐量化测评机制短板，全面提升服务质效与群众获得感。',
+      referencedFactIds: [],
+      updatedAt: '2026-10-07T09:00:00.000Z',
+    },
+  ];
+
+  // Frozen initial draft with baseline facts:
+  // FACT-01: 128项 (科室乙汇总口径)
+  // FACT-02: 16场 (培训工作台账)
+  // FACT-03: 800人次 (培训工作台账)
+  // FACT-04: 12次 (专题调研情况汇报)
+  const baselineFactItems = [
+    {
+      factId: 'FACT-01',
+      metric: '累计完成重点任务',
+      value: '128',
+      unit: '项',
+      period: '2026年1至9月',
+      metricScope: '科室甲材料记载120项；科室乙汇总口径记载128项（统计范围相同）',
+      primaryEvidenceId: 'EVD-02',
+      selectedConflictValue: '128',
+      hasConflict: true,
+      provenance: {
+        evidenceId: 'EVD-02',
+        sourceDocId: 'SRC-02',
+        sourceDocName: '科室乙前三季度汇总',
+        location: '第2段',
+        text: '2026年1至9月，累计完成重点任务128项。统计范围与科室甲材料相同。',
+        period: '2026年1至9月',
+        capturedAt: '2026-10-07T09:00:00.000Z',
+      },
+    },
+    {
+      factId: 'FACT-02',
+      metric: '组织专题培训',
+      value: '16',
+      unit: '场',
+      period: '2026年1至9月',
+      metricScope: '全系统干部职工专题业务培训台账',
+      primaryEvidenceId: 'EVD-03',
+      hasConflict: false,
+      provenance: {
+        evidenceId: 'EVD-03',
+        sourceDocId: 'SRC-03',
+        sourceDocName: '培训工作台账',
+        location: '第5段',
+        text: '2026年1至9月，组织专题培训16场，累计参训800人次。',
+        period: '2026年1至9月',
+        capturedAt: '2026-10-07T09:00:00.000Z',
+      },
+    },
+    {
+      factId: 'FACT-03',
+      metric: '专题培训参训规模',
+      value: '800',
+      unit: '人次',
+      period: '2026年1至9月',
+      metricScope: '专题培训实名参训人次统计（注：单位为人次，非人数）',
+      primaryEvidenceId: 'EVD-03',
+      hasConflict: false,
+      provenance: {
+        evidenceId: 'EVD-03',
+        sourceDocId: 'SRC-03',
+        sourceDocName: '培训工作台账',
+        location: '第5段',
+        text: '2026年1至9月，组织专题培训16场，累计参训800人次。',
+        period: '2026年1至9月',
+        capturedAt: '2026-10-07T09:00:00.000Z',
+      },
+    },
+    {
+      factId: 'FACT-04',
+      metric: '开展专题调研',
+      value: '12',
+      unit: '次',
+      period: '2026年1至9月',
+      metricScope: '深入基层专项调研工作记录',
+      primaryEvidenceId: 'EVD-05',
+      hasConflict: false,
+      provenance: {
+        evidenceId: 'EVD-05',
+        sourceDocId: 'SRC-05',
+        sourceDocName: '专题调研情况汇报',
+        location: '第2段',
+        text: '2026年1至9月，开展专题调研12次。',
+        period: '2026年1至9月',
+        capturedAt: '2026-10-07T09:00:00.000Z',
+      },
+    },
+  ];
+
+  const frozenFactSnapshot = {
+    confirmedAt: '2026-10-07T09:00:00.000Z',
+    factIds: ['FACT-01', 'FACT-02', 'FACT-03', 'FACT-04'],
+    items: baselineFactItems,
+    hash: 'SNAPSHOT-HASH-FROZEN-MULTI-FACT-GROUP-128-16',
+  };
+
+  const frozenInitialDraft: DraftVersion = {
+    id: 'DRAFT-MULTI-FACT-v1.0',
+    versionNumber: 'v1.0 (两事实关联审阅快照)',
+    createdAt: '2026-10-07T09:15:00.000Z',
+    author: '主笔甲',
+    summary: '包含双事实关联（重点任务128项、培训16场）的初稿版本，已完成基准冻结',
+    blocks: groupDraftBlocks,
+    isWorkingDraft: true,
+    isHistoricalSnapshot: false,
+    isFinal: false,
+    snapshotMetadata: {
+      taskTitle: task.title,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      targetWordCount: task.targetWordCount,
+      factSnapshot: frozenFactSnapshot,
+      styleSnapshot: task.styleSnapshot,
+      outlineSnapshot: task.outlineSnapshot,
+      outlineSections: JSON.parse(JSON.stringify(task.outline)),
+    },
+  };
+
+  task.drafts = [frozenInitialDraft];
+  task.currentDraftId = frozenInitialDraft.id;
+
+  // Review comments bound to this demo draft
+  task.reviewComments = task.reviewComments.map((comment) => ({
+    ...comment,
+    targetVersionId: frozenInitialDraft.id,
+    ...(comment.type === 'paragraph' && comment.targetBlockId === 'BLK-02'
+      ? {
+          targetBlockId: 'BLK-03',
+          targetBlockOrder: 3,
+          baseParagraphText: groupDraftBlocks[2].content,
+        }
+      : {}),
+  }));
+
+  // Upstream task facts:
+  // FACT-01: pending conflict (120 vs 128)
+  // FACT-02: pending conflict (16 vs 18)
+  // FACT-03: 800人次 (confirmed, untouched)
+  // FACT-04: 12次 (confirmed, untouched)
+  task.facts = JSON.parse(JSON.stringify(INITIAL_FACTS));
+
+  task.facts[0].status = 'pending';
+  task.facts[0].selectedConflictValue = undefined;
+  task.facts[0].conflictResolutionReason = undefined;
+
+  task.facts[1].status = 'pending';
+  task.facts[1].hasConflict = true;
+  task.facts[1].value = '16 / 18 (存在更新口径)';
+  task.facts[1].evidenceIds = ['EVD-03', 'EVD-07'];
+  task.facts[1].primaryEvidenceId = 'EVD-07';
+  task.facts[1].conflictCandidates = [
+    {
+      value: '16',
+      sourceDocId: 'SRC-03',
+      evidenceId: 'EVD-03',
+      description: '原台账初步统计口径：组织专题培训16场',
+    },
+    {
+      value: '18',
+      sourceDocId: 'SRC-07',
+      evidenceId: 'EVD-07',
+      description: '教育培训处前三季度正式统计口径：组织专题培训18场',
+    },
+  ];
+  task.facts[1].selectedConflictValue = undefined;
+  task.facts[1].conflictResolutionReason = undefined;
+
+  // Clear task snapshots so user must adjudicate and confirm upstream before generating candidate
   task.factSnapshot = undefined;
   task.outlineConfirmed = false;
   task.outlineSnapshot = undefined;
