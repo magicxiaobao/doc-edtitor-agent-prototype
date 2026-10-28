@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts && tsx test-task10.ts && tsx test-task11.ts && tsx test-task12.ts && tsx test-task13.ts && tsx test-task14.ts && tsx test-task15.ts && tsx test-task16.ts && tsx test-task17.ts && tsx test-task18.tsx && tsx test-task19.tsx && tsx test-task20.tsx && tsx test-task21.tsx && tsx test-task22.tsx && tsx test-task23.tsx && tsx test-task24.tsx && npm run test:task21:receipt && npm run test:task22:receipt && npm run test:task23:receipt && npm run test:task23:codex-receipt && npm run test:task24:receipt && npm run test:task24:codex-receipt",
+    "test": "tsx test-task07.ts && tsx test-task08.ts && tsx test-task09.ts && tsx test-task10.ts && tsx test-task11.ts && tsx test-task12.ts && tsx test-task13.ts && tsx test-task14.ts && tsx test-task15.ts && tsx test-task16.ts && tsx test-task17.ts && tsx test-task18.tsx && tsx test-task19.tsx && tsx test-task20.tsx && tsx test-task21.tsx && tsx test-task22.tsx && tsx test-task23.tsx && tsx test-task24.tsx && tsx test-task25.tsx && npm run test:task21:receipt && npm run test:task22:receipt && npm run test:task23:receipt && npm run test:task23:codex-receipt && npm run test:task24:receipt && npm run test:task24:codex-receipt && npm run test:task25:receipt && npm run test:task25:codex-receipt",
     "test:task21:receipt": "node --import tsx test-task21-receipt.tsx",
     "test:task22": "node --import tsx test-task22.tsx",
     "test:task22:receipt": "node --import tsx test-task22-receipt.tsx",
@@ -17,6 +17,8 @@
     "test:task23:receipt": "node --import tsx test-task23-receipt.tsx",
     "test:task24": "node --import tsx test-task24.tsx",
     "test:task24:receipt": "node --import tsx test-task24-receipt.tsx",
+    "test:task25": "node --import tsx test-task25.tsx",
+    "test:task25:receipt": "node --import tsx test-task25-receipt.tsx",
     "test:demo:materials": "node --import tsx test-demo-materials.tsx",
     "test:demo": "node --import tsx test-demo-materials.tsx && node --import tsx test-demo-drafting.tsx && node --import tsx test-demo-review.ts && node --import tsx test-demo-versions.tsx && node --import tsx test-demo-followup.tsx && node --import tsx test-demo-journey.tsx && node --import tsx test-demo-panels.tsx && npm run test:demo:export && npm run test:demo:wording && npm run test:demo:rag && npm run test:demo:source-view",
     "test:demo:export": "node --import tsx test-demo-export-provenance.tsx",
@@ -24,7 +26,8 @@
     "test:demo:rag": "node --import tsx test-demo-rag.tsx",
     "test:demo:source-view": "node --import tsx test-demo-source-view.tsx",
     "test:task23:codex-receipt": "node --import tsx test-task23-codex-receipt.tsx",
-    "test:task24:codex-receipt": "node --import tsx test-task24-codex-receipt.tsx"
+    "test:task24:codex-receipt": "node --import tsx test-task24-codex-receipt.tsx",
+    "test:task25:codex-receipt": "node --import tsx test-task25-codex-receipt.tsx"
   },
   "dependencies": {
     "clsx": "^2.1.1",

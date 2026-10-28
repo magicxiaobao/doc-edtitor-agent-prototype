@@ -18,9 +18,14 @@ import {
   AdoptedEvidenceRecord,
   ReviewNavigationIntent,
   FactRevisionCandidate,
-  MultiParagraphFactRevisionCandidate
+  MultiParagraphFactRevisionCandidate,
+  MultiFactGroupRevisionCandidate
 } from '../../types';
-import { acceptFactRevisionCandidate, acceptMultiParagraphFactRevisionCandidate } from '../../services/factRevisionCandidateService';
+import {
+  acceptFactRevisionCandidate,
+  acceptMultiParagraphFactRevisionCandidate,
+  acceptMultiFactGroupRevisionCandidate,
+} from '../../services/factRevisionCandidateService';
 import { resolveDraftFactEvidence, findDraftFact } from '../../services/factLifecycleService';
 import { 
   generateDraftFromFactsAndOutline, 
@@ -823,6 +828,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   };
 
   // Task 22: Fact Review Records handlers
+  const handleViewLatestEvidence = (factId: string) => {
+    setShowFactImpactModal(false);
+    const fact = task.facts.find(f => f.id === factId);
+    const snippet = fact && task.snippets.find(s => s.id === fact.primaryEvidenceId);
+    if (!fact || !snippet) {
+      setLocateError('无法查看最新原文：当前事实或主出处已不可用，请前往材料与事实阶段重新核实。');
+      return;
+    }
+    onViewSnippet(snippet, fact, undefined, false);
+  };
+
   const handleSaveReviewRecord = (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => {
     if (!currentDraft) return;
     try {
@@ -885,6 +901,19 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return { success: true };
     } catch (err: any) {
       return { success: false, reason: err.message || '采纳多段落修订异常' };
+    }
+  };
+
+  const handleAcceptMultiFactGroupRevision = (candidateGroup: MultiFactGroupRevisionCandidate, activeRunId: string) => {
+    try {
+      const res = acceptMultiFactGroupRevisionCandidate(task, currentDraft, candidateGroup, activeRole, activeRunId);
+      if (!res.success || !res.updatedTask) {
+        return { success: false, reason: res.reason || '采纳多事实成组修订失败' };
+      }
+      onUpdateTask(res.updatedTask);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, reason: err.message || '采纳多事实成组修订异常' };
     }
   };
 
@@ -4087,12 +4116,14 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         activeRole={activeRole}
         onLocateBlock={handleLocateBlock}
         onViewDraftEvidence={handleViewDraftEvidence}
+        onViewLatestEvidence={handleViewLatestEvidence}
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
         onJumpToOutlineStage={onSelectStage ? () => onSelectStage('style_outline') : undefined}
         onSaveReviewRecord={handleSaveReviewRecord}
         onRevokeReviewRecord={handleRevokeReviewRecord}
         onAcceptFactRevision={handleAcceptFactRevision}
         onAcceptMultiParagraphFactRevision={handleAcceptMultiParagraphFactRevision}
+        onAcceptMultiFactGroupRevision={handleAcceptMultiFactGroupRevision}
         initialBlockId={impactFocusBlockId}
       />
     </div>

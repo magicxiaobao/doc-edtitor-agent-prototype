@@ -21,7 +21,7 @@ interface NavbarProps {
   onSelectTask: (taskId: string) => void;
   activeRole: UserRole;
   onSelectRole: (role: UserRole) => void;
-  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision') => void;
+  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision') => void;
   onResetData: () => void;
 }
 
@@ -198,6 +198,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span className="font-semibold text-purple-300">5. 单事实多段落修订演示 (128项→120项)</span>
                     <span className="text-xs text-slate-400">单事实影响两段、整体原子采纳与留痕</span>
                   </button>
+                  <button
+                    data-testid="btn-load-scenario-multi-fact-group"
+                    onClick={() => onLoadScenario('multi_fact_group_revision')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white flex flex-col cursor-pointer border-t border-slate-800"
+                  >
+                    <span className="font-semibold text-sky-300">6. 两项事实成组修订演示 (128项→120项 & 16场→18场)</span>
+                    <span className="text-xs text-slate-400">两事实三段落不重叠、保留800人次、整体原子采纳</span>
+                  </button>
                 </div>
               </div>
 
@@ -210,6 +218,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>创建多段修订演示任务</span>
+              </button>
+
+              <button
+                data-testid="btn-create-multi-fact-group-demo-task"
+                onClick={() => onLoadScenario('multi_fact_group_revision')}
+                className="flex items-center gap-1.5 px-3 py-1 bg-sky-900/90 hover:bg-sky-800 border border-sky-700 rounded text-sky-100 text-xs font-medium transition-colors cursor-pointer"
+                title="显式创建两项事实成组定向修订演示任务（不自动覆盖已有任务）"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>创建成组修订演示任务</span>
               </button>
 
               {/* Reset button */}

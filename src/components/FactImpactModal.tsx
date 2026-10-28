@@ -11,7 +11,7 @@ import {
   DraftFactReviewOverview,
   BlockFactReviewEvaluation,
 } from '../services/factReviewService';
-import { DraftVersion, Task, UserRole, FactRevisionCandidate, MultiParagraphFactRevisionCandidate } from '../types';
+import { DraftVersion, Task, UserRole, FactRevisionCandidate, MultiParagraphFactRevisionCandidate, MultiFactGroupRevisionCandidate } from '../types';
 import {
   checkFactRevisionEligibility,
   generateFactRevisionCandidate,
@@ -19,6 +19,9 @@ import {
   checkMultiParagraphFactRevisionEligibility,
   generateMultiParagraphFactRevisionCandidate,
   validateMultiParagraphFactRevisionAcceptance,
+  checkMultiFactGroupRevisionEligibility,
+  generateMultiFactGroupRevisionCandidate,
+  validateMultiFactGroupRevisionAcceptance,
 } from '../services/factRevisionCandidateService';
 import { computeTextDiff } from '../services/diffService';
 import {
@@ -51,12 +54,14 @@ interface FactImpactModalProps {
   activeRole?: UserRole;
   onLocateBlock?: (blockId: string, factId?: string) => void;
   onViewDraftEvidence?: (item: FactImpactItem) => void;
+  onViewLatestEvidence?: (factId: string) => void;
   onJumpToFactsStage?: () => void;
   onJumpToOutlineStage?: () => void;
   onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => string | void;
   onRevokeReviewRecord?: (blockId: string, reason: string, context: string, recordId: string) => string | void;
   onAcceptFactRevision?: (candidate: FactRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   onAcceptMultiParagraphFactRevision?: (candidateGroup: MultiParagraphFactRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
+  onAcceptMultiFactGroupRevision?: (candidateGroup: MultiFactGroupRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   initialBlockId?: string;
 }
 
@@ -70,12 +75,14 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   activeRole = '主笔甲',
   onLocateBlock = () => {},
   onViewDraftEvidence = () => {},
+  onViewLatestEvidence = () => {},
   onJumpToFactsStage,
   onJumpToOutlineStage,
   onSaveReviewRecord,
   onRevokeReviewRecord,
   onAcceptFactRevision,
   onAcceptMultiParagraphFactRevision,
+  onAcceptMultiFactGroupRevision,
   initialBlockId,
 }) => {
   const task = (taskProp || currentTask)!;
@@ -102,6 +109,12 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const [groupAcceptErrors, setGroupAcceptErrors] = useState<Record<string, string>>({});
   const activeGroupRevisionRuns = useRef<Record<string, string>>({});
 
+  // Task 25: Two-fact group revision candidate state
+  const [activeMultiFactCandidate, setActiveMultiFactCandidate] = useState<MultiFactGroupRevisionCandidate | null>(null);
+  const [multiFactGroupError, setMultiFactGroupError] = useState<{ reason: string; unconfirmedUpstream?: 'fact' | 'style' | 'outline' } | null>(null);
+  const [multiFactGroupAcceptError, setMultiFactGroupAcceptError] = useState<string | null>(null);
+  const activeMultiFactRunId = useRef<string | null>(null);
+
   // Reset inputs when task or draft changes
   useEffect(() => {
     setReviewNotes({});
@@ -118,7 +131,18 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     setGroupRevisionErrors({});
     setGroupAcceptErrors({});
     activeGroupRevisionRuns.current = {};
+    setActiveMultiFactCandidate(null);
+    setMultiFactGroupError(null);
+    setMultiFactGroupAcceptError(null);
+    activeMultiFactRunId.current = null;
   }, [isOpen, task.id, currentDraft?.id, activeRole]);
+
+  useEffect(() => {
+    if (!isOpen || !activeMultiFactCandidate) return;
+    const card = modalRef.current?.querySelector<HTMLElement>('[data-testid="multi-fact-group-revision-candidate-card"]');
+    card?.focus({ preventScroll: true });
+    card?.scrollIntoView?.({ block: 'nearest' });
+  }, [isOpen, activeMultiFactCandidate]);
 
   useEffect(() => {
     if (!isOpen || !Object.keys(activeGroupCandidates).length) return;
@@ -400,6 +424,53 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     });
   };
 
+  const handleGenerateMultiFactGroupRevision = () => {
+    setMultiFactGroupAcceptError(null);
+    const res = generateMultiFactGroupRevisionCandidate(task, currentDraft, activeRole);
+    if (!res.success || !res.candidateGroup) {
+      activeMultiFactRunId.current = null;
+      const eligibility = checkMultiFactGroupRevisionEligibility(task, currentDraft, activeRole);
+      setMultiFactGroupError({
+        reason: res.reason || eligibility.reason || '生成两项事实成组修订候选失败',
+        unconfirmedUpstream: eligibility.unconfirmedUpstream,
+      });
+      setActiveMultiFactCandidate(null);
+    } else {
+      activeMultiFactRunId.current = res.candidateGroup.runId;
+      setMultiFactGroupError(null);
+      setActiveMultiFactCandidate(res.candidateGroup);
+    }
+  };
+
+  const handleCancelMultiFactGroupRevision = () => {
+    activeMultiFactRunId.current = null;
+    setActiveMultiFactCandidate(null);
+    setMultiFactGroupError(null);
+    setMultiFactGroupAcceptError(null);
+  };
+
+  const handleAcceptMultiFactGroupRevision = (candidateGroup: MultiFactGroupRevisionCandidate) => {
+    setMultiFactGroupAcceptError(null);
+    const runId = activeMultiFactRunId.current || '';
+    const validation = validateMultiFactGroupRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, runId);
+    if (!isOpen || !validation.valid) {
+      setMultiFactGroupAcceptError(validation.reason || '面板已关闭，候选已取消');
+      return;
+    }
+    try {
+      const res = onAcceptMultiFactGroupRevision?.(candidateGroup, runId);
+      if (!res?.success) {
+        setMultiFactGroupAcceptError(res?.reason || '未完成业务写入，请重试或重新生成候选');
+        return;
+      }
+    } catch (error) {
+      setMultiFactGroupAcceptError(error instanceof Error ? error.message : '采纳异常，请重试');
+      return;
+    }
+    activeMultiFactRunId.current = null;
+    setActiveMultiFactCandidate(null);
+  };
+
   const renderParagraphComparison = (
     blockId: string,
     blockOrder: number,
@@ -633,6 +704,18 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                     <span>按最新事实生成关联段落修订候选</span>
                   </button>
                 )}
+                {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount === 2 && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateMultiFactGroupRevision}
+                    data-testid="btn-generate-multi-fact-group-revision"
+                    className="px-3.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    title="按任务最新核准事实生成两项事实全部关联段落成组定向修订候选"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>生成两项事实成组修订候选</span>
+                  </button>
+                )}
               </div>
 
               {/* Requirement 4: Separate Review Progress Counters */}
@@ -666,6 +749,301 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   。复核记录不改写正文、不自动采纳建议、不更新快照基准，亦不能绕过阻断性核校或定稿门禁。如需调整正文，请使用正文编辑或段落建议流程。
                 </div>
               </div>
+
+              {/* Multi-Fact Group Ineligibility / Generation Error Alert */}
+              {multiFactGroupError && (
+                <div
+                  data-testid="alert-multi-fact-group-ineligible"
+                  className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-950 space-y-2"
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>未满足两项事实成组定向修订准入条件</span>
+                  </div>
+                  <p className="leading-relaxed font-medium">
+                    {multiFactGroupError.reason}
+                  </p>
+                  <div className="flex items-center gap-2 pt-1 flex-wrap">
+                    {multiFactGroupError.unconfirmedUpstream === 'fact' && onJumpToFactsStage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onJumpToFactsStage();
+                        }}
+                        data-testid="btn-goto-facts-stage-multi-group"
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
+                      >
+                        <span>前往事实清单核准</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    )}
+                    {['outline', 'style'].includes(multiFactGroupError.unconfirmedUpstream || '') && onJumpToOutlineStage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onJumpToOutlineStage();
+                        }}
+                        data-testid="btn-goto-outline-stage-multi-group"
+                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-2xs"
+                      >
+                        <span>{multiFactGroupError.unconfirmedUpstream === 'style' ? '前往文风核准' : '前往大纲核准'}</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleCancelMultiFactGroupRevision}
+                      className="px-2 py-1 text-xs text-slate-600 hover:bg-amber-100 rounded cursor-pointer font-medium"
+                    >
+                      关闭提示
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Task 25: Multi-Fact Group Revision Candidate Card */}
+              {activeMultiFactCandidate && (
+                <div
+                  data-testid="multi-fact-group-revision-candidate-card"
+                  tabIndex={-1}
+                  className="p-4 bg-sky-50/70 border-2 border-sky-400 rounded-lg text-xs space-y-3.5 shadow-sm"
+                >
+                  <div className="flex items-center justify-between border-b border-sky-200 pb-2 flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 font-bold text-sky-950 text-sm">
+                      <Sparkles className="w-4 h-4 text-sky-600 shrink-0" />
+                      <span>两项事实成组定向修订候选（共2项事实、去重后受影响 {activeMultiFactCandidate.items.length} 个段落）</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
+                      <span>任务: {activeMultiFactCandidate.taskId}</span>
+                      <span>·</span>
+                      <span>基准版本: {activeMultiFactCandidate.sourceDraftVersionNumber || activeMultiFactCandidate.sourceDraftId}</span>
+                      <span>·</span>
+                      <span>事实: [{activeMultiFactCandidate.targetFactIds.join(', ')}]</span>
+                    </div>
+                  </div>
+
+                  {/* Fact items summary (2 facts) */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {activeMultiFactCandidate.facts.map((fact) => {
+                      const factImpactItem = analysis.impactItems.find((i) => i.factId === fact.factId);
+                      return (
+                        <div
+                          key={fact.factId}
+                          data-testid={`candidate-fact-item-${fact.factId}`}
+                          className="p-3 bg-white rounded-lg border border-sky-200 space-y-2 shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                            <span className="font-bold text-slate-900 text-xs">
+                              事实指标：{fact.metric}
+                            </span>
+                            <span className="text-2xs font-mono text-slate-400">
+                              [{fact.factId}]
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block text-2xs">数值变化与统计期间</span>
+                            <div className="font-semibold text-slate-800 text-xs mt-0.5">
+                              <span className="text-slate-500 line-through mr-1 font-mono">
+                                {fact.fromValue} {fact.unit}
+                              </span>
+                              <span className="text-sky-700 font-mono font-bold">
+                                → {fact.toValue} {fact.unit}
+                              </span>
+                              {fact.period && (
+                                <span className="text-2xs text-slate-500 ml-1.5 font-normal">
+                                  （期间：{fact.period}）
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="space-y-1 text-2xs text-slate-600">
+                            <div className="flex items-center justify-between">
+                              <span>
+                                旧冻结出处：{fact.fromDocName}（{fact.fromLocation}）
+                              </span>
+                              {factImpactItem && (
+                                <button
+                                  type="button"
+                                  onClick={() => onViewDraftEvidence(factImpactItem)}
+                                  data-testid={`btn-view-evidence-${fact.factId}`}
+                                  className="text-2xs text-blue-600 hover:underline flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                  <span>核验旧依据</span>
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span>
+                              拟采用新出处：
+                              <strong className="text-sky-800 font-medium">
+                                {fact.toDocName}（{fact.toLocation}）
+                              </strong>
+                              </span>
+                              <button type="button" onClick={() => onViewLatestEvidence(fact.factId)}
+                                data-testid={`btn-view-latest-evidence-${fact.factId}`}
+                                className="text-2xs text-blue-600 hover:underline flex items-center gap-0.5 cursor-pointer">
+                                <ExternalLink className="w-2.5 h-2.5" />
+                                <span>查看最新原文</span>
+                              </button>
+                            </div>
+                            <div className="text-slate-400">
+                              关联段落（共{fact.referencingBlockIds.length}段）：
+                              {fact.referencingBlockIds
+                                .map((bid) => {
+                                  const blk = currentDraft?.blocks.find((b) => b.id === bid);
+                                  return blk ? `第${blk.order}段` : bid;
+                                })
+                                .join('、')}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Affected Paragraphs List */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-sky-950 font-bold text-xs">
+                      <span>共影响 {activeMultiFactCandidate.items.length} 个段落，逐段修订预览：</span>
+                      <span className="text-2xs text-slate-500 font-normal">两事实关联段落互不重叠，支持分别定位正文与核验完整段落</span>
+                    </div>
+
+                    {activeMultiFactCandidate.items.map((item) => {
+                      const factForItem = activeMultiFactCandidate.facts.find((f) =>
+                        f.referencingBlockIds.includes(item.targetBlockId)
+                      )!;
+                      return (
+                        <div
+                          key={item.targetBlockId}
+                          data-testid={`candidate-item-${item.targetBlockId}`}
+                          className="p-3 bg-white rounded-lg border border-sky-200 space-y-2 shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 flex-wrap gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-800 text-xs">
+                                第 {item.targetBlockOrder} 段
+                              </span>
+                              <span className="text-slate-500 text-xs">·</span>
+                              <span className="text-slate-600 text-xs font-medium">
+                                【{item.targetSectionTitle}】
+                              </span>
+                              <span className="text-2xs font-mono text-slate-400">
+                                [Block ID: {item.targetBlockId}]
+                              </span>
+                              <span className="text-2xs px-1.5 py-0.2 rounded bg-sky-100 text-sky-800 font-medium">
+                                关联事实：{factForItem.metric}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => onLocateBlock(item.targetBlockId, factForItem.factId)}
+                              data-testid={`btn-locate-candidate-block-${item.targetBlockId}`}
+                              className="px-2 py-0.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded text-2xs font-medium flex items-center gap-1 cursor-pointer"
+                            >
+                              <MapPin className="w-2.5 h-2.5" />
+                              <span>定位正文</span>
+                            </button>
+                          </div>
+
+                          {renderParagraphComparison(
+                            item.targetBlockId,
+                            item.targetBlockOrder,
+                            item.originalBlockContent,
+                            item.revisedBlockContent,
+                            factForItem.fromValue,
+                            factForItem.toValue,
+                            factForItem.unit
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Scope & Lifecycle Notice */}
+                  <div className="p-2.5 bg-sky-100/60 rounded border border-sky-200 text-2xs text-sky-950 space-y-1 leading-relaxed">
+                    <div className="font-semibold flex items-center gap-1">
+                      <Info className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                      <span>本次两项事实成组操作范围与原子性依据说明：</span>
+                    </div>
+                    <p>
+                      1. <strong>成组一致修订全部 {activeMultiFactCandidate.items.length} 个关联段落</strong>（Block IDs: {activeMultiFactCandidate.targetBlockIds.join(', ')}），两项事实关联段落互不重叠，其余所有段落正文、未变事实引用与依据严格保持原样。
+                    </p>
+                    <p>
+                      2. 确认采纳将<strong>一次性归档当前工作稿为只读历史快照</strong>（完整冻结旧正文、旧依据与当时人工复核留痕），并<strong>只创建一个新工作稿</strong>。
+                    </p>
+                    <p>
+                      3. 新工作稿绑定完整核准的最新事实快照；新稿复核记录初始化为空，旧记录仅作来源参考，后续仍需按规定通过审阅与核校定稿门禁。
+                    </p>
+                    <p>
+                      4. 本批不提供单事实或单段部分采纳，禁止单独撤销正文；恢复须通过版本历史完整恢复正文与依据。
+                    </p>
+                  </div>
+
+                  {/* Acceptance Validation / Error Alert */}
+                  {(() => {
+                    const runId = activeMultiFactRunId.current || '';
+                    const validation = validateMultiFactGroupRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId);
+                    return (
+                      <>
+                        {!validation.valid && (
+                          <p role="alert" data-testid="alert-multi-fact-group-stale" className="text-rose-800 text-xs font-medium">
+                            {validation.reason} 请使用上方入口重新生成候选。
+                          </p>
+                        )}
+                        {multiFactGroupAcceptError && (
+                          <div
+                            data-testid="alert-multi-fact-group-accept-error"
+                            className="p-2.5 bg-rose-50 border border-rose-300 rounded text-xs text-rose-950 space-y-1"
+                          >
+                            <div className="flex items-center gap-1 font-bold text-rose-900">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              <span>采纳失败</span>
+                            </div>
+                            <p>{multiFactGroupAcceptError}</p>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleCancelMultiFactGroupRevision}
+                            data-testid="btn-cancel-multi-fact-group-revision"
+                            className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded cursor-pointer font-medium"
+                          >
+                            取消
+                          </button>
+
+                          {multiFactGroupAcceptError ? (
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
+                              data-testid="btn-retry-accept-multi-fact-group-revision"
+                              disabled={!validation.valid || !onAcceptMultiFactGroupRevision}
+                              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>重试采纳</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
+                              data-testid="btn-accept-multi-fact-group-revision"
+                              disabled={!validation.valid || !onAcceptMultiFactGroupRevision}
+                              className="px-4 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>全部采纳并创建新工作稿</span>
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           ) : (
             <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-lg text-emerald-950 space-y-1">
@@ -842,7 +1220,19 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
                         {/* Top Block Actions: Locate & Fact Revision */}
                         <div className="flex items-center gap-2">
-                          {!isHistoricalOrFinal && isAuthor && multiFactItem && (
+                          {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount === 2 && (
+                            <button
+                              type="button"
+                              onClick={handleGenerateMultiFactGroupRevision}
+                              data-testid={`btn-generate-multi-fact-group-revision-${ev.blockId}`}
+                              className="px-2.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                              title="按任务最新核准事实生成两项事实成组修订候选"
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                              <span>生成两项事实成组修订候选</span>
+                            </button>
+                          )}
+                          {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount !== 2 && multiFactItem && (
                             <button
                               type="button"
                               onClick={() => handleGenerateMultiRevision(multiFactItem.factId)}
@@ -854,7 +1244,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                               <span>按最新事实生成关联段落修订候选</span>
                             </button>
                           )}
-                          {!isHistoricalOrFinal && isAuthor && !multiFactItem && (
+                          {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount !== 2 && !multiFactItem && (
                             <button
                               type="button"
                               onClick={() => handleGenerateRevision(ev.blockId)}
