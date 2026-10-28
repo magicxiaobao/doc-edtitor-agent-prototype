@@ -110,7 +110,16 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                 (item.blockOrder === undefined || typeof item.blockOrder === 'number'))
                 ? log.affectedBlocks : [];
               const isGroup = affected.length > 1;
-              const isMultiFactGroup = Array.isArray(log.affectedFacts) && log.affectedFacts.length > 1;
+              const factsValid = Array.isArray(log.affectedFacts) && log.affectedFacts.every(fact => fact &&
+                ['factId', 'metric', 'unit', 'fromValue', 'toValue'].every(key =>
+                  typeof (fact as unknown as Record<string, unknown>)[key] === 'string') &&
+                ['period', 'fromEvidenceId', 'fromDocName', 'fromLocation', 'toEvidenceId', 'toDocName', 'toLocation'].every(key => {
+                  const value = (fact as unknown as Record<string, unknown>)[key];
+                  return value === undefined || typeof value === 'string';
+                }) && (fact.referencingBlockIds === undefined ||
+                  (Array.isArray(fact.referencingBlockIds) && fact.referencingBlockIds.every(id => typeof id === 'string'))));
+              const affectedFacts = factsValid ? log.affectedFacts! : [];
+              const isMultiFactGroup = affectedFacts.length > 1;
               const validation = validateUndoEligibility(task, currentDraft, log.id, activeRole);
               const canUndo = validation.canUndo;
               const disabledReason = validation.reason || '';
@@ -136,7 +145,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-slate-900 flex items-center gap-1">
                         {isMultiFactGroup
-                          ? `成组修订 · 2项事实、${affected.length || (log.affectedBlockIds || []).length}段`
+                          ? `成组修订 · ${affectedFacts.length}项事实、${affected.length || (log.affectedBlockIds || []).length}段`
                           : isGroup
                           ? `整体修订 · 共${affected.length}段`
                           : `第 ${log.blockOrder} 段`}
@@ -232,14 +241,17 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                   {log.source === 'fact_change_revision' && (
                     <p className="mt-2 p-2 rounded bg-indigo-50 text-indigo-950 whitespace-pre-wrap break-words">{log.sourceDescription}</p>
                   )}
-                  {Array.isArray(log.affectedFacts) && log.affectedFacts.length > 0 && (
+                  {log.affectedFacts !== undefined && !factsValid && <p role="status" className="mt-2 text-amber-900">
+                    事实留痕明细格式不完整，原数据已保留；请结合汇总和段落明细人工核实。
+                  </p>}
+                  {affectedFacts.length > 0 && (
                     <div className="mt-2.5 p-2.5 rounded bg-sky-50/70 border border-sky-200 text-xs space-y-2">
                       <div className="font-semibold text-sky-950 flex items-center justify-between">
-                        <span>两项事实前后数值与出处留痕明细（共 {log.affectedFacts.length} 项事实）：</span>
+                        <span>两项事实前后数值与出处留痕明细（共 {affectedFacts.length} 项事实）：</span>
                         <span className="text-2xs text-sky-700 font-normal">原子绑定最新核准快照</span>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {log.affectedFacts.map((fact) => (
+                        {affectedFacts.map((fact) => (
                           <div
                             key={fact.factId}
                             data-testid={`log-affected-fact-${fact.factId}`}

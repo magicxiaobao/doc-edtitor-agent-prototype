@@ -231,7 +231,7 @@ async function runTask25Tests() {
 
     assert(newBlk03.content.includes('800人次'), 'C: 采纳后新稿BLK-03中的800人次严格保留未变');
     assert(newBlk03.referencedFactIds.includes('FACT-03'), 'C: 新稿引用的FACT-03未被篡改');
-    assert(newDraft.snapshotMetadata!.factSnapshot.items.find((i: any) => i.factId === 'FACT-03')!.value === '800', 'C: FACT-03依据基准依然是800');
+    assert(newDraft.snapshotMetadata!.factSnapshot!.items.find((i: any) => i.factId === 'FACT-03')!.value === '800', 'C: FACT-03依据基准依然是800');
   }
 
   // ==========================================================================
@@ -252,7 +252,7 @@ async function runTask25Tests() {
     // D.2 Missing frozen evidence on draft
     {
       const { task, draft } = createStandardTwoFactFixture();
-      delete draft.snapshotMetadata!.factSnapshot.items.find((i: any) => i.factId === 'FACT-01')!.provenance;
+      delete draft.snapshotMetadata!.factSnapshot!.items.find((i: any) => i.factId === 'FACT-01')!.provenance;
       const elig = checkMultiFactGroupRevisionEligibility(task, draft, '主笔甲');
       assert(!elig.eligible, 'D.2: 缺少冻结出处时整组阻断');
     }
@@ -397,8 +397,8 @@ async function runTask25Tests() {
     assert(newDraft.factReviewRecords?.length === 0, 'H: 新稿人工复核记录初始化为空，不自动继承“已复核”签名');
     assert(newDraft.sourceFactReviewRecords?.length === 1, 'H: 旧复核记录移入sourceFactReviewRecords供追溯');
 
-    const snapF1 = newDraft.snapshotMetadata!.factSnapshot.items.find((i: any) => i.factId === 'FACT-01')!;
-    const snapF2 = newDraft.snapshotMetadata!.factSnapshot.items.find((i: any) => i.factId === 'FACT-02')!;
+    const snapF1 = newDraft.snapshotMetadata!.factSnapshot!.items.find((i: any) => i.factId === 'FACT-01')!;
+    const snapF2 = newDraft.snapshotMetadata!.factSnapshot!.items.find((i: any) => i.factId === 'FACT-02')!;
     assert(snapF1.value === '120', 'H: 新稿快照绑定最新FACT-01为120项');
     assert(snapF2.value === '18', 'H: 新稿快照绑定最新FACT-02为18场');
 
@@ -468,7 +468,7 @@ async function runTask25Tests() {
 
     const restoredDraft = restored.updatedTask!.drafts.find((d) => d.id === restored.updatedTask!.currentDraftId)!;
     assert(restoredDraft.blocks.find((b) => b.id === 'BLK-01')!.content.includes('128项'), 'J: 恢复后正文回退到128项');
-    assert(restoredDraft.snapshotMetadata!.factSnapshot.items.find((i: any) => i.factId === 'FACT-01')!.value === '128', 'J: 恢复后依据基准也回退到128');
+    assert(restoredDraft.snapshotMetadata!.factSnapshot!.items.find((i: any) => i.factId === 'FACT-01')!.value === '128', 'J: 恢复后依据基准也回退到128');
 
     // Fact impact re-evaluated on restored draft
     const reAnalysis = analyzeFactImpact(restored.updatedTask!, restoredDraft);
@@ -581,9 +581,9 @@ async function runTask25Tests() {
   }
 
   // ==========================================================================
-  // [L] 独立演示任务真实交互：从两项事实材料核对、确认/裁决、确认事实大纲、进入正文生成候选、取消后重新生成、整体采纳到查看完整日志
+  // [L] 预设已核准数据后的起草组件接线；跨阶段裁决另由Codex接收套件验证
   // ==========================================================================
-  console.log('\n>>> [L] 独立演示任务真实交互：从两项事实材料核对、确认/裁决、确认事实大纲、进入正文生成候选、取消后重新生成、整体采纳到查看完整日志:');
+  console.log('\n>>> [L] 预设已核准数据后的起草组件接线（非跨阶段真实裁决）:');
   {
     // Step 1: Create independent demo task
     const demoTask = createPresetTask('multi_fact_group_revision');

@@ -54,6 +54,7 @@ interface FactImpactModalProps {
   activeRole?: UserRole;
   onLocateBlock?: (blockId: string, factId?: string) => void;
   onViewDraftEvidence?: (item: FactImpactItem) => void;
+  onViewLatestEvidence?: (factId: string) => void;
   onJumpToFactsStage?: () => void;
   onJumpToOutlineStage?: () => void;
   onSaveReviewRecord?: (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => string | void;
@@ -74,6 +75,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   activeRole = '主笔甲',
   onLocateBlock = () => {},
   onViewDraftEvidence = () => {},
+  onViewLatestEvidence = () => {},
   onJumpToFactsStage,
   onJumpToOutlineStage,
   onSaveReviewRecord,
@@ -873,11 +875,19 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 </button>
                               )}
                             </div>
-                            <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span>
                               拟采用新出处：
                               <strong className="text-sky-800 font-medium">
                                 {fact.toDocName}（{fact.toLocation}）
                               </strong>
+                              </span>
+                              <button type="button" onClick={() => onViewLatestEvidence(fact.factId)}
+                                data-testid={`btn-view-latest-evidence-${fact.factId}`}
+                                className="text-2xs text-blue-600 hover:underline flex items-center gap-0.5 cursor-pointer">
+                                <ExternalLink className="w-2.5 h-2.5" />
+                                <span>查看最新原文</span>
+                              </button>
                             </div>
                             <div className="text-slate-400">
                               关联段落（共{fact.referencingBlockIds.length}段）：

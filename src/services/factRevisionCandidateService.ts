@@ -2429,6 +2429,28 @@ export function validateMultiFactGroupRevisionAcceptance(
     return { valid: false, reason: '权限受限：仅主笔甲有权采纳修订并创建新工作稿！' };
   }
 
+  // Candidate payloads must be complete before traversing nested collections.
+  // Exact semantic equality is still checked against fresh derivation below.
+  if (!candidateGroup ||
+      !['id', 'runId', 'taskId', 'sourceDraftId', 'baseDraftContentHash', 'contextFingerprint'].every(
+        key => typeof (candidateGroup as unknown as Record<string, unknown>)[key] === 'string' &&
+          Boolean((candidateGroup as unknown as Record<string, unknown>)[key])) ||
+      !strings(candidateGroup.targetFactIds) || !strings(candidateGroup.targetBlockIds) ||
+      !Array.isArray(candidateGroup.facts) || candidateGroup.facts.length !== 2 ||
+      !candidateGroup.facts.every(f => f &&
+        ['factId', 'metric', 'unit', 'period', 'fromValue', 'toValue'].every(
+          key => typeof (f as unknown as Record<string, unknown>)[key] === 'string') &&
+        strings(f.referencingBlockIds)) ||
+      !Array.isArray(candidateGroup.items) || !candidateGroup.items.length ||
+      !candidateGroup.items.every(item => item &&
+        typeof item.targetBlockId === 'string' && typeof item.originalBlockContent === 'string' &&
+        typeof item.revisedBlockContent === 'string' && Number.isFinite(item.originalRevisionSeq) &&
+        strings(item.originalReferencedFactIds)) ||
+      !candidateGroup.upstreamContext || typeof candidateGroup.upstreamContext !== 'object' ||
+      Array.isArray(candidateGroup.upstreamContext)) {
+    return { valid: false, reason: '成组候选结构不完整或格式异常，请重新生成候选。' };
+  }
+
   if (candidateGroup.taskId !== task.id) {
     return { valid: false, reason: '安全隔离拦截：修订候选生成自其他任务，禁止跨任务采纳！' };
   }

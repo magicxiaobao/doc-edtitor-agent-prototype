@@ -828,6 +828,17 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   };
 
   // Task 22: Fact Review Records handlers
+  const handleViewLatestEvidence = (factId: string) => {
+    setShowFactImpactModal(false);
+    const fact = task.facts.find(f => f.id === factId);
+    const snippet = fact && task.snippets.find(s => s.id === fact.primaryEvidenceId);
+    if (!fact || !snippet) {
+      setLocateError('无法查看最新原文：当前事实或主出处已不可用，请前往材料与事实阶段重新核实。');
+      return;
+    }
+    onViewSnippet(snippet, fact, undefined, false);
+  };
+
   const handleSaveReviewRecord = (blockId: string, status: 'reviewed' | 'deferred', notes: string, context: string) => {
     if (!currentDraft) return;
     try {
@@ -4105,6 +4116,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         activeRole={activeRole}
         onLocateBlock={handleLocateBlock}
         onViewDraftEvidence={handleViewDraftEvidence}
+        onViewLatestEvidence={handleViewLatestEvidence}
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
         onJumpToOutlineStage={onSelectStage ? () => onSelectStage('style_outline') : undefined}
         onSaveReviewRecord={handleSaveReviewRecord}
