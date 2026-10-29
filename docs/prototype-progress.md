@@ -999,3 +999,91 @@ npm run build
 - `git diff --check`通过。应用源码修复后无其他业务变更。
 
 **交接边界**：本轮仅代码、自动化/JSDOM及构建接收，没有Task25云浏览器、真实复制、独立屏幕阅读器或桌面Word/WPS实测。PR最新HEAD评审通过、合并后，等待用户确认AI Studio同步最新main，再执行成组候选、双出处、全部段落、取消/采纳、历史冻结、完整日志与切换的限定云浏览器验收。#85保持Open待浏览器收尾；#57继续Open，#40不重做。任务24同步后限定云浏览器验收已在#83/#82记录completed，上文15.7的Open为历史阶段状态。
+
+---
+
+## 17. 任务26：两项事实共享段落定向修订 (2026-10-29 实施交付)
+
+### 17.1 需求目标与技术架构
+
+任务26针对“恰好两项事实发生受支持的数值变化，且两项事实至少共同关联一个段落”的场景，提供整体定向修订闭环：
+1. **两种布局支持**：
+   - 布局1（2事实、1段）：两项事实仅共同关联同一段落（如 FACT-01 与 FACT-02 均仅在 BLK-01 引用）；
+   - 布局2（2事实、3段）：部分共享、部分独立（如 FACT-01 关联 BLK-01、BLK-02，FACT-02 关联 BLK-01、BLK-03，去重后为3个受影响段落）。
+2. **段落去重与单次递增准则**：
+   - 目标段落集合按稳定 Block ID 取并集去重；
+   - 同一个段落只展示一次、更新一次、记录一次；包含两项修改时，`revisionSeq` 也严格只递增 1。
+3. **同段多处确定性改写**：
+   - 基于同一份原正文形成可验证的编辑区间；
+   - 逐项校验指标归属、冻结旧值、完整单位、期间及语义（计划、预测、条件、否定、复合单位等保护严格保留）；
+   - 两处改写区间基于原正文互不重叠，改写时按降序或精确定位应用，彻底杜绝长度突变导致的位置偏移与串扰；
+   - 严格覆盖数值交叉（A新值等于B旧值）、非对称长度突变、同段其他同值指标不误伤等边界。
+4. **单次整体采纳与完整留痕**：
+   - 验证主笔权限、最新任务与稿件状态、整稿哈希、基准指纹与快照一致性；
+   - 归档旧工作稿为不可变只读历史快照，创建唯一新工作稿；
+   - 记录结构化成组日志，结构化保留两项事实明细；
+   - 在“最近修改记录”弹窗中，即使是“2事实、仅1段”场景，仍提供折叠展开查看该段完整 before/after 正文。
+5. **通道清晰隔离**：
+   - 两项事实无共享段落时，严格由共享段落通道阻断并提示使用任务25非重叠通道；反之亦然。
+
+### 17.2 核心代码变更清单
+
+1. **`src/services/factRevisionCandidateService.ts`**：
+   - `checkSharedParagraphFactRevisionEligibility(task, currentDraft, activeRole)`：严格判定2项事实、两事实存在共享段落交集（`overlap.length > 0`）、无材料补写存证、各段确定性改写区间有效且互不重叠；
+   - `generateSharedParagraphFactRevisionCandidate(task, currentDraft, activeRole, options)`：构建合并编辑计划，生成共享段落双修改候选与独立段落单修改候选；
+   - `validateSharedParagraphFactRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, activeRunId)`：全流程指纹一致性、未变段落哈希、新鲜度再验证；
+   - `acceptSharedParagraphFactRevisionCandidate(task, currentDraft, candidateGroup, activeRole, activeRunId)`：原子创建新工作稿（每个目标段落 revisionSeq 仅递增 1）、归档旧稿、记录结构化修改日志；
+   - `MultiFactGroupRevisionEligibilityResult` 补充 `sharedBlockIds`，采纳结果返回 `workingDraft` / `newWorkingDraft` 双兼容。
+2. **`src/components/FactImpactModal.tsx`**：
+   - 识别两事实共享段落场景，提供专用“生成两项事实共享段落修订候选”入口；
+   - 渲染包含两项事实对照卡片、共享段落“两项修改”专属标签、清晰删改标记（避免文本混淆连缀）、定位正文与整体原子采纳按钮。
+3. **`src/components/RecentModificationsModal.tsx`**：
+   - 支持 `isMultiFactGroup && affected.length > 0` 场景的折叠展开，使“2事实1段”时仍可展开查看完整 before 与 after 正文。
+4. **`src/components/stages/DraftingStage.tsx`**：
+   - 接入 `handleAcceptSharedParagraphFactRevision` 回调，打通实际起草界面的原子采纳流。
+5. **`src/services/mockData.ts` & `src/App.tsx` & `src/components/Navbar.tsx`**：
+   - 新增独立演示任务 `TASK-DEMO-SHARED-PARAGRAPH-REVISION`（首段同时引用 120项与 18场冲突事实，并保留 800人次）；
+   - 导航栏增加预置项与独立创建按钮（`btn-create-shared-paragraph-demo-task`）。
+6. **自动化测试**：
+   - `test-task26.tsx`：12 组核心业务与真实组件交互测试（覆盖 2事实1段、2事实3段、数值交叉、长度突变、防偏移、防误伤、重叠阻断、零重叠阻断、原子采纳、明细折叠、JSDOM组件及独立演示任务）；
+   - `test-task26-receipt.tsx`：7 组实施方自测验收检查表；
+   - `package.json` 添加 `"test:task26"` 与 `"test:task26:receipt"` 脚本。
+
+### 17.3 自动化测试与验证结果
+
+```bash
+# 1. 任务26 专项全量测试（12 组全部通过，100%）
+npx tsx test-task26.tsx
+# [A] 2事实仅1共享段落场景 (2事实、1段) - PASSED
+# [B] 2事实3段落场景 (1共享 + 2独立) - PASSED
+# [C] 同段多处改写保护 (C1数值交叉、C2长度突变、C3防误伤) - PASSED
+# [D] 同段两处改写位置重叠/冲突阻断 - PASSED
+# [E] 零重叠段落拒绝 (两事实无交集时拒绝进入共享段落通道) - PASSED
+# [F] 单事实或3+事实整组拒绝 - PASSED
+# [G] 材料补写存证段落阻断 - PASSED
+# [H] 权限、过期、篡改候选与版本校验 - PASSED
+# [I] 原子采纳与版本恢复保证 - PASSED
+# [J] 最近修改记录：2事实1段展开明细支持 - PASSED
+# [K] JSDOM界面交互：两事实共享段落定向修订全流程 - PASSED
+# [L] 独立演示任务完整闭环 - PASSED
+
+# 2. 任务26 实施方自测验收检查表（7 项全部通过）
+npx tsx test-task26-receipt.tsx
+# 场景一（2事实1段）revisionSeq仅+1 - PASS
+# 场景二（2事实3段）非目标段落严格不变 - PASS
+# 边界与防御：重叠冲突阻断、非重叠通道隔离、单事实及3事实变更整组拒绝 - PASS
+# 原子采纳与版本恢复：单次采纳创建工作稿，版本恢复回退正文与快照 - PASS
+# 最近修改记录：2事实1段场景支持折叠展开查看完整before/after正文 - PASS
+# 真实组件交互：FactImpactModal渲染入口、卡片及整体采纳 - PASS
+# 独立演示任务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建与采纳 - PASS
+
+# 3. 既有任务无损回归
+npx tsx test-task25.tsx && npx tsx test-task24.tsx && npx tsx test-task23.tsx
+# 全部 100% 通过，未发生任何功能倒退或污染
+
+# 4. TypeScript 严格类型检查与生产构建
+npm run lint && npm run build
+# tsc --noEmit: 0 errors
+# vite build: 成功构建
+```
+
