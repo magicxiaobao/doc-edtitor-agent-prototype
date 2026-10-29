@@ -11,7 +11,7 @@ import {
   DraftFactReviewOverview,
   BlockFactReviewEvaluation,
 } from '../services/factReviewService';
-import { DraftVersion, Task, UserRole, FactRevisionCandidate, MultiParagraphFactRevisionCandidate, MultiFactGroupRevisionCandidate } from '../types';
+import { DraftVersion, Task, UserRole, FactRevisionCandidate, MultiParagraphFactRevisionCandidate, MultiFactGroupRevisionCandidate, ParagraphRevisionModification } from '../types';
 import {
   checkFactRevisionEligibility,
   generateFactRevisionCandidate,
@@ -22,6 +22,9 @@ import {
   checkMultiFactGroupRevisionEligibility,
   generateMultiFactGroupRevisionCandidate,
   validateMultiFactGroupRevisionAcceptance,
+  checkSharedParagraphFactRevisionEligibility,
+  generateSharedParagraphFactRevisionCandidate,
+  validateSharedParagraphFactRevisionAcceptance,
 } from '../services/factRevisionCandidateService';
 import { computeTextDiff } from '../services/diffService';
 import {
@@ -62,6 +65,7 @@ interface FactImpactModalProps {
   onAcceptFactRevision?: (candidate: FactRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   onAcceptMultiParagraphFactRevision?: (candidateGroup: MultiParagraphFactRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   onAcceptMultiFactGroupRevision?: (candidateGroup: MultiFactGroupRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
+  onAcceptSharedParagraphFactRevision?: (candidateGroup: MultiFactGroupRevisionCandidate, activeRunId: string) => { success: boolean; reason?: string } | void;
   initialBlockId?: string;
 }
 
@@ -83,6 +87,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   onAcceptFactRevision,
   onAcceptMultiParagraphFactRevision,
   onAcceptMultiFactGroupRevision,
+  onAcceptSharedParagraphFactRevision,
   initialBlockId,
 }) => {
   const task = (taskProp || currentTask)!;
@@ -139,7 +144,9 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !activeMultiFactCandidate) return;
-    const card = modalRef.current?.querySelector<HTMLElement>('[data-testid="multi-fact-group-revision-candidate-card"]');
+    const card = modalRef.current?.querySelector<HTMLElement>(
+      '[data-testid="multi-fact-group-revision-candidate-card"], [data-testid="shared-paragraph-revision-candidate-card"]'
+    );
     card?.focus({ preventScroll: true });
     card?.scrollIntoView?.({ block: 'nearest' });
   }, [isOpen, activeMultiFactCandidate]);
@@ -206,6 +213,22 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const reviewOverview: DraftFactReviewOverview = useMemo(() => {
     return evaluateDraftFactReviews(task, currentDraft);
   }, [task, currentDraft]);
+
+  const isTwoFactsShared = useMemo(() => {
+    if (analysis.changedFactsCount !== 2 || analysis.impactItems.length !== 2 || !currentDraft) return false;
+    const f1Id = analysis.impactItems[0].factId;
+    const f2Id = analysis.impactItems[1].factId;
+    const bIds1 = new Set(
+      currentDraft.blocks
+        .filter((b) => (b.referencedFactIds || []).includes(f1Id) || (b.adoptedEvidences || []).some((e) => e.associatedFactId === f1Id))
+        .map((b) => b.id)
+    );
+    return currentDraft.blocks.some((b) => {
+      const has1 = bIds1.has(b.id);
+      const has2 = (b.referencedFactIds || []).includes(f2Id) || (b.adoptedEvidences || []).some((e) => e.associatedFactId === f2Id);
+      return has1 && has2;
+    });
+  }, [analysis.changedFactsCount, analysis.impactItems, currentDraft]);
 
   if (!isOpen) return null;
 
@@ -426,10 +449,14 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
   const handleGenerateMultiFactGroupRevision = () => {
     setMultiFactGroupAcceptError(null);
-    const res = generateMultiFactGroupRevisionCandidate(task, currentDraft, activeRole);
+    const res = isTwoFactsShared
+      ? generateSharedParagraphFactRevisionCandidate(task, currentDraft, activeRole)
+      : generateMultiFactGroupRevisionCandidate(task, currentDraft, activeRole);
     if (!res.success || !res.candidateGroup) {
       activeMultiFactRunId.current = null;
-      const eligibility = checkMultiFactGroupRevisionEligibility(task, currentDraft, activeRole);
+      const eligibility = isTwoFactsShared
+        ? checkSharedParagraphFactRevisionEligibility(task, currentDraft, activeRole)
+        : checkMultiFactGroupRevisionEligibility(task, currentDraft, activeRole);
       setMultiFactGroupError({
         reason: res.reason || eligibility.reason || '生成两项事实成组修订候选失败',
         unconfirmedUpstream: eligibility.unconfirmedUpstream,
@@ -452,13 +479,23 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
   const handleAcceptMultiFactGroupRevision = (candidateGroup: MultiFactGroupRevisionCandidate) => {
     setMultiFactGroupAcceptError(null);
     const runId = activeMultiFactRunId.current || '';
-    const validation = validateMultiFactGroupRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, runId);
+    const hasShared = candidateGroup.items.some(i => (i.associatedFactIds || []).length > 1) ||
+      candidateGroup.facts.some(f =>
+        candidateGroup.facts.some(other => other.factId !== f.factId && f.referencingBlockIds.some(bid => other.referencingBlockIds.includes(bid)))
+      );
+    const validation = hasShared
+      ? validateSharedParagraphFactRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, runId)
+      : validateMultiFactGroupRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, runId);
+
     if (!isOpen || !validation.valid) {
       setMultiFactGroupAcceptError(validation.reason || '面板已关闭，候选已取消');
       return;
     }
     try {
-      const res = onAcceptMultiFactGroupRevision?.(candidateGroup, runId);
+      const acceptFn = hasShared && onAcceptSharedParagraphFactRevision
+        ? onAcceptSharedParagraphFactRevision
+        : onAcceptMultiFactGroupRevision;
+      const res = acceptFn?.(candidateGroup, runId);
       if (!res?.success) {
         setMultiFactGroupAcceptError(res?.reason || '未完成业务写入，请重试或重新生成候选');
         return;
@@ -478,8 +515,17 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
     revisedContent: string,
     fromValue: string,
     toValue: string,
-    unit: string
+    unit: string,
+    modifications?: ParagraphRevisionModification[]
   ) => {
+    const hasMultiMods = Boolean(modifications && modifications.length > 1);
+    const origSummary = hasMultiMods
+      ? modifications!.map(m => `${m.fromValue} ${m.unit}`).join('、')
+      : `${fromValue} ${unit}`;
+    const candSummary = hasMultiMods
+      ? modifications!.map(m => `${m.toValue} ${m.unit}`).join('、')
+      : `${toValue} ${unit}`;
+
     return (
       <div className="space-y-2.5">
         {/* Labeled Original Text (Fixes Issue #82: pristine whole paragraph) */}
@@ -489,7 +535,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
               <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-2xs font-mono font-bold">
                 【原文】
               </span>
-              <span>当前稿完整文本（原数值：{fromValue} {unit}）</span>
+              <span>当前稿完整文本（原数值：{origSummary}）</span>
             </span>
             <span className="text-2xs text-slate-400">完整未修改段落</span>
           </div>
@@ -509,7 +555,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
               <span className="px-1.5 py-0.5 rounded bg-blue-200 text-blue-800 text-2xs font-mono font-bold">
                 【修订候选】
               </span>
-              <span>拟写入完整文本（候选数值：{toValue} {unit}）</span>
+              <span>拟写入完整文本（候选数值：{candSummary}）</span>
             </span>
             <span className="text-2xs text-blue-600 font-medium">仅定向更新指标数值</span>
           </div>
@@ -534,6 +580,64 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
             className="p-3 bg-white rounded border border-slate-300 font-serif leading-relaxed text-slate-900 text-xs select-text"
           >
             {(() => {
+              if (hasMultiMods) {
+                const sorted = [...modifications!].sort(
+                  (a, b) => (a.originalOffset?.start ?? 0) - (b.originalOffset?.start ?? 0)
+                );
+                const m1 = sorted[0];
+                const m2 = sorted[1];
+                if (m1.originalOffset && m2.originalOffset) {
+                  // Service offsets cover the numeric value only. Consume its
+                  // original spacing and unit in the display token as well, so
+                  // the surrounding untouched text does not repeat the unit.
+                  const quantityEnd = (m: ParagraphRevisionModification) => {
+                    const end = m.originalOffset!.end;
+                    const spacing = originalContent.slice(end).match(/^\s*/)?.[0] || '';
+                    return end + spacing.length + m.unit.length;
+                  };
+                  const end1 = quantityEnd(m1);
+                  const end2 = quantityEnd(m2);
+                  const prefix = originalContent.slice(0, m1.originalOffset.start);
+                  const mid = originalContent.slice(end1, m2.originalOffset.start);
+                  const suffix = originalContent.slice(end2);
+                  const tokenFrom1 = originalContent.slice(m1.originalOffset.start, end1);
+                  const tokenTo1 = m1.toValue + originalContent.slice(m1.originalOffset.end, end1);
+                  const tokenFrom2 = originalContent.slice(m2.originalOffset.start, end2);
+                  const tokenTo2 = m2.toValue + originalContent.slice(m2.originalOffset.end, end2);
+                  return (
+                    <>
+                      <span>{prefix}</span>
+                      <span
+                        className="bg-rose-100 text-rose-800 line-through decoration-rose-500 px-1 py-0.5 rounded font-mono mx-0.5 inline-flex items-center"
+                        aria-label={`删除原数值文本: ${tokenFrom1}`}
+                      >
+                        [删: {tokenFrom1}]
+                      </span>
+                      <span
+                        className="bg-emerald-100 text-emerald-800 font-bold px-1 py-0.5 rounded font-mono mx-0.5 inline-flex items-center"
+                        aria-label={`新增候选数值文本: ${tokenTo1}`}
+                      >
+                        [改: {tokenTo1}]
+                      </span>
+                      <span>{mid}</span>
+                      <span
+                        className="bg-rose-100 text-rose-800 line-through decoration-rose-500 px-1 py-0.5 rounded font-mono mx-0.5 inline-flex items-center"
+                        aria-label={`删除原数值文本: ${tokenFrom2}`}
+                      >
+                        [删: {tokenFrom2}]
+                      </span>
+                      <span
+                        className="bg-emerald-100 text-emerald-800 font-bold px-1 py-0.5 rounded font-mono mx-0.5 inline-flex items-center"
+                        aria-label={`新增候选数值文本: ${tokenTo2}`}
+                      >
+                        [改: {tokenTo2}]
+                      </span>
+                      <span>{suffix}</span>
+                    </>
+                  );
+                }
+              }
+
               const fromToken = `${fromValue}${unit}`;
               const toToken = `${toValue}${unit}`;
               // Identify the occurrence that actually produces the full candidate.
@@ -705,16 +809,20 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   </button>
                 )}
                 {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount === 2 && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateMultiFactGroupRevision}
-                    data-testid="btn-generate-multi-fact-group-revision"
-                    className="px-3.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
-                    title="按任务最新核准事实生成两项事实全部关联段落成组定向修订候选"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>生成两项事实成组修订候选</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleGenerateMultiFactGroupRevision}
+                      data-testid={isTwoFactsShared ? "btn-generate-shared-paragraph-revision" : "btn-generate-multi-fact-group-revision"}
+                      className="px-3.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                      title={isTwoFactsShared
+                        ? "按任务最新核准事实生成两项事实共享段落定向修订候选"
+                        : "按任务最新核准事实生成两项事实全部关联段落成组定向修订候选"}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>{isTwoFactsShared ? "生成两项事实共享段落修订候选" : "生成两项事实成组修订候选"}</span>
+                    </button>
+                  </>
                 )}
               </div>
 
@@ -806,14 +914,17 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
               {/* Task 25: Multi-Fact Group Revision Candidate Card */}
               {activeMultiFactCandidate && (
                 <div
-                  data-testid="multi-fact-group-revision-candidate-card"
+                  data-testid={isTwoFactsShared ? "shared-paragraph-revision-candidate-card" : "multi-fact-group-revision-candidate-card"}
                   tabIndex={-1}
                   className="p-4 bg-sky-50/70 border-2 border-sky-400 rounded-lg text-xs space-y-3.5 shadow-sm"
                 >
                   <div className="flex items-center justify-between border-b border-sky-200 pb-2 flex-wrap gap-2">
                     <div className="flex items-center gap-1.5 font-bold text-sky-950 text-sm">
                       <Sparkles className="w-4 h-4 text-sky-600 shrink-0" />
-                      <span>两项事实成组定向修订候选（共2项事实、去重后受影响 {activeMultiFactCandidate.items.length} 个段落）</span>
+                      <span>
+                        {isTwoFactsShared ? '两项事实共享段落定向修订候选' : '两项事实成组定向修订候选'}
+                        （共2项事实、去重后受影响 {activeMultiFactCandidate.items.length} 个段落）
+                      </span>
                     </div>
                     <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
                       <span>任务: {activeMultiFactCandidate.taskId}</span>
@@ -908,13 +1019,21 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between text-sky-950 font-bold text-xs">
                       <span>共影响 {activeMultiFactCandidate.items.length} 个段落，逐段修订预览：</span>
-                      <span className="text-2xs text-slate-500 font-normal">两事实关联段落互不重叠，支持分别定位正文与核验完整段落</span>
+                      <span className="text-2xs text-slate-500 font-normal">
+                        {isTwoFactsShared
+                          ? '包含共享段落与独立段落，支持分别定位正文与核验完整段落'
+                          : '两事实关联段落互不重叠，支持分别定位正文与核验完整段落'}
+                      </span>
                     </div>
 
                     {activeMultiFactCandidate.items.map((item) => {
-                      const factForItem = activeMultiFactCandidate.facts.find((f) =>
-                        f.referencingBlockIds.includes(item.targetBlockId)
-                      )!;
+                      const factsForItem = activeMultiFactCandidate.facts.filter((f) =>
+                        (item.associatedFactIds && item.associatedFactIds.length > 0)
+                          ? item.associatedFactIds.includes(f.factId)
+                          : f.referencingBlockIds.includes(item.targetBlockId)
+                      );
+                      const factForItem = factsForItem[0] || activeMultiFactCandidate.facts[0];
+                      const isSharedBlock = factsForItem.length > 1;
                       return (
                         <div
                           key={item.targetBlockId}
@@ -934,7 +1053,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 [Block ID: {item.targetBlockId}]
                               </span>
                               <span className="text-2xs px-1.5 py-0.2 rounded bg-sky-100 text-sky-800 font-medium">
-                                关联事实：{factForItem.metric}
+                                关联事实：{factsForItem.map((f) => f.metric).join('、')}
+                                {isSharedBlock && '（两项修改）'}
                               </span>
                             </div>
                             <button
@@ -955,7 +1075,8 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                             item.revisedBlockContent,
                             factForItem.fromValue,
                             factForItem.toValue,
-                            factForItem.unit
+                            factForItem.unit,
+                            item.modifications
                           )}
                         </div>
                       );
@@ -969,7 +1090,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                       <span>本次两项事实成组操作范围与原子性依据说明：</span>
                     </div>
                     <p>
-                      1. <strong>成组一致修订全部 {activeMultiFactCandidate.items.length} 个关联段落</strong>（Block IDs: {activeMultiFactCandidate.targetBlockIds.join(', ')}），两项事实关联段落互不重叠，其余所有段落正文、未变事实引用与依据严格保持原样。
+                      1. <strong>成组一致修订全部 {activeMultiFactCandidate.items.length} 个关联段落</strong>（Block IDs: {activeMultiFactCandidate.targetBlockIds.join(', ')}），{isTwoFactsShared ? '共享段落与独立段落均已精准定向改写' : '两项事实关联段落互不重叠'}，其余所有段落正文、未变事实引用与依据严格保持原样。
                     </p>
                     <p>
                       2. 确认采纳将<strong>一次性归档当前工作稿为只读历史快照</strong>（完整冻结旧正文、旧依据与当时人工复核留痕），并<strong>只创建一个新工作稿</strong>。
@@ -985,17 +1106,20 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   {/* Acceptance Validation / Error Alert */}
                   {(() => {
                     const runId = activeMultiFactRunId.current || '';
-                    const validation = validateMultiFactGroupRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId);
+                    const validation = isTwoFactsShared
+                      ? validateSharedParagraphFactRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId)
+                      : validateMultiFactGroupRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId);
+                    const canAccept = validation.valid && (Boolean(onAcceptMultiFactGroupRevision) || Boolean(onAcceptSharedParagraphFactRevision));
                     return (
                       <>
                         {!validation.valid && (
-                          <p role="alert" data-testid="alert-multi-fact-group-stale" className="text-rose-800 text-xs font-medium">
+                          <p role="alert" data-testid={isTwoFactsShared ? "alert-shared-paragraph-stale" : "alert-multi-fact-group-stale"} className="text-rose-800 text-xs font-medium">
                             {validation.reason} 请使用上方入口重新生成候选。
                           </p>
                         )}
                         {multiFactGroupAcceptError && (
                           <div
-                            data-testid="alert-multi-fact-group-accept-error"
+                            data-testid={isTwoFactsShared ? "alert-shared-paragraph-accept-error" : "alert-multi-fact-group-accept-error"}
                             className="p-2.5 bg-rose-50 border border-rose-300 rounded text-xs text-rose-950 space-y-1"
                           >
                             <div className="flex items-center gap-1 font-bold text-rose-900">
@@ -1009,7 +1133,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                           <button
                             type="button"
                             onClick={handleCancelMultiFactGroupRevision}
-                            data-testid="btn-cancel-multi-fact-group-revision"
+                            data-testid={isTwoFactsShared ? "btn-cancel-shared-paragraph-revision" : "btn-cancel-multi-fact-group-revision"}
                             className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded cursor-pointer font-medium"
                           >
                             取消
@@ -1019,24 +1143,26 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                             <button
                               type="button"
                               onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
-                              data-testid="btn-retry-accept-multi-fact-group-revision"
-                              disabled={!validation.valid || !onAcceptMultiFactGroupRevision}
+                              data-testid={isTwoFactsShared ? "btn-retry-accept-shared-paragraph-revision" : "btn-retry-accept-multi-fact-group-revision"}
+                              disabled={!canAccept}
                               className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
                               <span>重试采纳</span>
                             </button>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
-                              data-testid="btn-accept-multi-fact-group-revision"
-                              disabled={!validation.valid || !onAcceptMultiFactGroupRevision}
-                              className="px-4 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              <span>全部采纳并创建新工作稿</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
+                                data-testid={isTwoFactsShared ? "btn-accept-shared-paragraph-revision" : "btn-accept-multi-fact-group-revision"}
+                                disabled={!canAccept}
+                                className="px-4 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>全部采纳并创建新工作稿</span>
+                              </button>
+                            </>
                           )}
                         </div>
                       </>
@@ -1221,16 +1347,18 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                         {/* Top Block Actions: Locate & Fact Revision */}
                         <div className="flex items-center gap-2">
                           {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount === 2 && (
-                            <button
-                              type="button"
-                              onClick={handleGenerateMultiFactGroupRevision}
-                              data-testid={`btn-generate-multi-fact-group-revision-${ev.blockId}`}
-                              className="px-2.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
-                              title="按任务最新核准事实生成两项事实成组修订候选"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                              <span>生成两项事实成组修订候选</span>
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={handleGenerateMultiFactGroupRevision}
+                                data-testid={isTwoFactsShared ? `btn-generate-shared-paragraph-revision-${ev.blockId}` : `btn-generate-multi-fact-group-revision-${ev.blockId}`}
+                                className="px-2.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                title={isTwoFactsShared ? "按任务最新核准事实生成两项事实共享段落修订候选" : "按任务最新核准事实生成两项事实成组修订候选"}
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>{isTwoFactsShared ? "生成两项事实共享段落修订候选" : "生成两项事实成组修订候选"}</span>
+                              </button>
+                            </>
                           )}
                           {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount !== 2 && multiFactItem && (
                             <button

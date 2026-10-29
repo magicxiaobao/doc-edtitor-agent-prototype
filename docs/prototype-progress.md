@@ -999,3 +999,127 @@ npm run build
 - `git diff --check`通过。应用源码修复后无其他业务变更。
 
 **交接边界**：本轮仅代码、自动化/JSDOM及构建接收，没有Task25云浏览器、真实复制、独立屏幕阅读器或桌面Word/WPS实测。PR最新HEAD评审通过、合并后，等待用户确认AI Studio同步最新main，再执行成组候选、双出处、全部段落、取消/采纳、历史冻结、完整日志与切换的限定云浏览器验收。#85保持Open待浏览器收尾；#57继续Open，#40不重做。任务24同步后限定云浏览器验收已在#83/#82记录completed，上文15.7的Open为历史阶段状态。
+
+---
+
+## 17. 任务26：两项事实共享段落定向修订 (2026-10-29 实施交付)
+
+### 17.1 需求目标与技术架构
+
+任务26针对“恰好两项事实发生受支持的数值变化，且两项事实至少共同关联一个段落”的场景，提供整体定向修订闭环：
+1. **两种布局支持**：
+   - 布局1（2事实、1段）：两项事实仅共同关联同一段落（如 FACT-01 与 FACT-02 均仅在 BLK-01 引用）；
+   - 布局2（2事实、3段）：部分共享、部分独立（如 FACT-01 关联 BLK-01、BLK-02，FACT-02 关联 BLK-01、BLK-03，去重后为3个受影响段落）。
+2. **段落去重与单次递增准则**：
+   - 目标段落集合按稳定 Block ID 取并集去重；
+   - 同一个段落只展示一次、更新一次、记录一次；包含两项修改时，`revisionSeq` 也严格只递增 1。
+3. **同段多处确定性改写**：
+   - 基于同一份原正文形成可验证的编辑区间；
+   - 逐项校验指标归属、冻结旧值、完整单位、期间及语义（计划、预测、条件、否定、复合单位等保护严格保留）；
+   - 两处改写区间基于原正文互不重叠，改写时按降序或精确定位应用，彻底杜绝长度突变导致的位置偏移与串扰；
+   - 严格覆盖数值交叉（A新值等于B旧值）、非对称长度突变、同段其他同值指标不误伤等边界。
+4. **单次整体采纳与完整留痕**：
+   - 验证主笔权限、最新任务与稿件状态、整稿哈希、基准指纹与快照一致性；
+   - 归档旧工作稿为不可变只读历史快照，创建唯一新工作稿；
+   - 记录结构化成组日志，结构化保留两项事实明细；
+   - 在“最近修改记录”弹窗中，即使是“2事实、仅1段”场景，仍提供折叠展开查看该段完整 before/after 正文。
+5. **通道清晰隔离**：
+   - 两项事实无共享段落时，严格由共享段落通道阻断并提示使用任务25非重叠通道；反之亦然。
+
+### 17.2 核心代码变更清单
+
+1. **`src/services/factRevisionCandidateService.ts`**：
+   - `checkSharedParagraphFactRevisionEligibility(task, currentDraft, activeRole)`：严格判定2项事实、两事实存在共享段落交集（`overlap.length > 0`）、无材料补写存证、各段确定性改写区间有效且互不重叠；
+   - `generateSharedParagraphFactRevisionCandidate(task, currentDraft, activeRole, options)`：构建合并编辑计划，生成共享段落双修改候选与独立段落单修改候选；
+   - `validateSharedParagraphFactRevisionAcceptance(task, currentDraft, candidateGroup, activeRole, activeRunId)`：全流程指纹一致性、未变段落哈希、新鲜度再验证；
+   - `acceptSharedParagraphFactRevisionCandidate(task, currentDraft, candidateGroup, activeRole, activeRunId)`：原子创建新工作稿（每个目标段落 revisionSeq 仅递增 1）、归档旧稿、记录结构化修改日志；
+   - `MultiFactGroupRevisionEligibilityResult` 补充 `sharedBlockIds`，采纳结果返回 `workingDraft` / `newWorkingDraft` 双兼容。
+2. **`src/components/FactImpactModal.tsx`**：
+   - 识别两事实共享段落场景，提供专用“生成两项事实共享段落修订候选”入口；
+   - 渲染包含两项事实对照卡片、共享段落“两项修改”专属标签、清晰删改标记（避免文本混淆连缀）、定位正文与整体原子采纳按钮。
+3. **`src/components/RecentModificationsModal.tsx`**：
+   - 支持 `isMultiFactGroup && affected.length > 0` 场景的折叠展开，使“2事实1段”时仍可展开查看完整 before 与 after 正文。
+4. **`src/components/stages/DraftingStage.tsx`**：
+   - 接入 `handleAcceptSharedParagraphFactRevision` 回调，打通实际起草界面的原子采纳流。
+5. **`src/services/mockData.ts` & `src/App.tsx` & `src/components/Navbar.tsx`**：
+   - 新增独立演示任务 `TASK-DEMO-SHARED-PARAGRAPH-REVISION`（首段同时引用 120项与 18场冲突事实，并保留 800人次）；
+   - 导航栏增加预置项与独立创建按钮（`btn-create-shared-paragraph-demo-task`）。
+6. **自动化测试**：
+   - `test-task26.tsx`：12 组核心业务与真实组件交互测试（覆盖 2事实1段、2事实3段、数值交叉、长度突变、防偏移、防误伤、重叠阻断、零重叠阻断、原子采纳、明细折叠、JSDOM组件及独立演示任务）；
+   - `test-task26-receipt.tsx`：7 组实施方自测验收检查表；
+   - `package.json` 添加 `"test:task26"` 与 `"test:task26:receipt"` 脚本。
+
+### 17.3 自动化测试与验证结果
+
+```bash
+# 1. 任务26 专项全量测试（12 组全部通过，100%）
+npx tsx test-task26.tsx
+# [A] 2事实仅1共享段落场景 (2事实、1段) - PASSED
+# [B] 2事实3段落场景 (1共享 + 2独立) - PASSED
+# [C] 同段多处改写保护 (C1数值交叉、C2长度突变、C3防误伤) - PASSED
+# [D] 同段两处改写位置重叠/冲突阻断 - PASSED
+# [E] 零重叠段落拒绝 (两事实无交集时拒绝进入共享段落通道) - PASSED
+# [F] 单事实或3+事实整组拒绝 - PASSED
+# [G] 材料补写存证段落阻断 - PASSED
+# [H] 权限、过期、篡改候选与版本校验 - PASSED
+# [I] 原子采纳与版本恢复保证 - PASSED
+# [J] 最近修改记录：2事实1段展开明细支持 - PASSED
+# [K] JSDOM界面交互：两事实共享段落定向修订全流程 - PASSED
+# [L] 独立演示任务准备数据后的服务闭环 - PASSED
+
+# 2. 任务26 实施方自测验收检查表（7 项全部通过）
+npx tsx test-task26-receipt.tsx
+# 场景一（2事实1段）revisionSeq仅+1 - PASS
+# 场景二（2事实3段）非目标段落严格不变 - PASS
+# 边界与防御：重叠冲突阻断、非重叠通道隔离、单事实及3事实变更整组拒绝 - PASS
+# 原子采纳与版本恢复：单次采纳创建工作稿，版本恢复回退正文与快照 - PASS
+# 最近修改记录：2事实1段场景支持折叠展开查看完整before/after正文 - PASS
+# 真实组件交互：FactImpactModal渲染入口、卡片及整体采纳 - PASS
+# 独立演示任务准备数据后的服务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建与采纳 - PASS
+
+# 3. 既有任务无损回归
+npx tsx test-task25.tsx && npx tsx test-task24.tsx && npx tsx test-task23.tsx
+# 全部 100% 通过，未发生任何功能倒退或污染
+
+# 4. TypeScript 严格类型检查与生产构建
+npm run lint && npm run build
+# tsc --noEmit: 0 errors
+# vite build: 成功构建
+```
+
+
+### 17.4 Codex 独立接收与最小修复（2026-10-29）
+
+接收基线为远端 `ce7bc72c74ab2711162f408425f1b4b740588b00`（父提交 / 当时 main 为 `d8dccb3e85dc86096fe698bc843fd877e3f67469`）。以下为 Codex 独立代码及自动化证据，问题与后续云浏览器验收由 #87 跟踪。
+
+交付原版的两套 Task26 自测可通过，但新增独立断言复现三处问题：
+
+1. 共享段落的编辑区间只包含数值，删改标记又显示单位，导致 `[删: 128项][改: 120项]项` 与 `[删: 16场][改: 18场]场`。修复展示分片，使标记消费原文中该数值后的空白与单位；完整原文、完整候选和业务编辑区间不变。
+2. 为旧测试 ID 增加的 6 个 `sr-only` / `aria-hidden` 按钮仍在键盘焦点顺序中。移除这些隐藏别名按钮及空候选别名，保留实际共享段落控件；原有非重叠场景沿用自身真实控件，不为测试增加隐藏业务入口。
+3. 两事实一段日志在可选事实明细损坏时，合法逐段完整正文详情被隐藏。修复详情显示条件，继续显示可验证的完整 before/after 与格式不完整提示，不重置、删除或改写存储数据。
+
+严格检查测试文件还发现交付原版 4 处类型错误：不存在的 `onUndoSuccess`、`onOpenMaterialSnippet` 属性、错误的补写存证字段及未经收窄的可空任务返回值。均按真实接口修正；补写存证用例改用真实存在、字段完整且可关联的出处，保持有效阻断断言，不以无效夹具冒充目标段落准入覆盖。
+
+新增 `test-task26-codex-receipt.tsx`，17 组独立断言覆盖：单共享段 / 混合三段 / 多共享段并集、稳定 ID 重排、同旧值同单位的不同指标、数值交叉与长度变化、原文编辑区间真实重叠、整组失败、权限与基准、上下文过期、畸形 / 篡改候选、完整删改文本、隐藏焦点、复核冻结与版本恢复、两事实一段日志展开及异常元数据、取消 / 角色版本切换 / 采纳重试与重复点击、四个真实出处入口、App 显式创建与复用隔离。
+
+其中独立第14组通过 `MaterialsAndFactsStage` 的真实两次裁决（填写范围和理由）、事实核准、`StyleAndOutlineStage` 确认大纲、`DraftingStage` 生成 / 取消 / 重新生成 / 整体采纳 / 查看日志完成组件闭环；原实施方 L 与 receipt 第7组是直接准备核准数据后的服务测试，不能作为跨阶段用户操作或云浏览器证据。独立测试第9、10、12组在原版失败、修复后通过。
+
+云浏览器视觉验收须在合并、用户确认 AI Studio 已同步后执行，本节不宣称浏览器通过。独立屏幕阅读器与真实桌面 Word/WPS 为 NOT_RUN，由 #57 保留；#40 已完成不重复。
+
+本轮实际检查结果：
+
+- 原生 `npm test`：环境失败，Node v24.22.1 下 tsx 无法建立 `/tmp/tsx-0/20.pipe`（`listen EPERM`），未将原命令记为通过。
+- 严格按最终 `package.json` 的列表和顺序，将 `tsx 文件` 替换为 `node --import tsx 文件`，保留已有 npm receipt 脚本：30 项全部通过（Task07–26 共20套，另10套 receipt，包含新17组 Codex 接收回归）。
+- `npm run test:demo`：11套演示回归通过。
+- `npm run typecheck`：通过。
+- 测试文件独立严格检查：`tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --jsx react-jsx --lib ES2022,DOM,DOM.Iterable --skipLibCheck --strict --esModuleInterop test-task26.tsx test-task26-receipt.tsx test-task26-codex-receipt.tsx` 通过。
+- 实际 `npm run build`：成功，JS 1,309.95 kB，保留既有超过500 kB分包警告；不以其他构建器输出替代。
+- `git diff --check`：通过。
+
+### 17.5 PR #88 首轮评审意见处理（2026-10-29）
+
+Codex 在 HEAD `2c6edee4e6a37afc801f231cd760c16959d505a1` 提出 P2：共享候选卡片已改为 `shared-paragraph-revision-candidate-card`，生成后滚动 / 聚焦 effect 却仍仅匹配旧的非重叠候选标识。从下方入口生成后，用户无法自动到达上方候选。
+
+最小修复使 effect 匹配两个真实候选标识，不重新引入隐藏别名控件。独立套件新增第18组，覆盖共享和非重叠两个通道的顶部 / 下方入口，检查真实候选卡片得到键盘焦点且触发滚动。将该用例放到与首轮 PR HEAD 完全相同代码树的隔离工作区，实际得到仅第18组失败；修复后18组通过。JSDOM 检查焦点及滚动调用，实际滚动位置、视觉与键盘感受仍待云浏览器验收。
+
+修复后重跑与变更相关的7套（Task24 Codex、Task25自测/receipt/Codex、Task26自测/receipt/Codex），均通过；源码typecheck、Task26三份测试strict检查、实际npm run build及diff检查通过。最新构建JS为1,310.01 kB，既有分包警告保留。前述完整30项及11套demo为首轮接收修复后的结果，本次焦点修复后未重复整条无关链路。等待最新HEAD复评通过后再合并，#87继续保留云浏览器门槛。

@@ -288,6 +288,15 @@ export interface FactRevisionCandidate {
   explanation: string;
 }
 
+export interface ParagraphRevisionModification {
+  factId: string;
+  metric: string;
+  unit: string;
+  fromValue: string;
+  toValue: string;
+  originalOffset?: { start: number; end: number };
+}
+
 export interface ParagraphRevisionCandidateItem {
   targetBlockId: string;
   targetBlockOrder: number;
@@ -297,6 +306,8 @@ export interface ParagraphRevisionCandidateItem {
   originalReferencedFactIds: string[];
   revisedBlockContent: string;
   diffExplanation?: string;
+  modifications?: ParagraphRevisionModification[];
+  associatedFactIds?: string[];
 }
 
 export interface MultiParagraphFactRevisionCandidate {
@@ -377,6 +388,26 @@ export interface MultiFactGroupRevisionCandidate {
   };
   createdAt: string;
   explanation: string;
+}
+
+export type SharedParagraphFactRevisionCandidate = MultiFactGroupRevisionCandidate;
+
+export interface SharedParagraphFactRevisionEligibilityResult {
+  eligible: boolean;
+  reason?: string;
+  blockingReasons?: string[];
+  unconfirmedUpstream?: 'fact' | 'style' | 'outline';
+}
+
+export interface SharedParagraphFactRevisionAcceptanceResult {
+  valid: boolean;
+  reason?: string;
+}
+
+export interface SharedParagraphFactRevisionResult {
+  candidate?: SharedParagraphFactRevisionCandidate;
+  error?: string;
+  eligibility?: SharedParagraphFactRevisionEligibilityResult;
 }
 
 export interface FactRevisionLogItem {
