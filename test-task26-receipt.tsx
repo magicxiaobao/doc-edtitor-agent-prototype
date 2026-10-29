@@ -263,7 +263,7 @@ await check('最近修改记录：2事实1段场景支持折叠展开查看完�
       currentDraft={accRes.workingDraft!}
       activeRole="主笔甲"
       onClose={() => {}}
-      onUndoSuccess={() => {}}
+      onUndo={() => {}}
     />
   );
 
@@ -292,7 +292,7 @@ await check('真实组件交互：FactImpactModal渲染两事实共享段落定�
       analysis={analysis}
       activeRole="主笔甲"
       onClose={() => {}}
-      onOpenMaterialSnippet={() => {}}
+      onViewLatestEvidence={() => {}}
       onAcceptSharedParagraphFactRevision={() => {
         accepted = true;
         return { success: true };
@@ -325,8 +325,8 @@ await check('真实组件交互：FactImpactModal渲染两事实共享段落定�
   unmount();
 });
 
-// 7. 独立演示任务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION预置两项事实冲突，完整可验证
-await check('独立演示任务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建、准入、生成与采纳', () => {
+// 7. 独立演示任务准备数据后的服务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION预置两项事实冲突，完整可验证
+await check('独立演示任务准备数据后的服务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建、准入、生成与采纳', () => {
   const task = createSharedParagraphRevisionDemoTask();
   assert.equal(task.id, 'TASK-DEMO-SHARED-PARAGRAPH-REVISION');
   const draft = task.drafts.find((d) => d.id === task.currentDraftId)!;

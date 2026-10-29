@@ -585,13 +585,23 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                 const m1 = sorted[0];
                 const m2 = sorted[1];
                 if (m1.originalOffset && m2.originalOffset) {
+                  // Service offsets cover the numeric value only. Consume its
+                  // original spacing and unit in the display token as well, so
+                  // the surrounding untouched text does not repeat the unit.
+                  const quantityEnd = (m: ParagraphRevisionModification) => {
+                    const end = m.originalOffset!.end;
+                    const spacing = originalContent.slice(end).match(/^\s*/)?.[0] || '';
+                    return end + spacing.length + m.unit.length;
+                  };
+                  const end1 = quantityEnd(m1);
+                  const end2 = quantityEnd(m2);
                   const prefix = originalContent.slice(0, m1.originalOffset.start);
-                  const mid = originalContent.slice(m1.originalOffset.end, m2.originalOffset.start);
-                  const suffix = originalContent.slice(m2.originalOffset.end);
-                  const tokenFrom1 = `${m1.fromValue}${m1.unit}`;
-                  const tokenTo1 = `${m1.toValue}${m1.unit}`;
-                  const tokenFrom2 = `${m2.fromValue}${m2.unit}`;
-                  const tokenTo2 = `${m2.toValue}${m2.unit}`;
+                  const mid = originalContent.slice(end1, m2.originalOffset.start);
+                  const suffix = originalContent.slice(end2);
+                  const tokenFrom1 = originalContent.slice(m1.originalOffset.start, end1);
+                  const tokenTo1 = m1.toValue + originalContent.slice(m1.originalOffset.end, end1);
+                  const tokenFrom2 = originalContent.slice(m2.originalOffset.start, end2);
+                  const tokenTo2 = m2.toValue + originalContent.slice(m2.originalOffset.end, end2);
                   return (
                     <>
                       <span>{prefix}</span>
@@ -810,15 +820,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>{isTwoFactsShared ? "生成两项事实共享段落修订候选" : "生成两项事实成组修订候选"}</span>
                     </button>
-                    {isTwoFactsShared && (
-                      <button
-                        type="button"
-                        className="sr-only"
-                        data-testid="btn-generate-multi-fact-group-revision"
-                        onClick={handleGenerateMultiFactGroupRevision}
-                        aria-hidden="true"
-                      />
-                    )}
                   </>
                 )}
               </div>
@@ -915,9 +916,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   tabIndex={-1}
                   className="p-4 bg-sky-50/70 border-2 border-sky-400 rounded-lg text-xs space-y-3.5 shadow-sm"
                 >
-                  {isTwoFactsShared && (
-                    <span className="sr-only" data-testid="multi-fact-group-revision-candidate-card" />
-                  )}
                   <div className="flex items-center justify-between border-b border-sky-200 pb-2 flex-wrap gap-2">
                     <div className="flex items-center gap-1.5 font-bold text-sky-950 text-sm">
                       <Sparkles className="w-4 h-4 text-sky-600 shrink-0" />
@@ -1107,7 +1105,7 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                   {(() => {
                     const runId = activeMultiFactRunId.current || '';
                     const validation = isTwoFactsShared
-                      ? validateSharedParagraphFactRevisionAcceptance(task, currentDraft, activeMultiFactCandidate as any, activeRole, runId)
+                      ? validateSharedParagraphFactRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId)
                       : validateMultiFactGroupRevisionAcceptance(task, currentDraft, activeMultiFactCandidate, activeRole, runId);
                     const canAccept = validation.valid && (Boolean(onAcceptMultiFactGroupRevision) || Boolean(onAcceptSharedParagraphFactRevision));
                     return (
@@ -1138,15 +1136,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                           >
                             取消
                           </button>
-                          {isTwoFactsShared && (
-                            <button
-                              type="button"
-                              className="sr-only"
-                              data-testid="btn-cancel-multi-fact-group-revision"
-                              onClick={handleCancelMultiFactGroupRevision}
-                              aria-hidden="true"
-                            />
-                          )}
 
                           {multiFactGroupAcceptError ? (
                             <button
@@ -1171,15 +1160,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 <Check className="w-3.5 h-3.5" />
                                 <span>全部采纳并创建新工作稿</span>
                               </button>
-                              {isTwoFactsShared && (
-                                <button
-                                  type="button"
-                                  className="sr-only"
-                                  data-testid="btn-accept-multi-fact-group-revision"
-                                  onClick={() => handleAcceptMultiFactGroupRevision(activeMultiFactCandidate)}
-                                  aria-hidden="true"
-                                />
-                              )}
                             </>
                           )}
                         </div>
@@ -1376,15 +1356,6 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
                                 <Sparkles className="w-3.5 h-3.5" />
                                 <span>{isTwoFactsShared ? "生成两项事实共享段落修订候选" : "生成两项事实成组修订候选"}</span>
                               </button>
-                              {isTwoFactsShared && (
-                                <button
-                                  type="button"
-                                  className="sr-only"
-                                  data-testid={`btn-generate-multi-fact-group-revision-${ev.blockId}`}
-                                  onClick={handleGenerateMultiFactGroupRevision}
-                                  aria-hidden="true"
-                                />
-                              )}
                             </>
                           )}
                           {!isHistoricalOrFinal && isAuthor && analysis.changedFactsCount !== 2 && multiFactItem && (

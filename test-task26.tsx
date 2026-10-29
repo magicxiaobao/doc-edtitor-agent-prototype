@@ -381,15 +381,16 @@ async function runTask26Tests() {
     // Put adoptedEvidences on BLK-01
     draft.blocks[0].adoptedEvidences = [
       {
-        evidenceId: 'EVD-99',
-        sourceDocId: 'SRC-99',
-        sourceDocName: '调研专项台账',
-        location: '第1段',
-        text: '补充说明内容',
+        evidenceId: 'EVD-07',
+        sourceDocId: 'SRC-07',
+        sourceDocName: '教育培训处前三季度培训汇总',
+        snippetLocation: '第4段',
+        snippetText: task.snippets.find(s => s.id === 'EVD-07')!.text,
         period: '2026年1-9月',
-        adoptedAt: '2026-10-08T00:00:00.000Z',
-        adoptedByRole: '主笔甲',
-        paragraphContentAtAdoption: draft.blocks[0].content,
+        usage: 'current_fact',
+        associatedFactId: 'FACT-02',
+        contentFingerprint: 'test-adopted-evidence',
+        capturedAt: '2026-10-08T00:00:00.000Z',
       },
     ];
 
@@ -472,7 +473,7 @@ async function runTask26Tests() {
       <RecentModificationsModal
         isOpen={true}
         onClose={() => {}}
-        task={accRes.updatedTask}
+        task={accRes.updatedTask!}
         currentDraft={accRes.workingDraft}
         activeRole="主笔甲"
         onUndo={() => {}}
@@ -579,9 +580,9 @@ async function runTask26Tests() {
   }
 
   // ==========================================================================
-  // [L] 独立演示任务完整闭环 (TASK-DEMO-SHARED-PARAGRAPH-REVISION)
+  // [L] 独立演示任务准备数据后的服务闭环 (TASK-DEMO-SHARED-PARAGRAPH-REVISION)
   // ==========================================================================
-  console.log('\n>>> [L] 独立演示任务完整闭环:');
+  console.log('\n>>> [L] 独立演示任务准备数据后的服务闭环:');
   {
     const demoTask = createPresetTask('shared_paragraph_revision');
     assert(demoTask.id === 'TASK-DEMO-SHARED-PARAGRAPH-REVISION', 'L: 成功创建独立演示任务');
@@ -592,7 +593,7 @@ async function runTask26Tests() {
     assert(f1.status === 'pending' && f1.hasConflict, 'L: FACT-01初始冲突待裁决');
     assert(f2.status === 'pending' && f2.hasConflict, 'L: FACT-02初始冲突待裁决');
 
-    // Adjudicate both facts
+    // Prepare approved fixture data; this does not exercise adjudication UI.
     f1.status = 'confirmed';
     f1.selectedConflictValue = '120';
     f1.primaryEvidenceId = 'EVD-01';

@@ -1065,7 +1065,7 @@ npx tsx test-task26.tsx
 # [I] 原子采纳与版本恢复保证 - PASSED
 # [J] 最近修改记录：2事实1段展开明细支持 - PASSED
 # [K] JSDOM界面交互：两事实共享段落定向修订全流程 - PASSED
-# [L] 独立演示任务完整闭环 - PASSED
+# [L] 独立演示任务准备数据后的服务闭环 - PASSED
 
 # 2. 任务26 实施方自测验收检查表（7 项全部通过）
 npx tsx test-task26-receipt.tsx
@@ -1075,7 +1075,7 @@ npx tsx test-task26-receipt.tsx
 # 原子采纳与版本恢复：单次采纳创建工作稿，版本恢复回退正文与快照 - PASS
 # 最近修改记录：2事实1段场景支持折叠展开查看完整before/after正文 - PASS
 # 真实组件交互：FactImpactModal渲染入口、卡片及整体采纳 - PASS
-# 独立演示任务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建与采纳 - PASS
+# 独立演示任务准备数据后的服务闭环：TASK-DEMO-SHARED-PARAGRAPH-REVISION独立创建与采纳 - PASS
 
 # 3. 既有任务无损回归
 npx tsx test-task25.tsx && npx tsx test-task24.tsx && npx tsx test-task23.tsx
@@ -1087,3 +1087,31 @@ npm run lint && npm run build
 # vite build: 成功构建
 ```
 
+
+### 17.4 Codex 独立接收与最小修复（2026-10-29）
+
+接收基线为远端 `ce7bc72c74ab2711162f408425f1b4b740588b00`（父提交 / 当时 main 为 `d8dccb3e85dc86096fe698bc843fd877e3f67469`）。以下为 Codex 独立代码及自动化证据，问题与后续云浏览器验收由 #87 跟踪。
+
+交付原版的两套 Task26 自测可通过，但新增独立断言复现三处问题：
+
+1. 共享段落的编辑区间只包含数值，删改标记又显示单位，导致 `[删: 128项][改: 120项]项` 与 `[删: 16场][改: 18场]场`。修复展示分片，使标记消费原文中该数值后的空白与单位；完整原文、完整候选和业务编辑区间不变。
+2. 为旧测试 ID 增加的 6 个 `sr-only` / `aria-hidden` 按钮仍在键盘焦点顺序中。移除这些隐藏别名按钮及空候选别名，保留实际共享段落控件；原有非重叠场景沿用自身真实控件，不为测试增加隐藏业务入口。
+3. 两事实一段日志在可选事实明细损坏时，合法逐段完整正文详情被隐藏。修复详情显示条件，继续显示可验证的完整 before/after 与格式不完整提示，不重置、删除或改写存储数据。
+
+严格检查测试文件还发现交付原版 4 处类型错误：不存在的 `onUndoSuccess`、`onOpenMaterialSnippet` 属性、错误的补写存证字段及未经收窄的可空任务返回值。均按真实接口修正；补写存证用例改用真实存在、字段完整且可关联的出处，保持有效阻断断言，不以无效夹具冒充目标段落准入覆盖。
+
+新增 `test-task26-codex-receipt.tsx`，17 组独立断言覆盖：单共享段 / 混合三段 / 多共享段并集、稳定 ID 重排、同旧值同单位的不同指标、数值交叉与长度变化、原文编辑区间真实重叠、整组失败、权限与基准、上下文过期、畸形 / 篡改候选、完整删改文本、隐藏焦点、复核冻结与版本恢复、两事实一段日志展开及异常元数据、取消 / 角色版本切换 / 采纳重试与重复点击、四个真实出处入口、App 显式创建与复用隔离。
+
+其中独立第14组通过 `MaterialsAndFactsStage` 的真实两次裁决（填写范围和理由）、事实核准、`StyleAndOutlineStage` 确认大纲、`DraftingStage` 生成 / 取消 / 重新生成 / 整体采纳 / 查看日志完成组件闭环；原实施方 L 与 receipt 第7组是直接准备核准数据后的服务测试，不能作为跨阶段用户操作或云浏览器证据。独立测试第9、10、12组在原版失败、修复后通过。
+
+云浏览器视觉验收须在合并、用户确认 AI Studio 已同步后执行，本节不宣称浏览器通过。独立屏幕阅读器与真实桌面 Word/WPS 为 NOT_RUN，由 #57 保留；#40 已完成不重复。
+
+本轮实际检查结果：
+
+- 原生 `npm test`：环境失败，Node v24.22.1 下 tsx 无法建立 `/tmp/tsx-0/20.pipe`（`listen EPERM`），未将原命令记为通过。
+- 严格按最终 `package.json` 的列表和顺序，将 `tsx 文件` 替换为 `node --import tsx 文件`，保留已有 npm receipt 脚本：30 项全部通过（Task07–26 共20套，另10套 receipt，包含新17组 Codex 接收回归）。
+- `npm run test:demo`：11套演示回归通过。
+- `npm run typecheck`：通过。
+- 测试文件独立严格检查：`tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --jsx react-jsx --lib ES2022,DOM,DOM.Iterable --skipLibCheck --strict --esModuleInterop test-task26.tsx test-task26-receipt.tsx test-task26-codex-receipt.tsx` 通过。
+- 实际 `npm run build`：成功，JS 1,309.95 kB，保留既有超过500 kB分包警告；不以其他构建器输出替代。
+- `git diff --check`：通过。

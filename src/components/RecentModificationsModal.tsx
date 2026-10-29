@@ -288,7 +288,7 @@ export const RecentModificationsModal: React.FC<RecentModificationsModalProps> =
                       </div>
                     </div>
                   )}
-                  {(isGroup || (isMultiFactGroup && affected.length > 0)) && (
+                  {(isGroup || ((isMultiFactGroup || log.affectedFacts !== undefined) && affected.length > 0)) && (
                     <details className="mt-2 rounded border border-indigo-200 p-2">
                       <summary className="cursor-pointer font-semibold text-indigo-900">查看全部{affected.length}段修订明细</summary>
                       {affected.map(item => (
