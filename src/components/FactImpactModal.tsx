@@ -144,7 +144,9 @@ export const FactImpactModal: React.FC<FactImpactModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !activeMultiFactCandidate) return;
-    const card = modalRef.current?.querySelector<HTMLElement>('[data-testid="multi-fact-group-revision-candidate-card"]');
+    const card = modalRef.current?.querySelector<HTMLElement>(
+      '[data-testid="multi-fact-group-revision-candidate-card"], [data-testid="shared-paragraph-revision-candidate-card"]'
+    );
     card?.focus({ preventScroll: true });
     card?.scrollIntoView?.({ block: 'nearest' });
   }, [isOpen, activeMultiFactCandidate]);

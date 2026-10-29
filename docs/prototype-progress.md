@@ -1115,3 +1115,11 @@ npm run lint && npm run build
 - 测试文件独立严格检查：`tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --jsx react-jsx --lib ES2022,DOM,DOM.Iterable --skipLibCheck --strict --esModuleInterop test-task26.tsx test-task26-receipt.tsx test-task26-codex-receipt.tsx` 通过。
 - 实际 `npm run build`：成功，JS 1,309.95 kB，保留既有超过500 kB分包警告；不以其他构建器输出替代。
 - `git diff --check`：通过。
+
+### 17.5 PR #88 首轮评审意见处理（2026-10-29）
+
+Codex 在 HEAD `2c6edee4e6a37afc801f231cd760c16959d505a1` 提出 P2：共享候选卡片已改为 `shared-paragraph-revision-candidate-card`，生成后滚动 / 聚焦 effect 却仍仅匹配旧的非重叠候选标识。从下方入口生成后，用户无法自动到达上方候选。
+
+最小修复使 effect 匹配两个真实候选标识，不重新引入隐藏别名控件。独立套件新增第18组，覆盖共享和非重叠两个通道的顶部 / 下方入口，检查真实候选卡片得到键盘焦点且触发滚动。将该用例放到与首轮 PR HEAD 完全相同代码树的隔离工作区，实际得到仅第18组失败；修复后18组通过。JSDOM 检查焦点及滚动调用，实际滚动位置、视觉与键盘感受仍待云浏览器验收。
+
+修复后重跑与变更相关的7套（Task24 Codex、Task25自测/receipt/Codex、Task26自测/receipt/Codex），均通过；源码typecheck、Task26三份测试strict检查、实际npm run build及diff检查通过。最新构建JS为1,310.01 kB，既有分包警告保留。前述完整30项及11套demo为首轮接收修复后的结果，本次焦点修复后未重复整条无关链路。等待最新HEAD复评通过后再合并，#87继续保留云浏览器门槛。

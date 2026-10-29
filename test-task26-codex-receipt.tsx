@@ -229,5 +229,18 @@ await check('17 原文编辑区间真实重叠整组拒绝；多共享段并集�
   const another=fixture();another.draft.blocks[1].content='2026年1至9月，累计完成重点任务128项，组织专题培训16场。';another.draft.blocks[1].referencedFactIds=['FACT-01','FACT-02'];
   const c=candidate(another.task,another.draft);assert.equal(c.items.filter(i=>i.modifications?.length===2).length,2);assert.equal(c.items.length,3);
 });
+await check('18 顶部与下方段落入口生成后，两个通道均聚焦并滚动至真实候选卡片',()=>{
+  const originalScroll=dom.window.HTMLElement.prototype.scrollIntoView;
+  let scrolled:HTMLElement[]=[];
+  dom.window.HTMLElement.prototype.scrollIntoView=function(){scrolled.push(this);};
+  try{for(const shared of [true,false]){const {task,draft}=fixture();if(!shared)draft.blocks[0].referencedFactIds=['FACT-01','FACT-03'];
+    const prefix=shared?'shared-paragraph':'multi-fact-group';const cardId=shared?'shared-paragraph-revision-candidate-card':'multi-fact-group-revision-candidate-card';
+    const v=mount(modal(task,draft));try{for(const suffix of ['', '-BLK-03']){const button=v.host.querySelector<HTMLButtonElement>(`[data-testid="btn-generate-${prefix}-revision${suffix}"]`)!;
+      assert.ok(button);button.focus();scrolled=[];act(()=>button.click());const card=v.host.querySelector<HTMLElement>(`[data-testid="${cardId}"]`)!;
+      assert.ok(card);assert.equal(document.activeElement===card,true,'生成后键盘焦点必须进入真实候选');assert.ok(scrolled.includes(card),'生成后必须滚动至真实候选');
+      click(v.host,`btn-cancel-${prefix}-revision`);
+    }}finally{v.close();}
+  }}finally{dom.window.HTMLElement.prototype.scrollIntoView=originalScroll;}
+});
 if(failures.length){console.error(`Task26 Codex independent failures: ${failures.length}\n${failures.join('\n')}`);process.exitCode=1;}
-else console.log('Task26 Codex independent checks: 17 groups passed.');
+else console.log('Task26 Codex independent checks: 18 groups passed.');
