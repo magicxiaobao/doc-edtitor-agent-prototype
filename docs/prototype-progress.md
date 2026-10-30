@@ -1123,3 +1123,43 @@ Codex 在 HEAD `2c6edee4e6a37afc801f231cd760c16959d505a1` 提出 P2：共享候�
 最小修复使 effect 匹配两个真实候选标识，不重新引入隐藏别名控件。独立套件新增第18组，覆盖共享和非重叠两个通道的顶部 / 下方入口，检查真实候选卡片得到键盘焦点且触发滚动。将该用例放到与首轮 PR HEAD 完全相同代码树的隔离工作区，实际得到仅第18组失败；修复后18组通过。JSDOM 检查焦点及滚动调用，实际滚动位置、视觉与键盘感受仍待云浏览器验收。
 
 修复后重跑与变更相关的7套（Task24 Codex、Task25自测/receipt/Codex、Task26自测/receipt/Codex），均通过；源码typecheck、Task26三份测试strict检查、实际npm run build及diff检查通过。最新构建JS为1,310.01 kB，既有分包警告保留。前述完整30项及11套demo为首轮接收修复后的结果，本次焦点修复后未重复整条无关链路。等待最新HEAD复评通过后再合并，#87继续保留云浏览器门槛。
+
+---
+
+## 18. 任务27实施记录：事实修订后的逐段核对与留痕（第一批）
+
+### 18.1 业务目标与既有功能语义边界
+
+- **与 Task22 人工复核的区别**：Task22 针对“当前正文与任务事实清单仍存在差异”时的未处理预警；而 Task27 针对“事实修订已采纳、新稿已绑定新事实依据”之后，对**本次实际修改的段落**进行人工核对与依据复验。即使事实差异为 0，工作稿仍清晰呈现“本次涉及 2 项事实、3 个唯一段落 · 3 段待处理”。
+- **全通道原子凭据存证**：覆盖 Task23（单事实单段落）、Task24（单事实多段落）、Task25（多事实成组成批）、Task26（共享段落/两事实一段）全部四个真实修订采纳通道。每次采纳成功原子生成不可篡改的 `postRevisionVerificationCredential`，记录操作人、时间戳、共同 `operationId`、去重段落列表、每个段落关联合并事实 ID、以及修改前和采纳时的冻结依据出处快照。
+- **操作与说明闭环**：
+  - 记录人工核对：说明强制必填（空说明严格阻断）；
+  - 暂缓核对：原因强制必填，暂缓段落继续计入“待处理”总数；
+  - 撤回核对：原因强制必填，原核对记录及撤回原因在事件流（`events`）中完整保留；
+  - 重新核对：基于新正文或新上下文记录，不覆盖历史说明，留存完整事件时间线。
+- **精准失效与不误伤原则**：正文编辑、建议采纳或版本序号递增（即使改回相同文字，`revisionSeq` 变化仍保持失效）、事实引用变更、或关联事实重现未裁决冲突时，旧核对结论精准标记为“原核对已失效”并明确解释原因；无关段落与无关事实不受影响。
+- **不僭越系统门禁**：核对完成仅更新核对留痕字段，严禁递增正文 `revisionSeq`、严禁新建草稿版本或修改日志、严禁自动关闭审阅意见，亦不绕过未解决审阅意见的定稿门禁。
+
+### 18.2 核心架构与模块划分
+
+1. **类型层与数据模型 (`src/types/index.ts`)**：
+   - 增加 `PostRevisionVerificationCredential`、`PostRevisionFactInfo`、`PostRevisionVerificationRecord`、`PostRevisionVerificationEvent`、`PostRevisionVerificationOverview` 等完整强类型，严密防止任何 `any` 泄露。
+   - 在 `DraftVersion` 中扩展 `postRevisionVerificationCredential`、`postRevisionVerificationRecords`、`frozenPostRevisionVerificationOverview`、`sourcePostRevisionVerificationCredential` 等生命周期字段。
+2. **凭据生成与逐段核对服务 (`src/services/postRevisionVerificationService.ts`)**：
+   - 实现凭据原子构造、有效性判定、多事实段落去重与关联计算、主笔角色权限校验、正文上下文精准比对、事实冲突联动检测、说明校验与事件追加。
+3. **采纳通道接入 (`src/services/factRevisionCandidateService.ts`)**：
+   - 在 `acceptFactRevisionCandidate`、`acceptMultiParagraphFactRevisionCandidate`、`acceptMultiFactGroupRevisionCandidate`、`acceptSharedParagraphFactRevisionCandidate` 四个通道采纳事务中，原子生成并挂载 `postRevisionVerificationCredential`。
+4. **版本生命周期冻结与隔离 (`src/services/draftLifecycleService.ts`)**：
+   - 保存快照及正式定稿时，冻结当时核对总览（`frozenPostRevisionVerificationOverview`）；
+   - 版本还原（`restoreDraftVersion`）时清空活动核对，隔离旧结论，并将来源凭据存入 `sourcePostRevisionVerificationCredential`。
+5. **UI交互与工作台入口 (`src/components/PostRevisionVerificationModal.tsx` & `src/components/stages/DraftingStage.tsx`)**：
+   - 起草工作台增加紧凑进度入口：“本次修订核对：0/3段已记录 · 3段待处理”；
+   - 独立核对弹窗：展示本次修订范围、每段前后正文 Diff、前后冻结依据浮层抽屉、真实段落定位滚动、键盘 Escape 支持与焦点隔离。
+6. **存储健壮性与自愈 (`src/services/storageService.ts`)**：
+   - `validateTaskStructure` 具备异常及截断数据自愈容错，异常字段隔离至 `postRevisionVerificationRecovery`，正文正常加载不崩溃。
+
+### 18.3 验证证据
+
+- `node --import tsx test-task27.tsx`：全部 12 大项、50+ 断言 100% 通过（涵盖凭据原子生成、四个通道、共享段落去重、事实差异0独立性、说明必填性、事件流回溯、精准失效、角色权限、版本生命周期冻结还原、数据自愈、UI组件交互、审阅定稿门禁、既有任务无回归）。
+- `node --import tsx test-task27-receipt.tsx`：全部 10 项实施方验收自测断言 100% 通过。
+- `npm run build` / `compile_applet`：生产编译构建成功（tsc 零错误，vite 构建成功）。

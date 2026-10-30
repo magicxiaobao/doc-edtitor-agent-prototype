@@ -555,6 +555,13 @@ export interface DraftVersion {
   sourceFactReviewRecords?: ParagraphFactReviewRecord[]; // 派生来源版本的复核留痕（只读参考，新工作稿需重新核对）
   frozenFactReviewOverview?: DraftFactReviewOverview; // 保存版本时的结论，不随任务最新事实重算
   factReviewRecovery?: Record<string, unknown>; // 隔离异常可选字段，正文仍可加载
+  // Task 27: 事实修订后逐段核对凭据与留痕
+  postRevisionVerificationCredential?: PostRevisionVerificationCredential; // 本次修订核对凭据（直接由事实修订采纳产生的工作稿保存）
+  postRevisionVerificationRecords?: PostRevisionVerificationRecord[]; // 逐段人工核对留痕记录
+  sourcePostRevisionVerificationCredential?: PostRevisionVerificationCredential; // 派生来源版本的修订凭据（只读参考）
+  sourcePostRevisionVerificationRecords?: PostRevisionVerificationRecord[]; // 派生来源版本的核对留痕（只读参考）
+  frozenPostRevisionVerificationOverview?: PostRevisionVerificationOverview; // 保存快照时的核对结论（只读冻结）
+  postRevisionVerificationRecovery?: Record<string, unknown>; // 隔离异常可选字段，确保正文与其他数据安全加载
 }
 
 export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';
@@ -832,3 +839,142 @@ export interface DraftFactReviewOverview {
   unreviewedCount: number;
   blockEvaluations: BlockFactReviewEvaluation[];
 }
+
+// ---------------------------------------------------------------------------
+// Task 27: 事实修订后逐段核对与留痕 (Post-Revision Verification)
+// ---------------------------------------------------------------------------
+
+export interface PostRevisionEvidenceInfo {
+  evidenceId?: string;
+  sourceDocId?: string;
+  sourceDocName: string;
+  location?: string;
+  snippetText?: string;
+  period?: string;
+  capturedAt?: string;
+}
+
+export interface PostRevisionFactInfo {
+  factId: string;
+  metric: string;
+  unit: string;
+  period: string;
+  fromValue: string;
+  toValue: string;
+  fromEvidence: PostRevisionEvidenceInfo;
+  toEvidence: PostRevisionEvidenceInfo;
+  beforeEvidenceSnapshot?: PostRevisionEvidenceInfo; // 历史/冻结出处快照别名
+  afterEvidenceSnapshot?: PostRevisionEvidenceInfo;  // 采纳/冻结出处快照别名
+  referencingBlockIds: string[];
+}
+
+export interface PostRevisionBlockInfo {
+  blockId: string;
+  blockOrder: number;
+  sectionId?: string;
+  sectionTitle?: string;
+  beforeContent: string;        // 完整修改前正文
+  afterContent: string;         // 完整采纳后正文
+  appliedRevisionSeq: number;   // 采纳后的revisionSeq
+  associatedFactIds: string[];  // 每个段落实际关联的本次变更事实ID（保留共享段落多事实关系）
+}
+
+export interface PostRevisionVerificationCredential {
+  operationId: string;          // 共同operationId (e.g. FACT-REV-... 或 FACT-GROUP-REV-...)
+  taskId: string;
+  sourceDraftId: string;        // 来源草稿ID
+  targetDraftId: string;        // 目标工作稿ID
+  operatorRole: UserRole;       // 操作人角色
+  createdAt: string;            // 操作时间 (ISO string)
+  facts: PostRevisionFactInfo[];
+  blocks: PostRevisionBlockInfo[];
+  contextFingerprint?: string;
+}
+
+export type PostRevisionVerificationStatus = 'verified' | 'deferred' | 'revoked';
+
+export type PostRevisionVerificationDisplayStatus =
+  | 'pending'      // 待核对
+  | 'verified'     // 已记录核对
+  | 'deferred'     // 暂缓
+  | 'invalidated'  // 原核对已失效
+  | 'block_missing'; // 原目标段落已在正文中被删除
+
+export interface PostRevisionVerificationEvent {
+  id: string;
+  action: 'verify' | 'defer' | 'revoke';
+  type?: 'recorded' | 'deferred' | 'revoked'; // 语义别名
+  operator: UserRole;
+  timestamp: string;
+  notes?: string;
+  reason?: string;
+}
+
+export interface PostRevisionVerificationRecord {
+  id: string; // e.g. "PRV-REC-..."
+  taskId: string;
+  draftId: string;
+  operationId: string;
+  blockId: string;
+  blockOrder: number;
+  sectionTitle?: string;
+  status: PostRevisionVerificationStatus;
+  verifiedBy?: UserRole;
+  verifiedAt?: string;
+  notes?: string;
+  deferredBy?: UserRole;
+  deferredAt?: string;
+  deferredReason?: string;
+  paragraphContentAtVerification: string;
+  paragraphRevisionSeqAtVerification: number;
+  referencedFactIdsAtVerification: string[];
+  history: PostRevisionVerificationEvent[];
+  events: PostRevisionVerificationEvent[]; // 历史事件列表别名
+  revocation?: {
+    revokedAt: string;
+    revokedBy: UserRole;
+    reason: string;
+  };
+}
+
+export interface PostRevisionBlockEvaluation {
+  blockId: string;
+  blockOrder: number;
+  sectionTitle?: string;
+  credBlock: PostRevisionBlockInfo;
+  currentBlock?: ParagraphBlock;
+  record?: PostRevisionVerificationRecord;
+  displayStatus: PostRevisionVerificationDisplayStatus;
+  displayStatusLabel: string;
+  invalidatedReason?: string;
+  invalidationReason?: string; // 别名
+  needsFactHandling?: boolean; // 提示需前往处理事实差异
+  isPending: boolean;
+  isVerified: boolean;
+  associatedFacts: PostRevisionFactInfo[];
+  associatedFactIds: string[]; // 关联事实ID数组
+  hasCurrentContentDiff: boolean;
+  associatedFactsHaveDifferenceOrConflict: boolean;
+  factDifferenceNotice?: string;
+}
+
+export interface PostRevisionVerificationOverview {
+  hasCredential: boolean;
+  message?: string;
+  totalBlocks: number;
+  totalBlocksCount: number; // 数量别名
+  statusSummaryText: string; // 紧凑摘要文案
+  verifiedCount: number;
+  pendingCount: number;
+  deferredCount: number;
+  invalidatedCount: number;
+  isAllVerified: boolean;
+  blockEvaluations: PostRevisionBlockEvaluation[];
+  facts: PostRevisionFactInfo[];
+  sourceDraftId?: string;
+  targetDraftId?: string;
+  operationId?: string;
+  operatorRole?: UserRole;
+  createdAt?: string;
+}
+
