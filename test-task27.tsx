@@ -552,6 +552,7 @@ async function runTask27Tests() {
 
     // E.6 相关事实FACT-01重新出现未裁决冲突
     const f1 = currentTask.facts.find((f) => f.id === 'FACT-01')!;
+    const originalFact1 = structuredClone(f1);
     f1.status = 'pending';
     f1.hasConflict = true;
     f1.selectedConflictValue = undefined;
@@ -562,9 +563,7 @@ async function runTask27Tests() {
     assert(evalRes.blockEvaluations[1].displayStatus === 'invalidated', 'E.6: 关联FACT-01的BLK-02同样提示处理事实');
 
     // 但如果是不相关事实（例如新建事实或未关联的FACT-04发生变动），不误伤
-    f1.status = 'confirmed';
-    f1.hasConflict = false;
-    f1.selectedConflictValue = '120';
+    Object.assign(f1, originalFact1); // 完整恢复相关裁决上下文后，单独改变无关事实
     const f4 = currentTask.facts.find((f) => f.id === 'FACT-04')!;
     f4.value = '999'; // 修改无关事实
     evalRes = evaluatePostRevisionVerification(currentTask, currentDraft);
@@ -777,9 +776,9 @@ async function runTask27Tests() {
   }
 
   // -------------------------------------------------------------------------
-  // [J] 真实组件跨阶段闭环：两次裁决→事实/大纲确认→生成/取消/重新生成/采纳→核对/暂缓/撤回→持久化→正文修改后失效
+  // [J] 准备核准数据后的服务闭环与起草入口组件检查 (Prepared service fixture)
   // -------------------------------------------------------------------------
-  console.log('\n--- [J] 真实组件跨阶段闭环：两次裁决→事实/大纲确认→生成/取消/重新生成/采纳→核对/暂缓/撤回→持久化→正文修改后失效 ---');
+  console.log('\n--- [J] 准备核准数据后的服务闭环与起草入口组件检查 (Prepared service fixture) ---');
   {
     // 1. 从纯净演示任务开始：处于 material_fact 阶段，两项待裁决冲突
     let journeyTask = createPostRevisionVerificationDemoTask();
@@ -901,7 +900,7 @@ async function runTask27Tests() {
 
     // 7. 持久化存储校验
     const structureValid = validateTaskStructure(journeyTask);
-    assert(structureValid, 'J.11: 结构校验与持久化正常');
+    assert(structureValid, 'J.11: 内存结构校验通过（本用例未执行存储读写）');
 
     // 8. 正文修改后失效
     workingDraft.blocks[0].content += '（跨阶段测试微调）';

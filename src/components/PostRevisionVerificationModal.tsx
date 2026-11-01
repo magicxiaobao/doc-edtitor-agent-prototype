@@ -6,12 +6,14 @@ import {
   EvidenceSnippet,
   Fact,
   AdoptedEvidenceRecord,
+  PostRevisionEvidenceInfo,
 } from '../types';
 import {
   evaluatePostRevisionVerification,
   recordPostRevisionVerification,
   deferPostRevisionVerification,
   revokePostRevisionVerification,
+  getPostRevisionVerificationContext,
 } from '../services/postRevisionVerificationService';
 import { computeTextDiff } from '../services/diffService';
 import {
@@ -80,12 +82,12 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [showHistoryByBlock, setShowHistoryByBlock] = useState<Record<string, boolean>>({});
   const [baselinesByBlock, setBaselinesByBlock] = useState<
-    Record<string, { paragraphContent: string; revisionSeq: number; referencedFactIds: string[] }>
+    Record<string, { paragraphContent: string; revisionSeq: number; referencedFactIds: string[]; contextFingerprint: string }>
   >({});
   const [previewEvidence, setPreviewEvidence] = useState<{
     factId: string;
     type: 'before' | 'after';
-    evidence: any;
+    evidence: PostRevisionEvidenceInfo;
   } | null>(null);
 
   const opId = effectiveDraft?.postRevisionVerificationCredential?.operationId;
@@ -109,11 +111,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
     for (const [blockId, baseline] of Object.entries(baselinesByBlock)) {
       const curBlock = effectiveDraft.blocks.find((b) => b.id === blockId);
       if (
-        curBlock &&
-        (curBlock.content !== baseline.paragraphContent ||
-          (curBlock.revisionSeq ?? 0) !== baseline.revisionSeq ||
-          curBlock.referencedFactIds.length !== baseline.referencedFactIds.length ||
-          !curBlock.referencedFactIds.every((id, idx) => id === baseline.referencedFactIds[idx]))
+        !curBlock || getPostRevisionVerificationContext(task, effectiveDraft, curBlock) !== baseline.contextFingerprint
       ) {
         setNotesByBlock((prev) => {
           const next = { ...prev };
@@ -125,13 +123,15 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
           delete next[blockId];
           return next;
         });
+        setDeferReasonByBlock(prev => ({ ...prev, [blockId]: '' }));
+        setRevokeReasonByBlock(prev => ({ ...prev, [blockId]: '' }));
         setActionErrors((prev) => ({
           ...prev,
-          [blockId]: '正文或版本序号已变动，旧核对说明已失效，请重新核对当前正文后提交',
+          [blockId]: '正文、版本或相关事实出处已变动，旧说明已失效，请重新核对当前状态后提交',
         }));
       }
     }
-  }, [effectiveDraft, baselinesByBlock]);
+  }, [task, effectiveDraft, baselinesByBlock]);
 
   // Focus management and keyboard navigation
   useEffect(() => {
@@ -192,6 +192,14 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
   const isReadOnly = Boolean(effectiveDraft?.isHistoricalSnapshot || effectiveDraft?.isFinal);
   const isAuthor = activeRole === '主笔甲' || activeRole === task.primaryAuthor;
 
+  const captureBaseline = (blockId: string) => {
+    const block = effectiveDraft?.blocks.find(b => b.id === blockId);
+    if (!effectiveDraft || !block) return;
+    const baseline = { paragraphContent: block.content, revisionSeq: block.revisionSeq ?? 0,
+      referencedFactIds: [...block.referencedFactIds], contextFingerprint: getPostRevisionVerificationContext(task, effectiveDraft, block) };
+    setBaselinesByBlock(previous => previous[blockId] ? previous : { ...previous, [blockId]: baseline });
+  };
+
   const handleRecord = (blockId: string) => {
     const notes = notesByBlock[blockId] || '';
     if (!notes.trim()) {
@@ -242,7 +250,6 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       return;
     }
 
-    const curBlock = effectiveDraft?.blocks.find((b) => b.id === blockId);
     const res = deferPostRevisionVerification({
       task,
       draftId: effectiveDraft!.id,
@@ -250,13 +257,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       blockId,
       activeRole,
       reason,
-      baselineState: curBlock
-        ? {
-            paragraphContent: curBlock.content,
-            revisionSeq: curBlock.revisionSeq ?? 0,
-            referencedFactIds: [...curBlock.referencedFactIds],
-          }
-        : undefined,
+      baselineState: baselinesByBlock[blockId],
     });
 
     if (!res.success) {
@@ -294,6 +295,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       blockId,
       activeRole,
       reason,
+      baselineState: baselinesByBlock[blockId],
     });
 
     if (!res.success) {
@@ -317,23 +319,20 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
     }
   };
 
-  const handleOpenSnippet = (
-    docName: string,
-    location?: string,
-    text?: string,
-    period?: string,
-    evidenceId?: string
-  ) => {
+  const handleOpenSnippet = (evidence: PostRevisionEvidenceInfo, factId: string) => {
     if (!onViewSnippet) return;
     const snippet: EvidenceSnippet = {
-      id: evidenceId || 'EVD-FROZEN',
-      sourceDocId: 'DOC-FROZEN',
-      docName: docName || '已冻结出处依据',
-      location: location || '出处位置',
-      text: text || '（该出处依据在采纳时已存证冻结）',
-      period: period || '',
+      id: evidence.evidenceId!, sourceDocId: evidence.sourceDocId!, docName: evidence.sourceDocName,
+      location: evidence.location || '冻结片段', text: evidence.snippetText!, period: evidence.period!,
     };
-    onViewSnippet(snippet, undefined, undefined, true);
+    // A transient frozen-excerpt DTO pins this exact requested source in the existing drawer.
+    // It is not persisted as a new adopted material or resolved against the target draft's primary source.
+    const frozen: AdoptedEvidenceRecord = { evidenceId: snippet.id, sourceDocId: snippet.sourceDocId,
+      sourceDocName: snippet.docName, snippetLocation: snippet.location, snippetText: snippet.text,
+      period: snippet.period, usage: 'current_fact', associatedFactId: factId,
+      contentFingerprint: JSON.stringify(evidence), capturedAt: evidence.capturedAt || '' };
+    onClose();
+    onViewSnippet(snippet, undefined, frozen, true);
   };
 
   return (
@@ -543,13 +542,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                               type: 'before',
                               evidence: f.fromEvidence,
                             });
-                            handleOpenSnippet(
-                              f.fromEvidence.sourceDocName,
-                              f.fromEvidence.location,
-                              f.fromEvidence.snippetText,
-                              f.fromEvidence.period,
-                              f.fromEvidence.evidenceId
-                            );
+                            handleOpenSnippet(f.fromEvidence, f.factId);
                           }}
                           data-testid={`btn-view-evidence-before-${f.factId}`}
                           className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded cursor-pointer transition-colors"
@@ -567,13 +560,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                               type: 'after',
                               evidence: f.toEvidence,
                             });
-                            handleOpenSnippet(
-                              f.toEvidence.sourceDocName,
-                              f.toEvidence.location,
-                              f.toEvidence.snippetText,
-                              f.toEvidence.period,
-                              f.toEvidence.evidenceId
-                            );
+                            handleOpenSnippet(f.toEvidence, f.factId);
                           }}
                           data-testid={`btn-view-evidence-after-${f.factId}`}
                           className="inline-flex items-center gap-1 text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-1 rounded cursor-pointer transition-colors font-medium"
@@ -894,22 +881,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                                     onChange={(e) => {
                                       const val = e.target.value;
                                       setNotesByBlock((prev) => ({ ...prev, [blockId]: val }));
-                                      setBaselinesByBlock((prev) => {
-                                        if (!prev[blockId]) {
-                                          const cur = effectiveDraft?.blocks.find((b) => b.id === blockId);
-                                          if (cur) {
-                                            return {
-                                              ...prev,
-                                              [blockId]: {
-                                                paragraphContent: cur.content,
-                                                revisionSeq: cur.revisionSeq ?? 0,
-                                                referencedFactIds: [...cur.referencedFactIds],
-                                              },
-                                            };
-                                          }
-                                        }
-                                        return prev;
-                                      });
+                                      captureBaseline(blockId);
                                     }}
                                     data-testid={`input-verification-notes-${blockId}`}
                                     placeholder="请说明已逐段核对修改前后正文与冻结出处的一致性（例如：已确认重点任务120项与专题培训18场数据真实无误，出处依据冻结正确，正文表述通顺）..."
@@ -956,9 +928,9 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                                   id={`input-defer-reason-${blockId}`}
                                   rows={2}
                                   value={deferReasonByBlock[blockId] ?? ''}
-                                  onChange={(e) =>
-                                    setDeferReasonByBlock((prev) => ({ ...prev, [blockId]: e.target.value }))
-                                  }
+                                  onChange={(e) => {
+                                    setDeferReasonByBlock((prev) => ({ ...prev, [blockId]: e.target.value })); captureBaseline(blockId);
+                                  }}
                                   data-testid={`input-defer-reason-${blockId}`}
                                   placeholder="请填写暂缓原因（例如：需等待业务处室进一步补充书面证明材料）..."
                                   className="w-full text-xs p-2 rounded border border-amber-300 focus:ring-2 focus:ring-amber-500 focus:outline-none"
@@ -984,7 +956,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                             )}
 
                             {/* When status is verified: allow revoke */}
-                            {ev.displayStatus === 'verified' && !showRevoke && (
+                            {rec && rec.status !== 'revoked' && !showRevoke && (
                               <div className="flex items-center justify-end">
                                 <button
                                   type="button"
@@ -1010,9 +982,9 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                                   id={`input-revoke-reason-${blockId}`}
                                   rows={2}
                                   value={revokeReasonByBlock[blockId] ?? ''}
-                                  onChange={(e) =>
-                                    setRevokeReasonByBlock((prev) => ({ ...prev, [blockId]: e.target.value }))
-                                  }
+                                  onChange={(e) => {
+                                    setRevokeReasonByBlock((prev) => ({ ...prev, [blockId]: e.target.value })); captureBaseline(blockId);
+                                  }}
                                   data-testid={`input-revoke-reason-${blockId}`}
                                   placeholder="请填写撤回原因（例如：发现出处依据有异议，需重新复核）..."
                                   className="w-full text-xs p-2 rounded border border-rose-300 focus:ring-2 focus:ring-rose-500 focus:outline-none"

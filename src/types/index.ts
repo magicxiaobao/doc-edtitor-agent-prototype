@@ -931,6 +931,7 @@ export interface PostRevisionVerificationRecord {
   paragraphRevisionSeqAtVerification: number;
   referencedFactIdsAtVerification: string[];
   adoptedEvidencesAtVerification?: AdoptedEvidenceRecord[];
+  contextFingerprint?: string; // 当前段落、所选稿依据与相关事实/出处的核对上下文；旧记录缺失时需重新核对
   history: PostRevisionVerificationEvent[];
   events: PostRevisionVerificationEvent[]; // 历史事件列表别名
   revocation?: {
