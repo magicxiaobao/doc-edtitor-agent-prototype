@@ -590,15 +590,7 @@ export function validateFinalizationConditions(
 
   // 6. Review comments closed:
   // Requirement 2: 待处理(pending)、待落实(accepted_pending_implementation)和待沟通(need_discussion)按版本关联检查，都不能定稿！
-  const rawReviews = (task as any).reviews;
-  if (Array.isArray(rawReviews) && rawReviews.length === 0) {
-    task.reviewComments = [];
-  }
-  const reviewPool = (Array.isArray(rawReviews) && rawReviews.length === 0)
-    ? []
-    : (Array.isArray(rawReviews) && rawReviews.length > 0)
-      ? rawReviews
-      : (targetDraft ? getApplicableReviewComments(task, targetDraft) : task.reviewComments);
+  const reviewPool = targetDraft ? getApplicableReviewComments(task, targetDraft) : (task.reviewComments || []);
 
   const unclosedComments = (reviewPool || []).filter((c: any) => {
     const isUnclosed =
@@ -710,10 +702,6 @@ export function finalizeDraft(
     status: '已定稿',
     updatedAt: new Date().toISOString(),
   };
-  task.drafts = updatedTask.drafts;
-  task.currentDraftId = finalDraft.id;
-  task.isFinalized = true;
-  task.status = '已定稿';
 
   return { success: true, updatedTask, finalDraft };
 }
@@ -772,7 +760,6 @@ export function createDraftSnapshot(
     drafts: [snapshotDraft, ...task.drafts],
     updatedAt: new Date().toISOString(),
   };
-  task.drafts = updatedTask.drafts;
 
   return { updatedTask, snapshotDraft };
 }
@@ -828,8 +815,6 @@ export function restoreDraftVersion(
     status: '起草中',
     updatedAt: new Date().toISOString(),
   };
-  task.drafts = updatedTask.drafts;
-  task.currentDraftId = newWorkingDraft.id;
 
   return { success: true, updatedTask, workingDraft: newWorkingDraft };
 }

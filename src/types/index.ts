@@ -861,6 +861,8 @@ export interface PostRevisionFactInfo {
   period: string;
   fromValue: string;
   toValue: string;
+  metricScope?: string;
+  primaryEvidenceId?: string;
   fromEvidence: PostRevisionEvidenceInfo;
   toEvidence: PostRevisionEvidenceInfo;
   beforeEvidenceSnapshot?: PostRevisionEvidenceInfo; // 历史/冻结出处快照别名
@@ -928,6 +930,7 @@ export interface PostRevisionVerificationRecord {
   paragraphContentAtVerification: string;
   paragraphRevisionSeqAtVerification: number;
   referencedFactIdsAtVerification: string[];
+  adoptedEvidencesAtVerification?: AdoptedEvidenceRecord[];
   history: PostRevisionVerificationEvent[];
   events: PostRevisionVerificationEvent[]; // 历史事件列表别名
   revocation?: {

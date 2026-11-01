@@ -79,13 +79,18 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
   const [revokeReasonByBlock, setRevokeReasonByBlock] = useState<Record<string, string>>({});
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [showHistoryByBlock, setShowHistoryByBlock] = useState<Record<string, boolean>>({});
+  const [baselinesByBlock, setBaselinesByBlock] = useState<
+    Record<string, { paragraphContent: string; revisionSeq: number; referencedFactIds: string[] }>
+  >({});
   const [previewEvidence, setPreviewEvidence] = useState<{
     factId: string;
     type: 'before' | 'after';
     evidence: any;
   } | null>(null);
 
-  // Reset form inputs when task, draft or role changes
+  const opId = effectiveDraft?.postRevisionVerificationCredential?.operationId;
+
+  // Reset form inputs when task, draft, role, or operation batch changes
   useEffect(() => {
     setNotesByBlock({});
     setDeferReasonByBlock({});
@@ -94,8 +99,39 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
     setRevokeReasonByBlock({});
     setActionErrors({});
     setShowHistoryByBlock({});
+    setBaselinesByBlock({});
     setPreviewEvidence(null);
-  }, [isOpen, task?.id, effectiveDraft?.id, activeRole]);
+  }, [isOpen, task?.id, effectiveDraft?.id, activeRole, opId]);
+
+  // Clean up stale form inputs if draft blocks have changed since baseline was captured
+  useEffect(() => {
+    if (!effectiveDraft) return;
+    for (const [blockId, baseline] of Object.entries(baselinesByBlock)) {
+      const curBlock = effectiveDraft.blocks.find((b) => b.id === blockId);
+      if (
+        curBlock &&
+        (curBlock.content !== baseline.paragraphContent ||
+          (curBlock.revisionSeq ?? 0) !== baseline.revisionSeq ||
+          curBlock.referencedFactIds.length !== baseline.referencedFactIds.length ||
+          !curBlock.referencedFactIds.every((id, idx) => id === baseline.referencedFactIds[idx]))
+      ) {
+        setNotesByBlock((prev) => {
+          const next = { ...prev };
+          delete next[blockId];
+          return next;
+        });
+        setBaselinesByBlock((prev) => {
+          const next = { ...prev };
+          delete next[blockId];
+          return next;
+        });
+        setActionErrors((prev) => ({
+          ...prev,
+          [blockId]: '正文或版本序号已变动，旧核对说明已失效，请重新核对当前正文后提交',
+        }));
+      }
+    }
+  }, [effectiveDraft, baselinesByBlock]);
 
   // Focus management and keyboard navigation
   useEffect(() => {
@@ -163,7 +199,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       return;
     }
 
-    const curBlock = effectiveDraft?.blocks.find((b) => b.id === blockId);
+    const baseline = baselinesByBlock[blockId];
     const res = recordPostRevisionVerification({
       task,
       draftId: effectiveDraft!.id,
@@ -171,13 +207,7 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       blockId,
       activeRole,
       notes,
-      baselineState: curBlock
-        ? {
-            paragraphContent: curBlock.content,
-            revisionSeq: curBlock.revisionSeq ?? 0,
-            referencedFactIds: [...curBlock.referencedFactIds],
-          }
-        : undefined,
+      baselineState: baseline,
     });
 
     if (!res.success) {
@@ -191,6 +221,11 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
       return next;
     });
     setNotesByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setBaselinesByBlock((prev) => {
       const next = { ...prev };
       delete next[blockId];
       return next;
@@ -856,9 +891,26 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                                     id={`input-verification-notes-${blockId}`}
                                     rows={2}
                                     value={notesByBlock[blockId] ?? ''}
-                                    onChange={(e) =>
-                                      setNotesByBlock((prev) => ({ ...prev, [blockId]: e.target.value }))
-                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setNotesByBlock((prev) => ({ ...prev, [blockId]: val }));
+                                      setBaselinesByBlock((prev) => {
+                                        if (!prev[blockId]) {
+                                          const cur = effectiveDraft?.blocks.find((b) => b.id === blockId);
+                                          if (cur) {
+                                            return {
+                                              ...prev,
+                                              [blockId]: {
+                                                paragraphContent: cur.content,
+                                                revisionSeq: cur.revisionSeq ?? 0,
+                                                referencedFactIds: [...cur.referencedFactIds],
+                                              },
+                                            };
+                                          }
+                                        }
+                                        return prev;
+                                      });
+                                    }}
                                     data-testid={`input-verification-notes-${blockId}`}
                                     placeholder="请说明已逐段核对修改前后正文与冻结出处的一致性（例如：已确认重点任务120项与专题培训18场数据真实无误，出处依据冻结正确，正文表述通顺）..."
                                     className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 focus:outline-none"

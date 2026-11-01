@@ -72,6 +72,38 @@ function mount(el: React.ReactElement) {
   };
 }
 
+function createAdoptedPostRevisionTask() {
+  const task = createSharedParagraphRevisionDemoTask();
+  const source = task.drafts.find((d) => d.id === task.currentDraftId)!;
+  for (const [id, value, evidenceId] of [
+    ['FACT-01', '120', 'EVD-01'],
+    ['FACT-02', '18', 'EVD-07'],
+  ]) {
+    Object.assign(task.facts.find((f) => f.id === id)!, {
+      status: 'confirmed',
+      value,
+      selectedConflictValue: value,
+      primaryEvidenceId: evidenceId,
+      conflictResolutionReason: '已核对本期同口径原文',
+    });
+  }
+  const facts = task.facts.filter((f) => f.status === 'confirmed' && !f.isHistoricOnly);
+  task.factSnapshot = {
+    confirmedAt: '2026-10-30T04:00:00Z',
+    hash: 'receipt-task27',
+    factIds: facts.map((f) => f.id),
+    items: facts.map((f) => buildFactItemSnapshot(task, f)),
+  };
+  task.outlineConfirmed = true;
+  task.outlineSnapshot = structuredClone(source.snapshotMetadata!.outlineSnapshot);
+  const generated = generateSharedParagraphFactRevisionCandidate(task, source, '主笔甲');
+  assert.equal(generated.success, true, generated.reason);
+  const candidate = generated.candidateGroup!;
+  const adopted = acceptSharedParagraphFactRevisionCandidate(task, source, candidate, '主笔甲', candidate.runId);
+  assert.equal(adopted.success, true, adopted.reason);
+  return { task: adopted.updatedTask!, draft: adopted.newWorkingDraft!, source, candidate };
+}
+
 console.log('\n================================================================');
 console.log('   📋 任务27 实施方自测验收检查表 (Receipt Tests)');
 console.log('================================================================\n');
@@ -80,7 +112,6 @@ console.log('================================================================\n'
 await check('1. 四个通道采纳均原子生成冻结凭据：事实与段落去重、保留关联与前后出处快照', () => {
   // 验证 Task 25 成组修订（2事实3段落）
   const task25 = createMultiFactGroupRevisionDemoTask();
-  task25.currentRole = '主笔甲';
   const draft25 = task25.drafts.find((d) => d.id === task25.currentDraftId)!;
   const f1_25 = task25.facts.find((f) => f.id === 'FACT-01')!;
   f1_25.status = 'confirmed';
@@ -108,7 +139,7 @@ await check('1. 四个通道采纳均原子生成冻结凭据：事实与段落�
   const cand25 = generateMultiFactGroupRevisionCandidate(task25, draft25, '主笔甲');
   assert.equal(cand25.success, true);
   const acc25 = acceptMultiFactGroupRevisionCandidate(task25, draft25, cand25.candidateGroup!, '主笔甲', cand25.candidateGroup!.runId);
-  const workingDraft25 = acc25.workingDraft || (acc25 as any).newWorkingDraft;
+  const workingDraft25 = acc25.newWorkingDraft;
   assert.equal(acc25.success, true);
   assert(workingDraft25);
   const cred = workingDraft25.postRevisionVerificationCredential;
@@ -126,7 +157,6 @@ await check('1. 四个通道采纳均原子生成冻结凭据：事实与段落�
 // 2. 共享段落（2事实1段）去重准确计数为1，关联两项事实，保留800人次
 await check('2. 共享段落（2事实1段）：准确去重计数为1个段落，保留两个关联事实及800人次未变事实', () => {
   const task26 = createSharedParagraphRevisionDemoTask();
-  task26.currentRole = '主笔甲';
   const draft26 = task26.drafts.find((d) => d.id === task26.currentDraftId)!;
   // 调整为纯单共享段落（仅BLK-01关联FACT-01和FACT-02）
   draft26.blocks[1].referencedFactIds = [];
@@ -160,8 +190,9 @@ await check('2. 共享段落（2事实1段）：准确去重计数为1个段落�
   const cand26 = generateSharedParagraphFactRevisionCandidate(task26, draft26, '主笔甲');
   assert.equal(cand26.success, true);
   const acc26 = acceptSharedParagraphFactRevisionCandidate(task26, draft26, cand26.candidateGroup!, '主笔甲', cand26.candidateGroup!.runId);
-  const workingDraft26 = acc26.workingDraft || (acc26 as any).newWorkingDraft;
+  const workingDraft26 = acc26.newWorkingDraft;
   assert.equal(acc26.success, true);
+  assert(workingDraft26);
   const cred = workingDraft26.postRevisionVerificationCredential!;
   assert.equal(cred.blocks.length, 1);
   assert.equal(cred.blocks[0].associatedFactIds.length, 2);
@@ -170,8 +201,7 @@ await check('2. 共享段落（2事实1段）：准确去重计数为1个段落�
 
 // 3. 事实差异为0时仍展示本次修订核对待处理进度，与Task22复核分离
 await check('3. 事实差异为0时独立展示修订核对待处理进度，与Task22事实复核保持不同语义', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const impact = analyzeFactImpact(demoTask, draft);
   assert.equal(impact.changedFactsCount, 0);
 
@@ -185,13 +215,12 @@ await check('3. 事实差异为0时独立展示修订核对待处理进度，与
 
 // 4. 说明必填、暂缓原因必填、撤回原因必填，核对操作不修改正文与revisionSeq
 await check('4. 记录核对、暂缓、撤回强制必填说明/原因，不递增正文revisionSeq也不新建草稿版本', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const opId = draft.postRevisionVerificationCredential!.operationId;
 
   // 空说明拦截
   const resEmpty = recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
@@ -200,48 +229,52 @@ await check('4. 记录核对、暂缓、撤回强制必填说明/原因，不递
   assert.equal(resEmpty.success, false);
 
   // 正常记录
-  const prevSeq = draft.revisionSeq;
+  const prevSeq = draft.blocks[0].revisionSeq ?? 0;
   const prevCount = demoTask.drafts.length;
   const resOk = recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
     notes: '逐句对照核对无误',
   });
   assert.equal(resOk.success, true);
-  assert.equal(draft.revisionSeq, prevSeq);
-  assert.equal(demoTask.drafts.length, prevCount);
+  const taskAfterRecord = resOk.updatedTask!;
+  const draftAfterRecord = taskAfterRecord.drafts.find((d) => d.id === draft.id)!;
+  assert.equal(draftAfterRecord.blocks[0].revisionSeq ?? 0, prevSeq);
+  assert.equal(taskAfterRecord.drafts.length, prevCount);
 
   // 暂缓（原因必填）
-  const resDeferEmpty = deferPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-02',
+  const resDeferEmpty = deferPostRevisionVerification(taskAfterRecord, draftAfterRecord, {
+    blockId: 'BLK-02',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
     reason: '',
   });
   assert.equal(resDeferEmpty.success, false);
-  const resDefer = deferPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-02',
+  const resDefer = deferPostRevisionVerification(taskAfterRecord, draftAfterRecord, {
+    blockId: 'BLK-02',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
     reason: '待处室再次核实',
   });
   assert.equal(resDefer.success, true);
+  const taskAfterDefer = resDefer.updatedTask!;
+  const draftAfterDefer = taskAfterDefer.drafts.find((d) => d.id === draft.id)!;
 
   // 撤回（原因必填）
-  const resRevokeEmpty = revokePostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+  const resRevokeEmpty = revokePostRevisionVerification(taskAfterDefer, draftAfterDefer, {
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
     reason: '',
   });
   assert.equal(resRevokeEmpty.success, false);
-  const resRevoke = revokePostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+  const resRevoke = revokePostRevisionVerification(taskAfterDefer, draftAfterDefer, {
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
@@ -252,51 +285,55 @@ await check('4. 记录核对、暂缓、撤回强制必填说明/原因，不递
 
 // 5. 精确失效规则：正文变更、revisionSeq递增改回、关联事实未裁决冲突引发失效，无关段落/事实不误伤
 await check('5. 失效判定：正文修改、改回相同文字递增序列号、关联事实重现冲突使结论失效，无关段落保持有效', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const opId = draft.postRevisionVerificationCredential!.operationId;
 
-  // 记录 BLOCK-01 与 BLOCK-02
-  recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+  // 记录 BLK-01 与 BLK-02
+  const r1 = recordPostRevisionVerification(demoTask, draft, {
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
-    notes: 'BLOCK-01通过',
+    notes: 'BLK-01通过',
   });
-  recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-02',
+  assert.equal(r1.success, true);
+  const t1 = r1.updatedTask!;
+  const d1 = t1.drafts.find((d) => d.id === draft.id)!;
+
+  const r2 = recordPostRevisionVerification(t1, d1, {
+    blockId: 'BLK-02',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
-    notes: 'BLOCK-02通过',
+    notes: 'BLK-02通过',
   });
+  assert.equal(r2.success, true);
+  let currentTask = r2.updatedTask!;
+  let currentDraft = currentTask.drafts.find((d) => d.id === draft.id)!;
 
-  // 改写BLOCK-01内容
-  const oldContent = draft.blocks[0].content;
-  draft.blocks[0].content += '【微调】';
-  draft.blocks[0].revisionSeq += 1;
-  draft.revisionSeq += 1;
+  // 改写BLK-01内容
+  const oldContent = currentDraft.blocks[0].content;
+  currentDraft.blocks[0].content += '【微调】';
+  currentDraft.blocks[0].revisionSeq = (currentDraft.blocks[0].revisionSeq ?? 0) + 1;
 
-  let evalRes = evaluatePostRevisionVerification(demoTask, draft);
+  let evalRes = evaluatePostRevisionVerification(currentTask, currentDraft);
   assert.equal(evalRes.blockEvaluations[0].displayStatus, 'invalidated');
   assert.equal(evalRes.blockEvaluations[1].displayStatus, 'verified');
 
   // 改回原文字但保留新 revisionSeq
-  draft.blocks[0].content = oldContent;
-  evalRes = evaluatePostRevisionVerification(demoTask, draft);
+  currentDraft.blocks[0].content = oldContent;
+  evalRes = evaluatePostRevisionVerification(currentTask, currentDraft);
   assert.equal(evalRes.blockEvaluations[0].displayStatus, 'invalidated');
   assert(evalRes.blockEvaluations[0].invalidationReason?.includes('版本序列号'));
 });
 
 // 6. 权限拦截与隔离：非主笔禁止操作、伪造段落ID拦截
 await check('6. 角色鉴权与边界校验：仅主笔有权记录核对，伪造段落ID及陈旧批次严格拦截', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const opId = draft.postRevisionVerificationCredential!.operationId;
 
   const resRole = recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+    blockId: 'BLK-01',
     operator: '审阅乙',
     role: '审阅乙',
     operationId: opId,
@@ -316,23 +353,24 @@ await check('6. 角色鉴权与边界校验：仅主笔有权记录核对，伪�
 
 // 7. 快照与定稿冻结总览，还原版本清理活动核对记录
 await check('7. 生命周期管理：快照与定稿版本冻结核对总览，版本还原清理活动核对并记录来源凭据', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  demoTask.currentRole = '主笔甲';
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const opId = draft.postRevisionVerificationCredential!.operationId;
 
-  recordPostRevisionVerification(demoTask, draft, {
-    blockId: 'BLOCK-01',
+  const r1 = recordPostRevisionVerification(demoTask, draft, {
+    blockId: 'BLK-01',
     operator: '主笔甲',
     role: '主笔甲',
     operationId: opId,
     notes: '快照前核对',
   });
+  assert.equal(r1.success, true);
+  const taskAfterRecord = r1.updatedTask!;
+  const draftAfterRecord = taskAfterRecord.drafts.find((d) => d.id === draft.id)!;
 
-  const snapRes = createDraftSnapshot(demoTask, draft.id, '中间快照', '主笔甲');
+  const snapRes = createDraftSnapshot(taskAfterRecord, draftAfterRecord.id, '中间快照', '主笔甲');
   assert(snapRes.snapshotDraft?.frozenPostRevisionVerificationOverview);
 
-  const restoreRes = restoreDraftVersion(demoTask, snapRes.snapshotDraft!.id, '主笔甲');
+  const restoreRes = restoreDraftVersion(snapRes.updatedTask, snapRes.snapshotDraft!.id, '主笔甲');
   assert.equal(restoreRes.success, true);
   assert.equal(restoreRes.workingDraft?.postRevisionVerificationRecords?.length, 0);
   assert(restoreRes.workingDraft?.sourcePostRevisionVerificationCredential);
@@ -340,8 +378,7 @@ await check('7. 生命周期管理：快照与定稿版本冻结核对总览，�
 
 // 8. 损坏数据自愈处理
 await check('8. 异常与损坏数据鲁棒自愈：字段缺失或非法状态被安全修复，页面不崩溃', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   (draft as any).postRevisionVerificationRecords = [{ invalid: 123 }];
   validateTaskStructure(demoTask);
   assert.equal(draft.postRevisionVerificationRecovery?.recovered, true);
@@ -350,30 +387,34 @@ await check('8. 异常与损坏数据鲁棒自愈：字段缺失或非法状态�
 
 // 9. 界面组件交互：冻结依据展开、定位真实段落、Escape关闭
 await check('9. 界面交互闭环：冻结依据浮层展示、正文段落真实定位回调、Escape键退出', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   let closed = false;
   let located: string | null = null;
 
   const { container, unmount } = mount(
     <PostRevisionVerificationModal
       isOpen={true}
-      onClose={() => { closed = true; }}
+      onClose={() => {
+        closed = true;
+      }}
       task={demoTask}
-      draft={draft}
+      currentDraft={draft}
       activeRole="主笔甲"
       onUpdateTask={() => {}}
-      onLocateBlock={(bId) => { located = bId; }}
+      onLocateBlock={(bId) => {
+        located = bId;
+      }}
     />
   );
 
   assert(container.querySelector('[data-testid="post-revision-verification-modal-title"]'));
   // 触发定位
-  const locateBtn = container.querySelector('[data-testid="btn-locate-block-BLOCK-01"]') as HTMLButtonElement;
+  const locateBtn = container.querySelector('[data-testid="btn-locate-block-BLK-01"]') as HTMLButtonElement;
+  assert(locateBtn, 'locateBtn exists');
   act(() => {
     locateBtn.click();
   });
-  assert.equal(located, 'BLOCK-01');
+  assert.equal(located, 'BLK-01');
 
   // Escape 关闭
   act(() => {
@@ -386,37 +427,42 @@ await check('9. 界面交互闭环：冻结依据浮层展示、正文段落真�
 
 // 10. 审阅门禁与定稿规则保持独立语义
 await check('10. 门禁独立性：全部段落核对完成不自动关闭审阅意见，未解决审阅依然阻断定稿', () => {
-  const demoTask = createPostRevisionVerificationDemoTask();
-  demoTask.currentRole = '主笔甲';
-  const draft = demoTask.drafts.find((d) => d.id === demoTask.currentDraftId)!;
+  const { task: demoTask, draft } = createAdoptedPostRevisionTask();
   const opId = draft.postRevisionVerificationCredential!.operationId;
 
-  demoTask.reviews = [
+  demoTask.reviewComments = [
     {
       id: 'REV-RECP-1',
-      type: 'comment',
-      quote: '引用',
-      comment: '需要核实说明',
-      author: '审阅乙',
-      authorRole: '审阅乙',
+      type: 'paragraph',
+      targetVersionId: draft.id,
+      targetBlockId: 'BLK-01',
+      targetBlockOrder: 1,
+      reviewer: '审阅乙',
+      content: '需要核实说明',
       createdAt: '2026-10-08T09:00:00Z',
       status: 'pending',
     },
   ];
 
-  ['BLOCK-01', 'BLOCK-02', 'BLOCK-03'].forEach((bId) => {
-    recordPostRevisionVerification(demoTask, draft, {
+  let currentTask = demoTask;
+  let currentDraft = draft;
+  ['BLK-01', 'BLK-02', 'BLK-03'].forEach((bId) => {
+    const res = recordPostRevisionVerification(currentTask, currentDraft, {
       blockId: bId,
       operator: '主笔甲',
       role: '主笔甲',
       operationId: opId,
       notes: `${bId} 核对`,
     });
+    if (res.updatedTask) {
+      currentTask = res.updatedTask;
+      currentDraft = currentTask.drafts.find((d) => d.id === draft.id)!;
+    }
   });
 
-  const finRes = finalizeDraft(demoTask, draft.id, '主笔甲');
+  const finRes = finalizeDraft(currentTask, currentDraft.id, '主笔甲');
   assert.equal(finRes.success, false);
-  assert.equal(demoTask.reviews[0].status, 'pending');
+  assert.equal(currentTask.reviewComments[0].status, 'pending');
 });
 
 console.log('\n================================================================');

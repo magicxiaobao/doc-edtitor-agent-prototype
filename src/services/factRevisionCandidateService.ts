@@ -961,33 +961,42 @@ export function acceptFactRevisionCandidate(
     operationId: candidate.id,
     operatorRole: activeRole,
     facts: [
-      {
-        factId: candidate.targetFactId,
-        metric: candidate.metric,
-        unit: candidate.unit,
-        period: fromFactItem?.period || toFactItem?.period || '',
-        fromValue: candidate.fromValue,
-        toValue: candidate.toValue,
-        fromEvidence: {
-          evidenceId: candidate.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId,
-          sourceDocId: fromFactItem?.provenance?.sourceDocId,
-          sourceDocName: candidate.fromDocName || fromFactItem?.provenance?.sourceDocName || '',
-          location: candidate.fromLocation || fromFactItem?.provenance?.location,
-          snippetText: fromFactItem?.provenance?.text,
-          period: fromFactItem?.period,
-          capturedAt: fromFactItem?.provenance?.capturedAt,
-        },
-        toEvidence: {
-          evidenceId: candidate.toEvidenceId || toFactItem?.primaryEvidenceId || toFactItem?.provenance?.evidenceId,
-          sourceDocId: toFactItem?.provenance?.sourceDocId,
-          sourceDocName: candidate.toDocName || toFactItem?.provenance?.sourceDocName || '',
-          location: candidate.toLocation || toFactItem?.provenance?.location,
-          snippetText: toFactItem?.provenance?.text,
-          period: toFactItem?.period,
-          capturedAt: toFactItem?.provenance?.capturedAt,
-        },
-        referencingBlockIds: [candidate.targetBlockId],
-      },
+      (() => {
+        const taskFact = task.facts.find((tf) => tf.id === candidate.targetFactId);
+        const toEvidenceId = candidate.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+        const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+        const fromEvidenceId = candidate.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+        const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+        return {
+          factId: candidate.targetFactId,
+          metric: candidate.metric,
+          unit: candidate.unit,
+          period: (candidate as any).period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+          metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+          primaryEvidenceId: toEvidenceId,
+          fromValue: candidate.fromValue,
+          toValue: candidate.toValue,
+          fromEvidence: {
+            evidenceId: fromEvidenceId || fromSnippet?.id || '',
+            sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+            sourceDocName: candidate.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+            location: candidate.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+            snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+            period: fromFactItem?.period || fromSnippet?.period,
+            capturedAt: fromFactItem?.provenance?.capturedAt,
+          },
+          toEvidence: {
+            evidenceId: toEvidenceId || toSnippet?.id || '',
+            sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+            sourceDocName: candidate.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+            location: candidate.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+            snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+            period: toFactItem?.period || toSnippet?.period,
+            capturedAt: toFactItem?.provenance?.capturedAt,
+          },
+          referencingBlockIds: [candidate.targetBlockId],
+        };
+      })(),
     ],
     blocks: [
       {
@@ -1907,33 +1916,42 @@ export function acceptMultiParagraphFactRevisionCandidate(
     operationId: candidateGroup.id,
     operatorRole: activeRole,
     facts: [
-      {
-        factId: candidateGroup.targetFactId,
-        metric: candidateGroup.metric,
-        unit: candidateGroup.unit,
-        period: candidateGroup.period || fromFactItem?.period || toFactItem?.period || '',
-        fromValue: candidateGroup.fromValue,
-        toValue: candidateGroup.toValue,
-        fromEvidence: {
-          evidenceId: candidateGroup.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId,
-          sourceDocId: fromFactItem?.provenance?.sourceDocId,
-          sourceDocName: candidateGroup.fromDocName || fromFactItem?.provenance?.sourceDocName || '',
-          location: candidateGroup.fromLocation || fromFactItem?.provenance?.location,
-          snippetText: fromFactItem?.provenance?.text,
-          period: fromFactItem?.period,
-          capturedAt: fromFactItem?.provenance?.capturedAt,
-        },
-        toEvidence: {
-          evidenceId: candidateGroup.toEvidenceId || toFactItem?.primaryEvidenceId || toFactItem?.provenance?.evidenceId,
-          sourceDocId: toFactItem?.provenance?.sourceDocId,
-          sourceDocName: candidateGroup.toDocName || toFactItem?.provenance?.sourceDocName || '',
-          location: candidateGroup.toLocation || toFactItem?.provenance?.location,
-          snippetText: toFactItem?.provenance?.text,
-          period: toFactItem?.period,
-          capturedAt: toFactItem?.provenance?.capturedAt,
-        },
-        referencingBlockIds: candidateGroup.targetBlockIds,
-      },
+      (() => {
+        const taskFact = task.facts.find((tf) => tf.id === candidateGroup.targetFactId);
+        const toEvidenceId = candidateGroup.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+        const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+        const fromEvidenceId = candidateGroup.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+        const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+        return {
+          factId: candidateGroup.targetFactId,
+          metric: candidateGroup.metric,
+          unit: candidateGroup.unit,
+          period: candidateGroup.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+          metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+          primaryEvidenceId: toEvidenceId,
+          fromValue: candidateGroup.fromValue,
+          toValue: candidateGroup.toValue,
+          fromEvidence: {
+            evidenceId: fromEvidenceId || fromSnippet?.id || '',
+            sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+            sourceDocName: candidateGroup.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+            location: candidateGroup.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+            snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+            period: fromFactItem?.period || fromSnippet?.period,
+            capturedAt: fromFactItem?.provenance?.capturedAt,
+          },
+          toEvidence: {
+            evidenceId: toEvidenceId || toSnippet?.id || '',
+            sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+            sourceDocName: candidateGroup.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+            location: candidateGroup.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+            snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+            period: toFactItem?.period || toSnippet?.period,
+            capturedAt: toFactItem?.provenance?.capturedAt,
+          },
+          referencingBlockIds: candidateGroup.targetBlockIds,
+        };
+      })(),
     ],
     blocks: candidateGroup.items.map((i) => ({
       blockId: i.targetBlockId,
@@ -2848,29 +2866,36 @@ export function acceptMultiFactGroupRevisionCandidate(
     facts: candidateGroup.facts.map((f) => {
       const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === f.factId);
       const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const taskFact = task.facts.find((tf) => tf.id === f.factId);
+      const toEvidenceId = f.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+      const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+      const fromEvidenceId = f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+      const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
       return {
         factId: f.factId,
         metric: f.metric,
         unit: f.unit,
-        period: f.period || fromFactItem?.period || toFactItem?.period || '',
+        period: f.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+        metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+        primaryEvidenceId: toEvidenceId,
         fromValue: f.fromValue,
         toValue: f.toValue,
         fromEvidence: {
-          evidenceId: f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId,
-          sourceDocId: fromFactItem?.provenance?.sourceDocId,
-          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || '',
-          location: f.fromLocation || fromFactItem?.provenance?.location,
-          snippetText: fromFactItem?.provenance?.text,
-          period: fromFactItem?.period,
+          evidenceId: fromEvidenceId || fromSnippet?.id || '',
+          sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+          location: f.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+          snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+          period: fromFactItem?.period || fromSnippet?.period,
           capturedAt: fromFactItem?.provenance?.capturedAt,
         },
         toEvidence: {
-          evidenceId: f.toEvidenceId || toFactItem?.primaryEvidenceId || toFactItem?.provenance?.evidenceId,
-          sourceDocId: toFactItem?.provenance?.sourceDocId,
-          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || '',
-          location: f.toLocation || toFactItem?.provenance?.location,
-          snippetText: toFactItem?.provenance?.text,
-          period: toFactItem?.period,
+          evidenceId: toEvidenceId || toSnippet?.id || '',
+          sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+          location: f.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+          snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+          period: toFactItem?.period || toSnippet?.period,
           capturedAt: toFactItem?.provenance?.capturedAt,
         },
         referencingBlockIds: f.referencingBlockIds,
@@ -3982,29 +4007,36 @@ export function acceptSharedParagraphFactRevisionCandidate(
     facts: candidateGroup.facts.map((f) => {
       const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === f.factId);
       const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const taskFact = task.facts.find((tf) => tf.id === f.factId);
+      const toEvidenceId = f.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+      const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+      const fromEvidenceId = f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+      const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
       return {
         factId: f.factId,
         metric: f.metric,
         unit: f.unit,
-        period: f.period || fromFactItem?.period || toFactItem?.period || '',
+        period: f.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+        metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+        primaryEvidenceId: toEvidenceId,
         fromValue: f.fromValue,
         toValue: f.toValue,
         fromEvidence: {
-          evidenceId: f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId,
-          sourceDocId: fromFactItem?.provenance?.sourceDocId,
-          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || '',
-          location: f.fromLocation || fromFactItem?.provenance?.location,
-          snippetText: fromFactItem?.provenance?.text,
-          period: fromFactItem?.period,
+          evidenceId: fromEvidenceId || fromSnippet?.id || '',
+          sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+          location: f.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+          snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+          period: fromFactItem?.period || fromSnippet?.period,
           capturedAt: fromFactItem?.provenance?.capturedAt,
         },
         toEvidence: {
-          evidenceId: f.toEvidenceId || toFactItem?.primaryEvidenceId || toFactItem?.provenance?.evidenceId,
-          sourceDocId: toFactItem?.provenance?.sourceDocId,
-          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || '',
-          location: f.toLocation || toFactItem?.provenance?.location,
-          snippetText: toFactItem?.provenance?.text,
-          period: toFactItem?.period,
+          evidenceId: toEvidenceId || toSnippet?.id || '',
+          sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+          location: f.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+          snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+          period: toFactItem?.period || toSnippet?.period,
           capturedAt: toFactItem?.provenance?.capturedAt,
         },
         referencingBlockIds: f.referencingBlockIds,

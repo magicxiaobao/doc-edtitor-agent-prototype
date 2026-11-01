@@ -20,19 +20,41 @@ import { checkPermission } from './permissionService';
 export function isValidVerificationRecord(record: unknown): record is PostRevisionVerificationRecord {
   if (!record || typeof record !== 'object') return false;
   const r = record as Record<string, unknown>;
-  return (
-    typeof r.id === 'string' &&
-    typeof r.taskId === 'string' &&
-    typeof r.draftId === 'string' &&
-    typeof r.operationId === 'string' &&
-    typeof r.blockId === 'string' &&
-    typeof r.blockOrder === 'number' &&
-    (r.status === 'verified' || r.status === 'deferred' || r.status === 'revoked') &&
-    typeof r.paragraphContentAtVerification === 'string' &&
-    typeof r.paragraphRevisionSeqAtVerification === 'number' &&
-    Array.isArray(r.referencedFactIdsAtVerification) &&
-    Array.isArray(r.history)
-  );
+  if (
+    typeof r.id !== 'string' ||
+    !r.id ||
+    typeof r.taskId !== 'string' ||
+    !r.taskId ||
+    typeof r.draftId !== 'string' ||
+    !r.draftId ||
+    typeof r.operationId !== 'string' ||
+    !r.operationId ||
+    typeof r.blockId !== 'string' ||
+    !r.blockId ||
+    typeof r.blockOrder !== 'number' ||
+    (r.status !== 'verified' && r.status !== 'deferred' && r.status !== 'revoked') ||
+    typeof r.paragraphContentAtVerification !== 'string' ||
+    typeof r.paragraphRevisionSeqAtVerification !== 'number' ||
+    !Array.isArray(r.referencedFactIdsAtVerification)
+  ) {
+    return false;
+  }
+  if (Array.isArray(r.events)) {
+    for (const ev of r.events) {
+      if (!ev || typeof ev !== 'object') return false;
+      const e = ev as Record<string, unknown>;
+      if (typeof e.id !== 'string' || typeof e.timestamp !== 'string') return false;
+    }
+  }
+  if (Array.isArray(r.history)) {
+    for (const ev of r.history) {
+      if (!ev || typeof ev !== 'object') return false;
+      const e = ev as Record<string, unknown>;
+      if (typeof e.id !== 'string' || typeof e.timestamp !== 'string') return false;
+    }
+  }
+  if (!Array.isArray(r.events) && !Array.isArray(r.history)) return false;
+  return true;
 }
 
 /**
@@ -41,55 +63,103 @@ export function isValidVerificationRecord(record: unknown): record is PostRevisi
 export function isValidVerificationCredential(cred: unknown): cred is PostRevisionVerificationCredential {
   if (!cred || typeof cred !== 'object') return false;
   const c = cred as Record<string, unknown>;
-  return (
-    typeof c.operationId === 'string' &&
-    Boolean(c.operationId) &&
-    typeof c.taskId === 'string' &&
-    typeof c.sourceDraftId === 'string' &&
-    typeof c.targetDraftId === 'string' &&
-    typeof c.operatorRole === 'string' &&
-    typeof c.createdAt === 'string' &&
-    Array.isArray(c.facts) &&
-    c.facts.length > 0 &&
-    c.facts.every(
-      (f: any) =>
-        f &&
-        typeof f.factId === 'string' &&
-        typeof f.metric === 'string' &&
-        typeof f.unit === 'string' &&
-        typeof f.fromValue === 'string' &&
-        typeof f.toValue === 'string' &&
-        Array.isArray(f.referencingBlockIds)
-    ) &&
-    Array.isArray(c.blocks) &&
-    c.blocks.length > 0 &&
-    c.blocks.every(
-      (b: any) =>
-        b &&
-        typeof b.blockId === 'string' &&
-        typeof b.blockOrder === 'number' &&
-        typeof b.beforeContent === 'string' &&
-        typeof b.afterContent === 'string' &&
-        typeof b.appliedRevisionSeq === 'number' &&
-        Array.isArray(b.associatedFactIds)
-    )
-  );
+  if (
+    typeof c.operationId !== 'string' ||
+    !c.operationId ||
+    typeof c.taskId !== 'string' ||
+    !c.taskId ||
+    typeof c.sourceDraftId !== 'string' ||
+    !c.sourceDraftId ||
+    typeof c.targetDraftId !== 'string' ||
+    !c.targetDraftId ||
+    typeof c.operatorRole !== 'string' ||
+    !c.operatorRole ||
+    typeof c.createdAt !== 'string' ||
+    !c.createdAt ||
+    !Array.isArray(c.facts) ||
+    c.facts.length === 0 ||
+    !Array.isArray(c.blocks) ||
+    c.blocks.length === 0
+  ) {
+    return false;
+  }
+
+  const factIds = new Set<string>();
+  for (const f of c.facts as any[]) {
+    if (!f || typeof f !== 'object') return false;
+    if (typeof f.factId !== 'string' || !f.factId || factIds.has(f.factId)) return false;
+    factIds.add(f.factId);
+    if (
+      typeof f.metric !== 'string' ||
+      typeof f.unit !== 'string' ||
+      typeof f.fromValue !== 'string' ||
+      typeof f.toValue !== 'string' ||
+      !Array.isArray(f.referencingBlockIds)
+    ) {
+      return false;
+    }
+    if ('fromEvidence' in f && f.fromEvidence !== undefined) {
+      if (!f.fromEvidence || typeof f.fromEvidence !== 'object' || typeof f.fromEvidence.evidenceId !== 'string') return false;
+    }
+    if ('toEvidence' in f && f.toEvidence !== undefined) {
+      if (!f.toEvidence || typeof f.toEvidence !== 'object' || typeof f.toEvidence.evidenceId !== 'string') return false;
+    }
+    if ('beforeEvidenceSnapshot' in f && f.beforeEvidenceSnapshot !== undefined) {
+      if (!f.beforeEvidenceSnapshot || typeof f.beforeEvidenceSnapshot !== 'object' || typeof f.beforeEvidenceSnapshot.evidenceId !== 'string') return false;
+    }
+    if ('afterEvidenceSnapshot' in f && f.afterEvidenceSnapshot !== undefined) {
+      if (!f.afterEvidenceSnapshot || typeof f.afterEvidenceSnapshot !== 'object' || typeof f.afterEvidenceSnapshot.evidenceId !== 'string') return false;
+    }
+    const hasBefore = (f.fromEvidence && typeof f.fromEvidence === 'object' && typeof f.fromEvidence.evidenceId === 'string') ||
+                      (f.beforeEvidenceSnapshot && typeof f.beforeEvidenceSnapshot === 'object' && typeof f.beforeEvidenceSnapshot.evidenceId === 'string');
+    const hasAfter = (f.toEvidence && typeof f.toEvidence === 'object' && typeof f.toEvidence.evidenceId === 'string') ||
+                     (f.afterEvidenceSnapshot && typeof f.afterEvidenceSnapshot === 'object' && typeof f.afterEvidenceSnapshot.evidenceId === 'string');
+    if (!hasBefore || !hasAfter) return false;
+  }
+
+  const blockIds = new Set<string>();
+  for (const b of c.blocks as any[]) {
+    if (!b || typeof b !== 'object') return false;
+    if (typeof b.blockId !== 'string' || !b.blockId || blockIds.has(b.blockId)) return false;
+    blockIds.add(b.blockId);
+    if (
+      typeof b.blockOrder !== 'number' ||
+      typeof b.beforeContent !== 'string' ||
+      typeof b.afterContent !== 'string' ||
+      typeof b.appliedRevisionSeq !== 'number' ||
+      !Array.isArray(b.associatedFactIds) ||
+      b.associatedFactIds.length === 0
+    ) {
+      return false;
+    }
+    for (const fid of b.associatedFactIds) {
+      if (typeof fid !== 'string' || !factIds.has(fid)) return false;
+    }
+  }
+
+  return true;
 }
 
 export function isValidFrozenPostRevisionVerificationOverview(ov: unknown): ov is PostRevisionVerificationOverview {
   if (!ov || typeof ov !== 'object') return false;
   const o = ov as Record<string, unknown>;
-  return (
-    typeof o.hasCredential === 'boolean' &&
-    typeof o.totalBlocks === 'number' &&
-    typeof o.verifiedCount === 'number' &&
-    typeof o.pendingCount === 'number' &&
-    typeof o.deferredCount === 'number' &&
-    typeof o.invalidatedCount === 'number' &&
-    typeof o.isAllVerified === 'boolean' &&
-    Array.isArray(o.blockEvaluations) &&
-    Array.isArray(o.facts)
-  );
+  if (
+    typeof o.hasCredential !== 'boolean' ||
+    typeof o.totalBlocks !== 'number' ||
+    typeof o.verifiedCount !== 'number' ||
+    typeof o.pendingCount !== 'number' ||
+    typeof o.deferredCount !== 'number' ||
+    typeof o.invalidatedCount !== 'number' ||
+    typeof o.isAllVerified !== 'boolean' ||
+    !Array.isArray(o.blockEvaluations) ||
+    !Array.isArray(o.facts)
+  ) {
+    return false;
+  }
+  for (const b of o.blockEvaluations as any[]) {
+    if (!b || typeof b !== 'object' || typeof b.blockId !== 'string') return false;
+  }
+  return true;
 }
 
 /**
@@ -188,7 +258,14 @@ export function evaluatePostRevisionVerification(
   const records = draft.postRevisionVerificationRecords || [];
   const recordMap = new Map<string, PostRevisionVerificationRecord>();
   for (const rec of records) {
-    if (rec && rec.blockId) {
+    if (
+      rec &&
+      rec.blockId &&
+      rec.taskId === task.id &&
+      rec.draftId === draft.id &&
+      rec.operationId === cred.operationId &&
+      isValidVerificationRecord(rec)
+    ) {
       recordMap.set(rec.blockId, rec);
     }
   }
@@ -226,6 +303,35 @@ export function evaluatePostRevisionVerification(
       if (taskFact.value !== f.toValue) {
         hasFactConflictOrDifference = true;
         factDifferenceNotice = `关联事实【${f.metric}】数值已再次变更为“${taskFact.value}${taskFact.unit}”，与采纳值“${f.toValue}${f.unit}”不一致，需先处理事实差异`;
+        break;
+      }
+      if (f.unit && taskFact.unit && taskFact.unit !== f.unit) {
+        hasFactConflictOrDifference = true;
+        factDifferenceNotice = `关联事实【${f.metric}】单位已变更为“${taskFact.unit}”，与采纳单位“${f.unit}”不一致，需先处理事实差异`;
+        break;
+      }
+      if (f.period && taskFact.period && taskFact.period !== f.period) {
+        hasFactConflictOrDifference = true;
+        factDifferenceNotice = `关联事实【${f.metric}】期间已变更为“${taskFact.period}”，与采纳期间“${f.period}”不一致，需先处理事实差异`;
+        break;
+      }
+      const frozenScope = f.metricScope || (f as any).metricScope;
+      if (frozenScope && taskFact.metricScope && taskFact.metricScope !== frozenScope) {
+        hasFactConflictOrDifference = true;
+        factDifferenceNotice = `关联事实【${f.metric}】口径已变更为“${taskFact.metricScope}”，与采纳口径不一致，需先处理事实差异`;
+        break;
+      }
+      const frozenPrimaryEvId = f.primaryEvidenceId || f.toEvidence?.evidenceId;
+      if (frozenPrimaryEvId && taskFact.primaryEvidenceId && taskFact.primaryEvidenceId !== frozenPrimaryEvId) {
+        hasFactConflictOrDifference = true;
+        factDifferenceNotice = `关联事实【${f.metric}】主出处已变更为“${taskFact.primaryEvidenceId}”，与采纳主出处不一致，需先处理事实差异`;
+        break;
+      }
+      const evId = f.toEvidence?.evidenceId || taskFact.primaryEvidenceId;
+      const currentSnippet = task.snippets.find((s) => s.id === evId);
+      if (currentSnippet && f.toEvidence?.snippetText && currentSnippet.text !== f.toEvidence.snippetText) {
+        hasFactConflictOrDifference = true;
+        factDifferenceNotice = `关联事实【${f.metric}】出处原文内容已变动，与采纳存证不一致，需先处理事实差异`;
         break;
       }
     }
@@ -319,9 +425,19 @@ export function evaluatePostRevisionVerification(
       ) {
         invalidatedReason = '段落关联事实引用发生变动，原核对结论失效';
       }
-      // 4. Associated fact unadjudicated conflict or unconfirmed
+      // 4. Adopted evidence (material supplement) on paragraph block changed
+      else if (
+        Boolean(currentBlock.adoptedEvidences && currentBlock.adoptedEvidences.length > 0) !==
+          Boolean(rec.adoptedEvidencesAtVerification && rec.adoptedEvidencesAtVerification.length > 0) ||
+        (currentBlock.adoptedEvidences &&
+          rec.adoptedEvidencesAtVerification &&
+          JSON.stringify(currentBlock.adoptedEvidences) !== JSON.stringify(rec.adoptedEvidencesAtVerification))
+      ) {
+        invalidatedReason = '段落材料补写存证关联发生变动，原核对结论失效';
+      }
+      // 5. Associated fact unadjudicated conflict or unconfirmed or altered
       else if (hasFactConflictOrDifference) {
-        invalidatedReason = factDifferenceNotice || '关联事实重提冲突或未核准，需先前往处理事实';
+        invalidatedReason = factDifferenceNotice || '关联事实或出处发生变动，需先前往处理事实差异';
       }
 
       if (invalidatedReason) {
@@ -540,6 +656,39 @@ function validateVerificationPreconditions(
     }
   }
 
+  // 6. Verify associated facts and evidence consistency
+  const associatedFacts = cred.facts.filter((f) => credBlock.associatedFactIds.includes(f.factId));
+  for (const f of associatedFacts) {
+    const taskFact = task.facts.find((tf) => tf.id === f.factId);
+    const hasUnresolvedConflict =
+      !taskFact || (taskFact.status as string) === 'conflict' || (taskFact.hasConflict && !taskFact.selectedConflictValue);
+    if (!taskFact || hasUnresolvedConflict || taskFact.status !== 'confirmed') {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    if (taskFact.value !== f.toValue) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    if (f.unit && taskFact.unit && taskFact.unit !== f.unit) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    if (f.period && taskFact.period && taskFact.period !== f.period) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    const frozenScope = f.metricScope || (f as any).metricScope;
+    if (frozenScope && taskFact.metricScope && taskFact.metricScope !== frozenScope) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    const frozenPrimaryEvId = f.primaryEvidenceId || f.toEvidence?.evidenceId;
+    if (frozenPrimaryEvId && taskFact.primaryEvidenceId && taskFact.primaryEvidenceId !== frozenPrimaryEvId) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+    const evId = f.toEvidence?.evidenceId || taskFact.primaryEvidenceId;
+    const currentSnippet = task.snippets.find((s) => s.id === evId);
+    if (currentSnippet && f.toEvidence?.snippetText && currentSnippet.text !== f.toEvidence.snippetText) {
+      return { valid: false, reason: '事实/出处变动未处理时不得签署' };
+    }
+  }
+
   return { valid: true, draft, block, credBlock };
 }
 
@@ -554,7 +703,7 @@ export function recordPostRevisionVerification(
   arg2?: DraftVersion,
   arg3?: any
 ): VerificationActionResult {
-  const { params, rawDraft } = parseActionArgs(arg1, arg2, arg3);
+  const { params } = parseActionArgs(arg1, arg2, arg3);
   const { notes, activeRole } = params;
 
   if (!notes || notes.trim().length === 0) {
@@ -572,22 +721,11 @@ export function recordPostRevisionVerification(
   const block = check.block;
   const credBlock = check.credBlock;
 
-  // Verify associated facts: cannot mark verified if related facts have unresolved conflict or are unconfirmed
-  const cred = draft.postRevisionVerificationCredential!;
-  const associatedFacts = cred.facts.filter((f) => credBlock.associatedFactIds.includes(f.factId));
-  for (const f of associatedFacts) {
-    const taskFact = task.facts.find((tf) => tf.id === f.factId);
-    const hasUnresolvedConflict =
-      !taskFact || (taskFact.status as string) === 'conflict' || (taskFact.hasConflict && !taskFact.selectedConflictValue);
-    if (!taskFact || hasUnresolvedConflict || taskFact.status !== 'confirmed') {
-      const msg = `关联事实【${f.metric}】存在未裁决冲突或未核准变动，需先前往处理事实差异，无法记录核对完成`;
-      return { success: false, reason: msg, error: msg };
-    }
-  }
-
   const now = new Date().toISOString();
   const existingRecords = draft.postRevisionVerificationRecords || [];
-  const existingIndex = existingRecords.findIndex((r) => r.blockId === blockId);
+  const existingIndex = existingRecords.findIndex(
+    (r) => r.blockId === blockId && r.taskId === task.id && r.draftId === draftId && r.operationId === operationId
+  );
 
   const event: PostRevisionVerificationEvent = {
     id: `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -597,6 +735,10 @@ export function recordPostRevisionVerification(
     timestamp: now,
     notes: notes.trim(),
   };
+
+  const adoptedEvidencesAtVerification = block.adoptedEvidences
+    ? JSON.parse(JSON.stringify(block.adoptedEvidences))
+    : undefined;
 
   let updatedRecord: PostRevisionVerificationRecord;
 
@@ -612,6 +754,7 @@ export function recordPostRevisionVerification(
       paragraphContentAtVerification: block.content,
       paragraphRevisionSeqAtVerification: block.revisionSeq ?? 0,
       referencedFactIdsAtVerification: [...block.referencedFactIds],
+      adoptedEvidencesAtVerification,
       history: [...prevHistory, event],
       events: [...prevHistory, event],
       revocation: undefined,
@@ -632,6 +775,7 @@ export function recordPostRevisionVerification(
       paragraphContentAtVerification: block.content,
       paragraphRevisionSeqAtVerification: block.revisionSeq ?? 0,
       referencedFactIdsAtVerification: [...block.referencedFactIds],
+      adoptedEvidencesAtVerification,
       history: [event],
       events: [event],
     };
@@ -641,11 +785,6 @@ export function recordPostRevisionVerification(
     existingIndex >= 0
       ? existingRecords.map((r, i) => (i === existingIndex ? updatedRecord : r))
       : [...existingRecords, updatedRecord];
-
-  draft.postRevisionVerificationRecords = nextRecords;
-  if (rawDraft) {
-    rawDraft.postRevisionVerificationRecords = nextRecords;
-  }
 
   const updatedDraft: DraftVersion = {
     ...draft,
@@ -672,7 +811,7 @@ export function deferPostRevisionVerification(
   arg2?: DraftVersion,
   arg3?: any
 ): VerificationActionResult {
-  const { params, rawDraft } = parseActionArgs(arg1, arg2, arg3);
+  const { params } = parseActionArgs(arg1, arg2, arg3);
   const { reason, activeRole } = params;
 
   if (!reason || reason.trim().length === 0) {
@@ -692,7 +831,9 @@ export function deferPostRevisionVerification(
 
   const now = new Date().toISOString();
   const existingRecords = draft.postRevisionVerificationRecords || [];
-  const existingIndex = existingRecords.findIndex((r) => r.blockId === blockId);
+  const existingIndex = existingRecords.findIndex(
+    (r) => r.blockId === blockId && r.taskId === task.id && r.draftId === draftId && r.operationId === operationId
+  );
 
   const event: PostRevisionVerificationEvent = {
     id: `EVT-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -746,11 +887,6 @@ export function deferPostRevisionVerification(
       ? existingRecords.map((r, i) => (i === existingIndex ? updatedRecord : r))
       : [...existingRecords, updatedRecord];
 
-  draft.postRevisionVerificationRecords = nextRecords;
-  if (rawDraft) {
-    rawDraft.postRevisionVerificationRecords = nextRecords;
-  }
-
   const updatedDraft: DraftVersion = {
     ...draft,
     postRevisionVerificationRecords: nextRecords,
@@ -776,7 +912,7 @@ export function revokePostRevisionVerification(
   arg2?: DraftVersion,
   arg3?: any
 ): VerificationActionResult {
-  const { params, rawDraft } = parseActionArgs(arg1, arg2, arg3);
+  const { params } = parseActionArgs(arg1, arg2, arg3);
   const { reason, activeRole } = params;
 
   if (!reason || reason.trim().length === 0) {
@@ -789,11 +925,13 @@ export function revokePostRevisionVerification(
     return { success: false, reason: check.reason, error: check.reason };
   }
 
-  const { task, blockId } = params;
+  const { task, draftId, operationId, blockId } = params;
   const draft = check.draft;
 
   const existingRecords = draft.postRevisionVerificationRecords || [];
-  const existing = existingRecords.find((r) => r.blockId === blockId);
+  const existing = existingRecords.find(
+    (r) => r.blockId === blockId && r.taskId === task.id && r.draftId === draftId && r.operationId === operationId
+  );
 
   if (!existing || existing.status === 'revoked') {
     const msg = '该段落尚无有效核对记录，无法撤回';
@@ -823,12 +961,11 @@ export function revokePostRevisionVerification(
     },
   };
 
-  const nextRecords = existingRecords.map((r) => (r.blockId === blockId ? updatedRecord : r));
-
-  draft.postRevisionVerificationRecords = nextRecords;
-  if (rawDraft) {
-    rawDraft.postRevisionVerificationRecords = nextRecords;
-  }
+  const nextRecords = existingRecords.map((r) =>
+    r.blockId === blockId && r.taskId === task.id && r.draftId === draftId && r.operationId === operationId
+      ? updatedRecord
+      : r
+  );
 
   const updatedDraft: DraftVersion = {
     ...draft,
