@@ -320,7 +320,7 @@ export const INITIAL_OUTLINE: OutlineSection[] = [
   },
 ];
 
-export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision'): Task {
+export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification'): Task {
   if (scenario === 'multi_paragraph_revision') {
     return createMultiParagraphRevisionDemoTask();
   }
@@ -329,6 +329,9 @@ export function createPresetTask(scenario: 'blank' | 'conflict_pending' | 'ready
   }
   if (scenario === 'shared_paragraph_revision') {
     return createSharedParagraphRevisionDemoTask();
+  }
+  if (scenario === 'post_revision_verification') {
+    return createPostRevisionVerificationDemoTask();
   }
   const baseTask: Task = {
     id: `TASK-${Date.now().toString(36)}`,
@@ -1286,3 +1289,18 @@ export function createSharedParagraphRevisionDemoTask(): Task {
   return task;
 }
 
+export function createPostRevisionVerificationDemoTask(): Task {
+  const task = createSharedParagraphRevisionDemoTask();
+  task.id = 'TASK-DEMO-POST-REVISION-VERIFICATION';
+  task.title = '某单位2026年前三季度工作总结 (事实修订后逐段核对演示)';
+  task.primaryAuthor = '主笔甲';
+  task.currentStage = 'material_fact';
+  task.status = '事实待确认';
+  if (task.drafts[0]) {
+    task.drafts[0].factReviewRecords = [];
+    if (task.drafts[0].snapshotMetadata) {
+      task.drafts[0].snapshotMetadata.taskTitle = task.title;
+    }
+  }
+  return task;
+}

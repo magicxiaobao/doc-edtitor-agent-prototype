@@ -21,7 +21,7 @@ interface NavbarProps {
   onSelectTask: (taskId: string) => void;
   activeRole: UserRole;
   onSelectRole: (role: UserRole) => void;
-  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision') => void;
+  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification') => void;
   onResetData: () => void;
 }
 
@@ -214,6 +214,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span className="font-semibold text-emerald-300">7. 两事实共享段落修订演示 (128项→120项 & 16场→18场)</span>
                     <span className="text-xs text-slate-400">两项事实共享首段、同段多处改写、原子采纳</span>
                   </button>
+                  <button
+                    data-testid="btn-load-scenario-post-revision-verification"
+                    onClick={() => onLoadScenario('post_revision_verification')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white flex flex-col cursor-pointer border-t border-slate-800"
+                  >
+                    <span className="font-semibold text-teal-300">8. 事实修订后逐段核对演示 (两事实三段核对与留痕)</span>
+                    <span className="text-xs text-slate-400">已采纳新稿、事实差异为0、逐段人工核对与审计留痕</span>
+                  </button>
                 </div>
               </div>
 
@@ -246,6 +254,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>创建共享段落修订演示任务</span>
+              </button>
+
+              <button
+                data-testid="btn-create-post-revision-verification-demo-task"
+                onClick={() => onLoadScenario('post_revision_verification')}
+                className="flex items-center gap-1.5 px-3 py-1 bg-teal-900/90 hover:bg-teal-800 border border-teal-700 rounded text-teal-100 text-xs font-medium transition-colors cursor-pointer"
+                title="显式创建事实修订后逐段核对演示任务（不自动覆盖已有任务）"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-teal-300" />
+                <span>创建修订核对演示任务</span>
               </button>
 
               {/* Reset button */}

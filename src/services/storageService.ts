@@ -2,6 +2,16 @@ import { Task, UserRole, DraftVersion, ParagraphBlock } from '../types';
 import { createPresetTask } from './mockData';
 import {isValidFactReviewRecord, isValidFrozenFactReviewOverview} from './factReviewService';
 export {isValidFactReviewRecord} from './factReviewService';
+import {
+  isValidVerificationRecord,
+  isValidVerificationCredential,
+  isValidFrozenPostRevisionVerificationOverview,
+} from './postRevisionVerificationService';
+export {
+  isValidVerificationRecord,
+  isValidVerificationCredential,
+  isValidFrozenPostRevisionVerificationOverview,
+};
 
 export const CURRENT_SCHEMA_VERSION = 2;
 export const STORAGE_KEY_V2 = 'doc_editor_agent_state_v2';
@@ -183,6 +193,62 @@ function normalizeFactReviewFields(draft: DraftVersion) {
   }
 }
 
+function normalizePostRevisionVerificationFields(draft: DraftVersion) {
+  let wasRecovered = false;
+  if (
+    draft.postRevisionVerificationCredential !== undefined &&
+    !isValidVerificationCredential(draft.postRevisionVerificationCredential)
+  ) {
+    wasRecovered = true;
+    draft.postRevisionVerificationRecovery = {
+      ...draft.postRevisionVerificationRecovery,
+      recovered: true,
+      postRevisionVerificationCredential: draft.postRevisionVerificationCredential,
+    };
+    draft.postRevisionVerificationCredential = undefined;
+  }
+  if (
+    draft.sourcePostRevisionVerificationCredential !== undefined &&
+    !isValidVerificationCredential(draft.sourcePostRevisionVerificationCredential)
+  ) {
+    wasRecovered = true;
+    draft.postRevisionVerificationRecovery = {
+      ...draft.postRevisionVerificationRecovery,
+      recovered: true,
+      sourcePostRevisionVerificationCredential: draft.sourcePostRevisionVerificationCredential,
+    };
+    draft.sourcePostRevisionVerificationCredential = undefined;
+  }
+  for (const field of ['postRevisionVerificationRecords', 'sourcePostRevisionVerificationRecords'] as const) {
+    const raw = draft[field];
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw) || raw.some((r) => !isValidVerificationRecord(r))) {
+      wasRecovered = true;
+      draft.postRevisionVerificationRecovery = {
+        ...draft.postRevisionVerificationRecovery,
+        recovered: true,
+        [field]: raw,
+      };
+      draft[field] = Array.isArray(raw) ? raw.filter(isValidVerificationRecord) : [];
+    }
+  }
+  if (
+    draft.frozenPostRevisionVerificationOverview !== undefined &&
+    !isValidFrozenPostRevisionVerificationOverview(draft.frozenPostRevisionVerificationOverview)
+  ) {
+    wasRecovered = true;
+    draft.postRevisionVerificationRecovery = {
+      ...draft.postRevisionVerificationRecovery,
+      recovered: true,
+      frozenPostRevisionVerificationOverview: draft.frozenPostRevisionVerificationOverview,
+    };
+    draft.frozenPostRevisionVerificationOverview = undefined;
+  }
+  if (wasRecovered && draft.postRevisionVerificationRecovery) {
+    draft.postRevisionVerificationRecovery.recovered = true;
+  }
+}
+
 /**
  * Validates task runtime structure integrity.
  * Returns true if valid or safely repaired, false if structural corruption.
@@ -219,6 +285,7 @@ export function validateTaskStructure(task: any): boolean {
     if (draft.reviewBaselineIds !== undefined && (!Array.isArray(draft.reviewBaselineIds) ||
         draft.reviewBaselineIds.some((id: unknown) => typeof id !== 'string'))) return false;
     normalizeFactReviewFields(draft);
+    normalizePostRevisionVerificationFields(draft);
     for (const b of draft.blocks) {
       if (!b || typeof b !== 'object') return false;
       if (typeof b.id !== 'string' || !b.id) return false;
@@ -660,6 +727,12 @@ export function recoverTasksFromCorruptedBackup(): { success: boolean; recovered
             sourceFactReviewRecords:d?.sourceFactReviewRecords,
             frozenFactReviewOverview:d?.frozenFactReviewOverview,
             factReviewRecovery:d?.factReviewRecovery,
+            postRevisionVerificationCredential: d?.postRevisionVerificationCredential,
+            postRevisionVerificationRecords: d?.postRevisionVerificationRecords,
+            sourcePostRevisionVerificationCredential: d?.sourcePostRevisionVerificationCredential,
+            sourcePostRevisionVerificationRecords: d?.sourcePostRevisionVerificationRecords,
+            frozenPostRevisionVerificationOverview: d?.frozenPostRevisionVerificationOverview,
+            postRevisionVerificationRecovery: d?.postRevisionVerificationRecovery,
           };
         });
       } else {

@@ -27,6 +27,11 @@ import {
 } from './draftLifecycleService';
 import { buildFactItemSnapshot, confirmFact, extractClausePeriod, arePeriodsStrictlyIdentical,
   parsePeriodDateRange } from './factLifecycleService';
+import {
+  buildPostRevisionVerificationCredential,
+  freezePostRevisionVerification,
+  sourcePostRevisionVerification,
+} from './postRevisionVerificationService';
 
 export interface FactRevisionEligibilityResult {
   eligible: boolean;
@@ -921,6 +926,7 @@ export function acceptFactRevisionCandidate(
       : '采纳事实定向修订前系统自动归档的历史快照',
     frozenReviewComments: freezeReviewComments(task, draftToArchive),
     ...freezeFactReviews(task, draftToArchive),
+    ...freezePostRevisionVerification(task, draftToArchive),
   };
 
   // 2. Build updated blocks for new working draft
@@ -943,10 +949,72 @@ export function acceptFactRevisionCandidate(
   });
 
   const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳事实定向修订)`;
+  const newWorkingDraftId = `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+  const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === candidate.targetFactId);
+  const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === candidate.targetFactId);
+
+  const cred = buildPostRevisionVerificationCredential({
+    taskId: task.id,
+    sourceDraftId: draftToArchive.id,
+    targetDraftId: newWorkingDraftId,
+    operationId: candidate.id,
+    operatorRole: activeRole,
+    facts: [
+      (() => {
+        const taskFact = task.facts.find((tf) => tf.id === candidate.targetFactId);
+        const toEvidenceId = candidate.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+        const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+        const fromEvidenceId = candidate.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+        const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+        return {
+          factId: candidate.targetFactId,
+          metric: candidate.metric,
+          unit: candidate.unit,
+          period: (candidate as any).period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+          metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+          primaryEvidenceId: toEvidenceId,
+          fromValue: candidate.fromValue,
+          toValue: candidate.toValue,
+          fromEvidence: {
+            evidenceId: fromEvidenceId || fromSnippet?.id || '',
+            sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+            sourceDocName: candidate.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+            location: candidate.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+            snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+            period: fromFactItem?.period || fromSnippet?.period,
+            capturedAt: fromFactItem?.provenance?.capturedAt,
+          },
+          toEvidence: {
+            evidenceId: toEvidenceId || toSnippet?.id || '',
+            sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+            sourceDocName: candidate.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+            location: candidate.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+            snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+            period: toFactItem?.period || toSnippet?.period,
+            capturedAt: toFactItem?.provenance?.capturedAt,
+          },
+          referencingBlockIds: [candidate.targetBlockId],
+        };
+      })(),
+    ],
+    blocks: [
+      {
+        blockId: candidate.targetBlockId,
+        blockOrder: candidate.targetBlockOrder,
+        sectionTitle: candidate.targetSectionTitle,
+        beforeContent: candidate.originalBlockContent,
+        afterContent: candidate.revisedBlockContent,
+        appliedRevisionSeq: nextBlocks.find((b) => b.id === candidate.targetBlockId)!.revisionSeq!,
+        associatedFactIds: [candidate.targetFactId],
+      },
+    ],
+    contextFingerprint: candidate.contextFingerprint,
+  });
 
   // 3. Create brand-new working draft bound to the verified latest approved snapshot
   const newWorkingDraft: DraftVersion = {
-    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    id: newWorkingDraftId,
     versionNumber: nextVersionNumber,
     createdAt: new Date().toISOString(),
     author: activeRole,
@@ -966,6 +1034,10 @@ export function acceptFactRevisionCandidate(
     auditRecords: [], // Cleared so new draft undergoes fresh audit gate check
     factReviewRecords: [], // Initialized to empty, does NOT auto-sign "reviewed"
     sourceFactReviewRecords: sourceFactReviews(draftToArchive), // Retained for provenance inspection
+    postRevisionVerificationCredential: cred,
+    postRevisionVerificationRecords: [],
+    sourcePostRevisionVerificationCredential: draftToArchive.postRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(draftToArchive),
   };
 
   // 4. Update task atomically
@@ -1810,6 +1882,7 @@ export function acceptMultiParagraphFactRevisionCandidate(
       : '采纳事实多段落定向修订前系统自动归档的历史快照',
     frozenReviewComments: freezeReviewComments(task, draftToArchive),
     ...freezeFactReviews(task, draftToArchive),
+    ...freezePostRevisionVerification(task, draftToArchive),
   };
 
   // 2. Build updated blocks for new working draft
@@ -1831,10 +1904,70 @@ export function acceptMultiParagraphFactRevisionCandidate(
   });
 
   const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳事实多段落定向修订)`;
+  const newWorkingDraftId = `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+  const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === candidateGroup.targetFactId);
+  const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === candidateGroup.targetFactId);
+
+  const cred = buildPostRevisionVerificationCredential({
+    taskId: task.id,
+    sourceDraftId: draftToArchive.id,
+    targetDraftId: newWorkingDraftId,
+    operationId: candidateGroup.id,
+    operatorRole: activeRole,
+    facts: [
+      (() => {
+        const taskFact = task.facts.find((tf) => tf.id === candidateGroup.targetFactId);
+        const toEvidenceId = candidateGroup.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+        const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+        const fromEvidenceId = candidateGroup.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+        const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+        return {
+          factId: candidateGroup.targetFactId,
+          metric: candidateGroup.metric,
+          unit: candidateGroup.unit,
+          period: candidateGroup.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+          metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+          primaryEvidenceId: toEvidenceId,
+          fromValue: candidateGroup.fromValue,
+          toValue: candidateGroup.toValue,
+          fromEvidence: {
+            evidenceId: fromEvidenceId || fromSnippet?.id || '',
+            sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+            sourceDocName: candidateGroup.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+            location: candidateGroup.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+            snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+            period: fromFactItem?.period || fromSnippet?.period,
+            capturedAt: fromFactItem?.provenance?.capturedAt,
+          },
+          toEvidence: {
+            evidenceId: toEvidenceId || toSnippet?.id || '',
+            sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+            sourceDocName: candidateGroup.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+            location: candidateGroup.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+            snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+            period: toFactItem?.period || toSnippet?.period,
+            capturedAt: toFactItem?.provenance?.capturedAt,
+          },
+          referencingBlockIds: candidateGroup.targetBlockIds,
+        };
+      })(),
+    ],
+    blocks: candidateGroup.items.map((i) => ({
+      blockId: i.targetBlockId,
+      blockOrder: i.targetBlockOrder,
+      sectionTitle: i.targetSectionTitle,
+      beforeContent: i.originalBlockContent,
+      afterContent: i.revisedBlockContent,
+      appliedRevisionSeq: nextBlocks.find((b) => b.id === i.targetBlockId)!.revisionSeq!,
+      associatedFactIds: [candidateGroup.targetFactId],
+    })),
+    contextFingerprint: candidateGroup.contextFingerprint,
+  });
 
   // 3. Create brand-new working draft bound to the verified latest approved snapshot
   const newWorkingDraft: DraftVersion = {
-    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    id: newWorkingDraftId,
     versionNumber: nextVersionNumber,
     createdAt: new Date().toISOString(),
     author: activeRole,
@@ -1854,6 +1987,10 @@ export function acceptMultiParagraphFactRevisionCandidate(
     auditRecords: [], // Cleared so new draft undergoes fresh audit gate check
     factReviewRecords: [], // Initialized to empty, does NOT auto-sign "reviewed"
     sourceFactReviewRecords: sourceFactReviews(draftToArchive), // Retained for provenance inspection
+    postRevisionVerificationCredential: cred,
+    postRevisionVerificationRecords: [],
+    sourcePostRevisionVerificationCredential: draftToArchive.postRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(draftToArchive),
   };
 
   // 4. Build single consolidated atomic modification log
@@ -2696,6 +2833,7 @@ export function acceptMultiFactGroupRevisionCandidate(
       : '采纳两项事实成组定向修订前系统自动归档的历史快照',
     frozenReviewComments: freezeReviewComments(task, draftToArchive),
     ...freezeFactReviews(task, draftToArchive),
+    ...freezePostRevisionVerification(task, draftToArchive),
   };
 
   // 2. Build updated blocks for new working draft
@@ -2717,11 +2855,74 @@ export function acceptMultiFactGroupRevisionCandidate(
   });
 
   const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳多事实成组定向修订)`;
+  const newWorkingDraftId = `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+  const cred = buildPostRevisionVerificationCredential({
+    taskId: task.id,
+    sourceDraftId: draftToArchive.id,
+    targetDraftId: newWorkingDraftId,
+    operationId: candidateGroup.id,
+    operatorRole: activeRole,
+    facts: candidateGroup.facts.map((f) => {
+      const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const taskFact = task.facts.find((tf) => tf.id === f.factId);
+      const toEvidenceId = f.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+      const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+      const fromEvidenceId = f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+      const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+      return {
+        factId: f.factId,
+        metric: f.metric,
+        unit: f.unit,
+        period: f.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+        metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+        primaryEvidenceId: toEvidenceId,
+        fromValue: f.fromValue,
+        toValue: f.toValue,
+        fromEvidence: {
+          evidenceId: fromEvidenceId || fromSnippet?.id || '',
+          sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+          location: f.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+          snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+          period: fromFactItem?.period || fromSnippet?.period,
+          capturedAt: fromFactItem?.provenance?.capturedAt,
+        },
+        toEvidence: {
+          evidenceId: toEvidenceId || toSnippet?.id || '',
+          sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+          location: f.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+          snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+          period: toFactItem?.period || toSnippet?.period,
+          capturedAt: toFactItem?.provenance?.capturedAt,
+        },
+        referencingBlockIds: f.referencingBlockIds,
+      };
+    }),
+    blocks: candidateGroup.items.map((i) => {
+      const associated =
+        i.associatedFactIds && i.associatedFactIds.length > 0
+          ? i.associatedFactIds
+          : candidateGroup.facts.filter((f) => f.referencingBlockIds.includes(i.targetBlockId)).map((f) => f.factId);
+      return {
+        blockId: i.targetBlockId,
+        blockOrder: i.targetBlockOrder,
+        sectionTitle: i.targetSectionTitle,
+        beforeContent: i.originalBlockContent,
+        afterContent: i.revisedBlockContent,
+        appliedRevisionSeq: nextBlocks.find((b) => b.id === i.targetBlockId)!.revisionSeq!,
+        associatedFactIds: associated,
+      };
+    }),
+    contextFingerprint: candidateGroup.contextFingerprint,
+  });
 
   // 3. Create brand-new working draft bound to the verified latest approved snapshot
   const factsSummaryStr = candidateGroup.facts.map((f) => `【${f.metric}】`).join('、');
   const newWorkingDraft: DraftVersion = {
-    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    id: newWorkingDraftId,
     versionNumber: nextVersionNumber,
     createdAt: new Date().toISOString(),
     author: activeRole,
@@ -2741,6 +2942,10 @@ export function acceptMultiFactGroupRevisionCandidate(
     auditRecords: [],
     factReviewRecords: [],
     sourceFactReviewRecords: sourceFactReviews(draftToArchive),
+    postRevisionVerificationCredential: cred,
+    postRevisionVerificationRecords: [],
+    sourcePostRevisionVerificationCredential: draftToArchive.postRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(draftToArchive),
   };
 
   // 4. Build single consolidated atomic modification log
@@ -3769,6 +3974,7 @@ export function acceptSharedParagraphFactRevisionCandidate(
       : '采纳两项事实成组定向修订前系统自动归档的历史快照',
     frozenReviewComments: freezeReviewComments(task, draftToArchive),
     ...freezeFactReviews(task, draftToArchive),
+    ...freezePostRevisionVerification(task, draftToArchive),
   };
 
   // 2. Build updated blocks for new working draft
@@ -3790,11 +3996,74 @@ export function acceptSharedParagraphFactRevisionCandidate(
   });
 
   const nextVersionNumber = `v${(task.drafts.length + 1).toFixed(1)} (工作稿·已采纳多事实成组定向修订)`;
+  const newWorkingDraftId = `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+  const cred = buildPostRevisionVerificationCredential({
+    taskId: task.id,
+    sourceDraftId: draftToArchive.id,
+    targetDraftId: newWorkingDraftId,
+    operationId: candidateGroup.id,
+    operatorRole: activeRole,
+    facts: candidateGroup.facts.map((f) => {
+      const fromFactItem = draftToArchive.snapshotMetadata?.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const toFactItem = task.factSnapshot?.items?.find((i) => i.factId === f.factId);
+      const taskFact = task.facts.find((tf) => tf.id === f.factId);
+      const toEvidenceId = f.toEvidenceId || toFactItem?.primaryEvidenceId || taskFact?.primaryEvidenceId || toFactItem?.provenance?.evidenceId;
+      const toSnippet = task.snippets.find((s) => s.id === toEvidenceId);
+      const fromEvidenceId = f.fromEvidenceId || fromFactItem?.primaryEvidenceId || fromFactItem?.provenance?.evidenceId;
+      const fromSnippet = task.snippets.find((s) => s.id === fromEvidenceId);
+      return {
+        factId: f.factId,
+        metric: f.metric,
+        unit: f.unit,
+        period: f.period || fromFactItem?.period || toFactItem?.period || taskFact?.period || '',
+        metricScope: taskFact?.metricScope || toFactItem?.metricScope,
+        primaryEvidenceId: toEvidenceId,
+        fromValue: f.fromValue,
+        toValue: f.toValue,
+        fromEvidence: {
+          evidenceId: fromEvidenceId || fromSnippet?.id || '',
+          sourceDocId: fromFactItem?.provenance?.sourceDocId || fromSnippet?.sourceDocId,
+          sourceDocName: f.fromDocName || fromFactItem?.provenance?.sourceDocName || fromSnippet?.docName || '',
+          location: f.fromLocation || fromFactItem?.provenance?.location || fromSnippet?.location,
+          snippetText: fromFactItem?.provenance?.text || fromSnippet?.text,
+          period: fromFactItem?.period || fromSnippet?.period,
+          capturedAt: fromFactItem?.provenance?.capturedAt,
+        },
+        toEvidence: {
+          evidenceId: toEvidenceId || toSnippet?.id || '',
+          sourceDocId: toFactItem?.provenance?.sourceDocId || toSnippet?.sourceDocId,
+          sourceDocName: f.toDocName || toFactItem?.provenance?.sourceDocName || toSnippet?.docName || '',
+          location: f.toLocation || toFactItem?.provenance?.location || toSnippet?.location,
+          snippetText: toFactItem?.provenance?.text || toSnippet?.text,
+          period: toFactItem?.period || toSnippet?.period,
+          capturedAt: toFactItem?.provenance?.capturedAt,
+        },
+        referencingBlockIds: f.referencingBlockIds,
+      };
+    }),
+    blocks: candidateGroup.items.map((i) => {
+      const associated =
+        i.associatedFactIds && i.associatedFactIds.length > 0
+          ? i.associatedFactIds
+          : candidateGroup.facts.filter((f) => f.referencingBlockIds.includes(i.targetBlockId)).map((f) => f.factId);
+      return {
+        blockId: i.targetBlockId,
+        blockOrder: i.targetBlockOrder,
+        sectionTitle: i.targetSectionTitle,
+        beforeContent: i.originalBlockContent,
+        afterContent: i.revisedBlockContent,
+        appliedRevisionSeq: nextBlocks.find((b) => b.id === i.targetBlockId)!.revisionSeq!,
+        associatedFactIds: associated,
+      };
+    }),
+    contextFingerprint: candidateGroup.contextFingerprint,
+  });
 
   // 3. Create brand-new working draft bound to the verified latest approved snapshot
   const factsSummaryStr = candidateGroup.facts.map((f) => `【${f.metric}】`).join('、');
   const newWorkingDraft: DraftVersion = {
-    id: `DRAFT-WORK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+    id: newWorkingDraftId,
     versionNumber: nextVersionNumber,
     createdAt: new Date().toISOString(),
     author: activeRole,
@@ -3814,6 +4083,10 @@ export function acceptSharedParagraphFactRevisionCandidate(
     auditRecords: [],
     factReviewRecords: [],
     sourceFactReviewRecords: sourceFactReviews(draftToArchive),
+    postRevisionVerificationCredential: cred,
+    postRevisionVerificationRecords: [],
+    sourcePostRevisionVerificationCredential: draftToArchive.postRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(draftToArchive),
   };
 
   // 4. Build single consolidated atomic modification log

@@ -43,6 +43,8 @@ import { DraftingInspectorContent } from '../DraftingInspectorContent';
 import { MaterialEvidenceList } from '../MaterialEvidenceList';
 import { MaterialSupplementModal } from '../MaterialSupplementModal';
 import { FactImpactModal } from '../FactImpactModal';
+import { PostRevisionVerificationModal } from '../PostRevisionVerificationModal';
+import { evaluatePostRevisionVerification } from '../../services/postRevisionVerificationService';
 import { analyzeFactImpact, FactImpactItem } from '../../services/factImpactService';
 import {
   saveFactReviewRecord,
@@ -157,8 +159,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const factImpact = useMemo(() => analyzeFactImpact(task, currentDraft), [task, currentDraft]);
   // Task 22: Fact Review Records Evaluation
   const reviewOverview = useMemo(() => evaluateDraftFactReviews(task, currentDraft), [task, currentDraft]);
+  // Task 27: Post-Revision Verification Evaluation
+  const postRevisionOverview = useMemo(() => evaluatePostRevisionVerification(task, currentDraft), [task, currentDraft]);
   const [showFactImpactModal, setShowFactImpactModal] = useState(false);
   const [impactFocusBlockId,setImpactFocusBlockId]=useState<string|undefined>();
+  const [showPostRevisionVerificationModal, setShowPostRevisionVerificationModal] = useState(false);
+  const [verificationFocusBlockId, setVerificationFocusBlockId] = useState<string | undefined>();
   const [locateError, setLocateError] = useState<string | null>(null);
   const impactLocateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -167,6 +173,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setLocateError(null);
     setShowFactImpactModal(false);
     setImpactFocusBlockId(undefined);
+    setShowPostRevisionVerificationModal(false);
+    setVerificationFocusBlockId(undefined);
     return () => {
       if (impactLocateTimer.current !== null) clearTimeout(impactLocateTimer.current);
     };
@@ -320,6 +328,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           showVersionHistory ||
           showRecentModificationsModal ||
           showFactImpactModal ||
+          showPostRevisionVerificationModal ||
           showSubmitReviewModal ||
           showContradictionModal ||
           implementingComment ||
@@ -2090,6 +2099,39 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                     : '依据变更影响：未发现已关联事实的差异'}
                 </span>
               </button>
+
+              {/* Task 27: Post-Revision Verification Compact Entrance */}
+              <button
+                type="button"
+                onClick={() => {
+                  setVerificationFocusBlockId(undefined);
+                  setShowPostRevisionVerificationModal(true);
+                }}
+                data-testid="btn-open-post-revision-verification"
+                className={`text-xs px-2.5 py-0.5 rounded font-medium flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs border ${
+                  !postRevisionOverview.hasCredential
+                    ? 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
+                    : postRevisionOverview.isAllVerified
+                    ? 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-300'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                }`}
+                title="查看事实定向修订后的逐段人工核对清单与留痕"
+              >
+                <CheckCircle2
+                  className={`w-3.5 h-3.5 ${
+                    !postRevisionOverview.hasCredential
+                      ? 'text-slate-400'
+                      : postRevisionOverview.isAllVerified
+                      ? 'text-teal-600'
+                      : 'text-amber-600'
+                  }`}
+                />
+                <span>
+                  {postRevisionOverview.hasCredential
+                    ? `本次修订核对：${postRevisionOverview.verifiedCount}/${postRevisionOverview.totalBlocks}段已记录 · ${postRevisionOverview.pendingCount}段待处理`
+                    : '本次修订核对：未保存清单'}
+                </span>
+              </button>
             </div>
 
             <button
@@ -3161,6 +3203,36 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
                                 </button>
                               );
                             })()}
+                            {(() => {
+                              if (!postRevisionOverview.hasCredential) return null;
+                              const blockEval = postRevisionOverview.blockEvaluations.find(
+                                (ev) => ev.blockId === block.id
+                              );
+                              if (!blockEval) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setVerificationFocusBlockId(block.id);
+                                    setShowPostRevisionVerificationModal(true);
+                                  }}
+                                  data-testid={`badge-block-revision-verification-${block.id}`}
+                                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded font-semibold cursor-pointer border ${
+                                    blockEval.displayStatus === 'verified'
+                                      ? 'bg-teal-50 text-teal-800 border-teal-300'
+                                      : blockEval.displayStatus === 'deferred'
+                                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                      : blockEval.displayStatus === 'invalidated'
+                                      ? 'bg-rose-50 text-rose-800 border-rose-300'
+                                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                                  }`}
+                                  title={`本次修订核对状态：${blockEval.displayStatusLabel}（点击查看详情与签署留痕）`}
+                                >
+                                  <span>本次修订核对：{blockEval.displayStatusLabel}</span>
+                                </button>
+                              );
+                            })()}
                             {block.referencedFactIds.map((factId) => {
                               const fact = findDraftFact(task, currentDraft, factId);
                               if (!fact) return null;
@@ -4141,6 +4213,23 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onAcceptMultiFactGroupRevision={handleAcceptMultiFactGroupRevision}
         onAcceptSharedParagraphFactRevision={handleAcceptSharedParagraphFactRevision}
         initialBlockId={impactFocusBlockId}
+      />
+
+      {/* Task 27: Post-Revision Verification Modal */}
+      <PostRevisionVerificationModal
+        isOpen={showPostRevisionVerificationModal}
+        onClose={() => setShowPostRevisionVerificationModal(false)}
+        task={task}
+        currentDraft={currentDraft}
+        activeRole={activeRole}
+        initialBlockId={verificationFocusBlockId}
+        onLocateBlock={(bId) => {
+          handleLocateBlock(bId);
+          setShowPostRevisionVerificationModal(false);
+        }}
+        onViewSnippet={onViewSnippet}
+        onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
+        onUpdateTask={onUpdateTask}
       />
     </div>
   );

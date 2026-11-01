@@ -17,6 +17,10 @@ import {
 } from '../types';
 import { runDocumentAudit } from './mockAuditService';
 import {evaluateDraftFactReviews, isValidFactReviewRecord} from './factReviewService';
+import {
+  freezePostRevisionVerification,
+  sourcePostRevisionVerification,
+} from './postRevisionVerificationService';
 import { checkPermission } from './permissionService';
 import { computeContentHash } from './mockDraftService';
 import { 
@@ -250,6 +254,7 @@ export function acceptDraftCandidate(
           : '采纳新候选前系统自动归档的历史快照',
         frozenReviewComments: freezeReviewComments(task, currentDraft),
         ...freezeFactReviews(task,currentDraft),
+        ...freezePostRevisionVerification(task, currentDraft),
       };
     }
   }
@@ -272,6 +277,9 @@ export function acceptDraftCandidate(
     auditRecords: currentDraft?.auditRecords ? JSON.parse(JSON.stringify(currentDraft.auditRecords)) : [],
     factReviewRecords: [], // 新工作稿需重新确认适用性
     sourceFactReviewRecords: sourceFactReviews(currentDraft),
+    postRevisionVerificationRecords: [],
+    sourcePostRevisionVerificationCredential: currentDraft?.postRevisionVerificationCredential || currentDraft?.sourcePostRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(currentDraft),
   };
 
   const updatedDrafts = currentDraft
@@ -407,6 +415,9 @@ export function applyDraftContentChange(
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
       factReviewRecords: [], // 基于历史/定稿修改产生新工作稿，不自动继承有效复核
       sourceFactReviewRecords: sourceFactReviews(targetDraft),
+      postRevisionVerificationRecords: [], // 基于历史/定稿修改产生新工作稿，不自动继承有效核对
+      sourcePostRevisionVerificationCredential: targetDraft?.postRevisionVerificationCredential || targetDraft?.sourcePostRevisionVerificationCredential,
+      sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(targetDraft),
     };
 
     const updatedTask: Task = {
@@ -579,7 +590,9 @@ export function validateFinalizationConditions(
 
   // 6. Review comments closed:
   // Requirement 2: 待处理(pending)、待落实(accepted_pending_implementation)和待沟通(need_discussion)按版本关联检查，都不能定稿！
-  const unclosedComments = (targetDraft ? getApplicableReviewComments(task, targetDraft) : task.reviewComments).filter((c) => {
+  const reviewPool = targetDraft ? getApplicableReviewComments(task, targetDraft) : (task.reviewComments || []);
+
+  const unclosedComments = (reviewPool || []).filter((c: any) => {
     const isUnclosed =
       c.status === 'pending' ||
       c.status === 'accepted_pending_implementation' ||
@@ -589,9 +602,9 @@ export function validateFinalizationConditions(
 
   const commentsClosed = unclosedComments.length === 0;
   if (!commentsClosed) {
-    const pendingCount = unclosedComments.filter((c) => c.status === 'pending').length;
-    const pendingImplCount = unclosedComments.filter((c) => c.status === 'accepted_pending_implementation').length;
-    const needDiscussionCount = unclosedComments.filter((c) => c.status === 'need_discussion').length;
+    const pendingCount = unclosedComments.filter((c: any) => c.status === 'pending').length;
+    const pendingImplCount = unclosedComments.filter((c: any) => c.status === 'accepted_pending_implementation').length;
+    const needDiscussionCount = unclosedComments.filter((c: any) => c.status === 'need_discussion').length;
 
     const detailParts: string[] = [];
     if (pendingCount > 0) detailParts.push(`${pendingCount}条待处理`);
@@ -678,6 +691,7 @@ export function finalizeDraft(
     auditRecords: JSON.parse(JSON.stringify(currentDraft.auditRecords || [])),
     frozenReviewComments: freezeReviewComments(task, currentDraft),
     ...freezeFactReviews(task,currentDraft),
+    ...freezePostRevisionVerification(task, currentDraft),
   };
 
   const updatedTask: Task = {
@@ -738,6 +752,7 @@ export function createDraftSnapshot(
     auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
     frozenReviewComments: freezeReviewComments(task, targetDraft),
     ...freezeFactReviews(task,targetDraft),
+    ...freezePostRevisionVerification(task, targetDraft),
   };
 
   const updatedTask: Task = {
@@ -759,7 +774,7 @@ export function restoreDraftVersion(
   task: Task,
   restoreDraftId: string,
   activeRole: UserRole
-): { updatedTask: Task; workingDraft: DraftVersion } {
+): { success: boolean; updatedTask: Task; workingDraft: DraftVersion } {
   const perm = checkPermission(activeRole, 'restore_version');
   if (!perm.allowed) {
     throw new Error(perm.reason || '当前身份无权恢复历史版本');
@@ -787,6 +802,9 @@ export function restoreDraftVersion(
     auditRecords: sourceDraft.auditRecords ? JSON.parse(JSON.stringify(sourceDraft.auditRecords)) : [],
     factReviewRecords: [], // 恢复历史稿不自动继承为已复核
     sourceFactReviewRecords: sourceFactReviews(sourceDraft),
+    postRevisionVerificationRecords: [], // 恢复历史稿不自动继承为已核对
+    sourcePostRevisionVerificationCredential: sourceDraft?.postRevisionVerificationCredential || sourceDraft?.sourcePostRevisionVerificationCredential,
+    sourcePostRevisionVerificationRecords: sourcePostRevisionVerification(sourceDraft),
   };
 
   const updatedTask: Task = {
@@ -798,7 +816,7 @@ export function restoreDraftVersion(
     updatedAt: new Date().toISOString(),
   };
 
-  return { updatedTask, workingDraft: newWorkingDraft };
+  return { success: true, updatedTask, workingDraft: newWorkingDraft };
 }
 
 /**
@@ -847,6 +865,7 @@ export function submitDraftForReview(
       auditRecords: targetDraft.auditRecords ? JSON.parse(JSON.stringify(targetDraft.auditRecords)) : [],
       frozenReviewComments: freezeReviewComments(task, targetDraft),
       ...freezeFactReviews(task,targetDraft),
+      ...freezePostRevisionVerification(task, targetDraft),
     };
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }
