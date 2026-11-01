@@ -805,14 +805,14 @@ export const PostRevisionVerificationModal: React.FC<PostRevisionVerificationMod
                           <div className="p-2.5 rounded bg-slate-50 border border-slate-200 space-y-1.5 text-xs text-slate-700">
                             <div className="flex items-center justify-between">
                               <span className="font-semibold text-slate-800">
-                                {rec.status === 'verified' ? '核对说明：' : '暂缓原因：'}
+                                {rec.status === 'verified' ? '核对说明：' : rec.status === 'deferred' ? '暂缓原因：' : '撤回原因：'}
                               </span>
                               <span className="text-2xs text-slate-500">
-                                记录人：{rec.verifiedBy || rec.deferredBy || '主笔'} ·{' '}
-                                {rec.verifiedAt || rec.deferredAt || ''}
+                                记录人：{rec.status === 'verified' ? rec.verifiedBy : rec.status === 'deferred' ? rec.deferredBy : rec.revocation?.revokedBy} ·{' '}
+                                {rec.status === 'verified' ? rec.verifiedAt : rec.status === 'deferred' ? rec.deferredAt : rec.revocation?.revokedAt}
                               </span>
                             </div>
-                            <p className="whitespace-pre-wrap">{rec.notes || rec.deferredReason}</p>
+                            <p className="whitespace-pre-wrap">{rec.status === 'verified' ? rec.notes : rec.status === 'deferred' ? rec.deferredReason : rec.revocation?.reason}</p>
 
                             {/* Revocation info if present */}
                             {rec.revocation && (

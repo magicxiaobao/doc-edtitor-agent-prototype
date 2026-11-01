@@ -380,5 +380,38 @@ await check('24 结构合法但采用值被篡改的凭据不能覆盖所选稿�
   assert.equal(record(params(task, draft)).success, false);
 });
 
+await check('25 暂缓与撤回显示当前说明及时间，旧核对内容仅保留在历史事件', () => {
+  const f = fixture();
+  const verified = record({ ...params(f.task, f.draft), notes: 'OLD-VERIFIED-NOTE' });
+  assert.equal(verified.success, true);
+  let task = verified.updatedTask!, draft = task.drafts.find(d => d.id === f.draft.id)!;
+  draft.postRevisionVerificationRecords![0].verifiedAt = '2026-10-01T00:00:00Z'; // Prepared older record timestamp.
+  Object.assign(task.facts[0], { status: 'pending', selectedConflictValue: undefined });
+  const deferred = defer({ ...params(task, draft), reason: 'CURRENT-DEFER-REASON' });
+  assert.equal(deferred.success, true);
+  task = deferred.updatedTask!; draft = task.drafts.find(d => d.id === draft.id)!;
+  const saved = createDraftSnapshot(task, draft.id, '暂缓后保存', '主笔甲');
+  for (const current of [draft, saved.snapshotDraft]) {
+    const m = mount(saved.updatedTask, current);
+    try {
+      const block = m.host.querySelector<HTMLElement>('[data-verification-block-id="BLK-01"]')!;
+      assert.ok(block.textContent!.includes('CURRENT-DEFER-REASON'));
+      assert.ok(!block.textContent!.includes('OLD-VERIFIED-NOTE'));
+      assert.ok(block.textContent!.includes(deferred.updatedRecord!.deferredAt!));
+      const history = [...block.querySelectorAll('button')].find(b => b.textContent!.includes('查看历史事件'))!;
+      act(() => history.click()); assert.ok(block.textContent!.includes('OLD-VERIFIED-NOTE'));
+    } finally { m.close(); }
+  }
+  const revoked = revoke({ ...params(task, draft), reason: 'CURRENT-REVOKE-REASON' });
+  assert.equal(revoked.success, true);
+  const m = mount(revoked.updatedTask!, revoked.updatedTask!.drafts.find(d => d.id === draft.id)!);
+  try {
+    const block = m.host.querySelector<HTMLElement>('[data-verification-block-id="BLK-01"]')!;
+    assert.ok(block.textContent!.includes('CURRENT-REVOKE-REASON'));
+    assert.ok(!block.textContent!.includes('OLD-VERIFIED-NOTE'));
+    assert.ok(block.textContent!.includes(revoked.updatedRecord!.revocation!.revokedAt));
+  } finally { m.close(); }
+});
+
 console.log(`\nTask27 Codex independent receipt: ${failures.length ? 'FAIL' : 'PASS'}; ${failures.length} failing groups.`);
 if (failures.length) { console.error(failures.join('\n')); process.exitCode = 1; }

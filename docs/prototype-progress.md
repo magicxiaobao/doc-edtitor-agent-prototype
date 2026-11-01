@@ -1268,3 +1268,10 @@ Codex 在 HEAD `2c6edee4e6a37afc801f231cd760c16959d505a1` 提出 P2：共享候�
 - 应用 `npm run typecheck`、三个Task27测试文件的独立严格tsc均通过；最终实际 `npm run build`通过，JS1376.85kB，保留既有>500kB分块警告；`git diff --check`通过。
 
 PR #90在实质检查通过后转为可评审并请求最新HEAD Codex review；是否合并以最新HEAD真实评审和未解决问题为准。#89仍Open等待评审及约定的限定云浏览器验收；合并后等待用户确认AI Studio同步main再验收。本节没有Task27云浏览器、独立屏幕阅读器、真实后端权限或桌面Word/WPS实测，#57保持Open，#40/#87不重开。
+
+
+### 18.6 PR #90 首轮P2评审修复（2026-11-01）
+
+Codex review对远端 `0ebe849a9afca3bc8b6dde96212b97f8d26ed27d` 提出1条P2（discussion_r4434556046）：先核对后暂缓时，当前记录区优先显示旧notes/verifiedBy/verifiedAt，使暂缓原因和时间显示错误，历史快照亦受影响。该问题有效，已改为按record.status选取核对/暂缓/撤回的说明、操作人和时间，旧内容仅在历史事件展开后展示。
+
+独立套件新增第36组，以真实记录/暂缓/撤回返回值检查工作稿与保存快照：当前区显示本次原因及时间，展开历史可看旧核对说明。此组在修复前失败，修复后36/36通过。修复后Task27主套件、实施receipt、三个测试文件严格tsc、实际npm run build及git diff --check均通过；仅展示修复，未重跑无变化的其余全量套件。最新HEAD仍须重新评审，首轮有发现的结论不能作为新HEAD通过依据。
