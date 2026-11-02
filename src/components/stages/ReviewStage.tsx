@@ -1,4 +1,5 @@
 import { CoordinationOpinionSelector } from '../CoordinationOpinionSelector';
+import { RevisionReviewHandoffCard } from '../RevisionReviewHandoffCard';
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Task, 
@@ -6,7 +7,10 @@ import {
   ReviewCommentStatus,
   ReviewSuggestionType,
   UserRole, 
-  DraftVersion 
+  DraftVersion,
+  EvidenceSnippet,
+  Fact,
+  AdoptedEvidenceRecord
 } from '../../types';
 import { 
   checkPermission, 
@@ -52,6 +56,12 @@ interface ReviewStageProps {
   activeRole: UserRole;
   onSelectStage?: (stage: any) => void;
   onNavigateToDraftComment?: (commentId: string, targetDraftId?: string) => void;
+  onViewSnippet?: (
+    snippet: EvidenceSnippet,
+    fact?: Fact,
+    adoptedEvidence?: AdoptedEvidenceRecord,
+    freezeDraftEvidence?: boolean
+  ) => void;
 }
 
 export const ReviewStage: React.FC<ReviewStageProps> = ({
@@ -61,6 +71,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   activeRole,
   onSelectStage,
   onNavigateToDraftComment,
+  onViewSnippet,
 }) => {
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const reviewBaseDraft = resolveCurrentReviewBase(task, currentDraft);
@@ -112,10 +123,40 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   const isAuthor = activeRole === '主笔甲';
   const isReviewer = activeRole === '审阅乙' || activeRole === '审阅丁';
 
+  const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
+
+  const handleLocateBaselineBlock = (blockId: string) => {
+    const exists = (reviewBaseDraft || currentDraft)?.blocks.some(b => b.id === blockId);
+    if (!exists) {
+      alert(`送审基准版本中未找到段落【${blockId}】（可能已在正文中删除）`);
+      return;
+    }
+    setHighlightedBlockId(blockId);
+    const el = document.getElementById(`review-baseline-block-${blockId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setTimeout(() => {
+      setHighlightedBlockId((prev) => (prev === blockId ? null : prev));
+    }, 3000);
+  };
+
+  const handleCommentOnHandoffBlock = (blockId: string) => {
+    const perm = checkPermission(activeRole, 'add_comment');
+    if (!perm.allowed) {
+      alert(perm.reason || '权限受限：仅审阅者可针对送审段落发表批注意见');
+      return;
+    }
+    setCommentType('paragraph');
+    setSelectedBlockId(blockId);
+    setShowAddCommentModal(true);
+  };
+
   useEffect(() => {
     setSelectedBlockId(reviewBaseDraft?.blocks[0]?.id || currentDraft?.blocks[0]?.id || '');
     setShowAddCommentModal(false); setReplyingComment(null); setImplementingComment(null); setRebindingComment(null); setShowContradictionModal(false);
     setNewCommentContent(''); setNewCommentSuggestion(''); setReplyText('');
+    setHighlightedBlockId(null);
     setCoordinationCommentIds(activeReviewComments.filter(c => ['pending','accepted_pending_implementation','need_discussion'].includes(c.status)).slice(0,2).map(c => c.id));
   }, [task.id, currentDraft?.id, reviewBaseDraft?.id, activeRole]);
   // Counts calculated dynamically from reviewComments
@@ -443,6 +484,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           <div>意见针对基准版本提出，落实后记录落实版本与段落</div>
         </div>
       </div>
+
+      {/* Task 28: 本轮事实修订交接说明与主笔核对情况卡片 */}
+      <RevisionReviewHandoffCard
+        task={task}
+        reviewBaseDraft={reviewBaseDraft}
+        currentDraft={currentDraft}
+        activeRole={activeRole}
+        onViewSnippet={onViewSnippet}
+        onLocateBlock={handleLocateBaselineBlock}
+        onCommentOnBlock={handleCommentOnHandoffBlock}
+      />
 
       {/* Contradictory comments banner */}
       {activeReviewComments.filter(c => ['pending', 'accepted_pending_implementation', 'need_discussion'].includes(c.status)).length >= 2 && (
@@ -781,15 +833,30 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
           </div>
 
           <div className="space-y-4 max-h-[600px] overflow-y-auto pr-1">
-            {reviewBaseDraft?.blocks.map((block) => (
-              <div key={block.id} className="p-3 rounded bg-slate-50 border border-slate-200/80 text-xs space-y-1">
-                <div className="flex justify-between text-xs text-slate-400 font-mono">
-                  <span>第{block.order}段 (ID: {block.id})</span>
-                  <span>{block.referencedFactIds.length}项事实关联</span>
+            {reviewBaseDraft?.blocks.map((block) => {
+              const isHighlighted = highlightedBlockId === block.id;
+
+              return (
+                <div
+                  key={block.id}
+                  id={`review-baseline-block-${block.id}`}
+                  data-testid={`review-baseline-block-${block.id}`}
+                  className={`p-3 rounded border text-xs space-y-1 transition-all duration-300 ${
+                    isHighlighted
+                      ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500 shadow-xs'
+                      : 'bg-slate-50 border-slate-200/80'
+                  }`}
+                >
+                  <div className="flex justify-between text-xs text-slate-400 font-mono">
+                    <span className={isHighlighted ? 'text-blue-700 font-bold' : ''}>
+                      第{block.order}段 (ID: {block.id})
+                    </span>
+                    <span>{block.referencedFactIds.length}项事实关联</span>
+                  </div>
+                  <p className="text-slate-800 leading-relaxed text-justify indent-6">{block.content}</p>
                 </div>
-                <p className="text-slate-800 leading-relaxed text-justify indent-6">{block.content}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

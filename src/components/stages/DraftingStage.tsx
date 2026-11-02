@@ -44,7 +44,8 @@ import { MaterialEvidenceList } from '../MaterialEvidenceList';
 import { MaterialSupplementModal } from '../MaterialSupplementModal';
 import { FactImpactModal } from '../FactImpactModal';
 import { PostRevisionVerificationModal } from '../PostRevisionVerificationModal';
-import { evaluatePostRevisionVerification } from '../../services/postRevisionVerificationService';
+import { evaluatePostRevisionVerification, isValidVerificationCredential } from '../../services/postRevisionVerificationService';
+import { validateSubmitReviewContext, computeSubmitReviewFreshnessHash } from '../../services/revisionReviewHandoffService';
 import { analyzeFactImpact, FactImpactItem } from '../../services/factImpactService';
 import {
   saveFactReviewRecord,
@@ -230,6 +231,9 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   // In-app modal for submit for review (replaces window.confirm)
   const [showSubmitReviewModal, setShowSubmitReviewModal] = useState(false);
+  const [submitReviewPreviewHash, setSubmitReviewPreviewHash] = useState<string>('');
+  const [submitReviewStaleNotice, setSubmitReviewStaleNotice] = useState<string | null>(null);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
 
   // Review comments filtering and modal state
   const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -1747,12 +1751,42 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       return;
     }
     if (!currentDraft) return;
+    setSubmitReviewPreviewHash(computeSubmitReviewFreshnessHash(task, currentDraft, activeRole));
+    setSubmitReviewStaleNotice(null);
+    setIsSubmittingReview(false);
     setShowSubmitReviewModal(true);
+  };
+
+  const handleCancelSubmitForReview = () => {
+    setShowSubmitReviewModal(false);
+    setSubmitReviewStaleNotice(null);
+    setIsSubmittingReview(false);
   };
 
   const handleConfirmSubmitForReview = () => {
     if (!currentDraft) return;
+    if (isSubmittingReview) return; // Prevent double click creating duplicate baselines!
+
+    // Validate submit freshness
+    const validation = validateSubmitReviewContext({
+      task,
+      currentDraft,
+      activeRole,
+      previewSnapshotHash: submitReviewPreviewHash,
+    });
+
+    if (!validation.valid) {
+      if (validation.isStale) {
+        setSubmitReviewPreviewHash(computeSubmitReviewFreshnessHash(task, currentDraft, activeRole));
+        setSubmitReviewStaleNotice(validation.reason || '文稿正文、事实依据或核对情况已发生变化，请查阅最新交接摘要后重新确认提交');
+        return;
+      }
+      alert(validation.reason || '提交审阅校验未通过');
+      return;
+    }
+
     try {
+      setIsSubmittingReview(true);
       const { updatedTask } = submitDraftForReview(
         task,
         currentDraft.id,
@@ -1760,6 +1794,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         true
       );
       setShowSubmitReviewModal(false);
+      setIsSubmittingReview(false);
       onUpdateTask({
         drafts: updatedTask.drafts,
         currentStage: 'review',
@@ -1773,6 +1808,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onProceedToNextStage();
       }
     } catch (err: any) {
+      setIsSubmittingReview(false);
       alert(err.message || '提交审阅失败');
     }
   };
@@ -4102,73 +4138,153 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
       )}
 
       {/* 5. In-App Submit Draft For Review Confirmation Modal (replaces window.confirm) */}
-      {showSubmitReviewModal && currentDraft && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-150">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Send className="w-5 h-5 text-blue-600" />
-                <h3 className="font-bold text-sm text-slate-800">提交本轮审阅确认</h3>
-              </div>
-              <button
-                onClick={() => setShowSubmitReviewModal(false)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-                aria-label="关闭"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {showSubmitReviewModal && currentDraft && (() => {
+        const nextReviewRound = (task.currentReviewRound || 0) + 1;
+        const cred = currentDraft.postRevisionVerificationCredential;
+        const isCredValid = cred && isValidVerificationCredential(cred);
+        const handoffEval = isCredValid ? evaluatePostRevisionVerification(task, currentDraft) : null;
+        const isRestoredSourceOnly = Boolean(!cred && currentDraft.sourcePostRevisionVerificationCredential);
 
-            <div className="p-5 space-y-4 text-xs">
-              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1">
-                <div className="font-semibold text-blue-900">
-                  当前待提交文稿：【{currentDraft.versionNumber}】
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="提交本轮审阅确认"
+            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4"
+          >
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-150">
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Send className="w-5 h-5 text-blue-600" />
+                  <h3 className="font-bold text-sm text-slate-800">提交本轮审阅确认</h3>
                 </div>
-                <div className="text-xs text-blue-800">
-                  字数：{currentWordCount} 字 · 拟稿人：{currentDraft.author}
+                <button
+                  onClick={handleCancelSubmitForReview}
+                  className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                  aria-label="关闭"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                {submitReviewStaleNotice && (
+                  <div
+                    data-testid="submit-review-stale-notice"
+                    className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-900 font-medium flex items-center gap-2"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>{submitReviewStaleNotice}</span>
+                  </div>
+                )}
+
+                {/* Draft & Next Round Summary */}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-blue-950">
+                      送审工作稿：【{currentDraft.versionNumber}】
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-blue-200/70 text-blue-900 font-medium font-mono">
+                      送审后进入第 {nextReviewRound} 轮审阅
+                    </span>
+                  </div>
+                  <div className="text-xs text-blue-800 flex items-center gap-3">
+                    <span>字数：{currentWordCount} 字</span>
+                    <span aria-hidden="true">·</span>
+                    <span>拟稿人：{currentDraft.author}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>当前轮次：第 {task.currentReviewRound || 0} 轮</span>
+                  </div>
+                </div>
+
+                {/* Task 28: Handoff Preview Summary */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-blue-700 shrink-0" />
+                    <span>本轮事实修订与主笔核对交接摘要预览：</span>
+                  </div>
+
+                  {isCredValid && handoffEval ? (
+                    <div className="space-y-2 text-slate-700">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-medium">
+                          涉及 {handoffEval.facts.length} 项事实
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-medium">
+                          涵盖 {handoffEval.totalBlocks} 个唯一段落
+                        </span>
+                        <span className={`px-2 py-0.5 rounded font-medium ${
+                          handoffEval.verifiedCount === handoffEval.totalBlocks
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          核对进度：{handoffEval.verifiedCount}/{handoffEval.totalBlocks}段已记录（待处理 {handoffEval.pendingCount} 段）
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-slate-600 pl-1 border-l-2 border-slate-300 space-y-0.5">
+                        <div>已记录核对：{handoffEval.verifiedCount} 段</div>
+                        <div>暂缓处理：{handoffEval.deferredCount} 段</div>
+                        <div>失效需重核：{handoffEval.invalidatedCount} 段</div>
+                        <div>待核对：{handoffEval.blockEvaluations.filter(e => e.displayStatus === 'pending').length} 段</div>
+                      </div>
+
+                      {handoffEval.pendingCount > 0 && (
+                        <div
+                          data-testid="submit-review-pending-reminder"
+                          className="p-2.5 bg-amber-50 border border-amber-300 rounded text-amber-900 text-xs space-y-1"
+                        >
+                          <div className="font-bold flex items-center gap-1 text-amber-800">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>核对未完成提醒：</span>
+                          </div>
+                          <p className="text-amber-800 leading-relaxed">
+                            当前仍有 {handoffEval.pendingCount} 段修订尚未核对完成（含暂缓 {handoffEval.deferredCount} 段、失效 {handoffEval.invalidatedCount} 段）。主笔人工核对记录仅供审阅参考，不强制阻断送审；送审后将按当前状态冻结留痕交接给审阅者。
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : isRestoredSourceOnly ? (
+                    <div className="p-2.5 bg-slate-100 rounded border border-slate-300 text-slate-600">
+                      说明：当前工作稿为历史版本派生/恢复稿，仅保留历史来源参考（不作为本稿有效核对凭据）。送审将不携带活动事实修订凭据。
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-slate-100 rounded border border-slate-300 text-slate-600">
+                      说明：当前工作稿未保存本次事实修订核对清单（无有效活动凭据）。送审将不携带事实修订核对交接说明。
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 text-slate-600 leading-normal pl-4 list-disc text-xs">
+                  <div>· <strong>生成冻结基准快照：</strong>系统将以当前工作稿正文自动生成只读基准快照，作为审阅修改基线。</div>
+                  <div>· <strong>审阅意见严格绑定：</strong>后续各审阅领导提出的批注与建议将直接针对该送审基准提出。</div>
                 </div>
               </div>
 
-              <div className="space-y-2 text-slate-700">
-                <div className="font-semibold text-slate-900 flex items-center gap-1.5">
-                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>提交审阅与冻结基准影响说明：</span>
-                </div>
-                <ul className="space-y-1.5 pl-5 list-disc text-xs text-slate-600 leading-normal">
-                  <li>
-                    <strong>生成冻结基准快照：</strong>系统将以当前版本自动生成不可篡改的审阅基准快照，作为本轮审阅对比基线。
-                  </li>
-                  <li>
-                    <strong>递增审阅轮次：</strong>当前审阅轮次将从第 {task.currentReviewRound || 0} 轮推进至第 {(task.currentReviewRound || 0) + 1} 轮。
-                  </li>
-                  <li>
-                    <strong>变更任务状态：</strong>任务状态将流转至“审阅中”，并自动跳转至审阅修改工作区。
-                  </li>
-                  <li>
-                    <strong>审阅意见严格绑定：</strong>审阅领导提出的修改批注与建议将绑定本轮基准，不污染历史版本。
-                  </li>
-                </ul>
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  data-testid="btn-cancel-submit-review"
+                  onClick={handleCancelSubmitForReview}
+                  className="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-100 rounded text-xs font-semibold text-slate-700 cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-confirm-submit-review"
+                  disabled={isSubmittingReview}
+                  onClick={handleConfirmSubmitForReview}
+                  className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isSubmittingReview ? '正在提交...' : '确认提交并进入审阅'}</span>
+                </button>
               </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5">
-              <button
-                onClick={() => setShowSubmitReviewModal(false)}
-                className="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-100 rounded text-xs font-semibold text-slate-700 cursor-pointer"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleConfirmSubmitForReview}
-                className="px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>确认提交并进入审阅</span>
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Recent Modifications & Safe Undo Modal */}
       <RecentModificationsModal

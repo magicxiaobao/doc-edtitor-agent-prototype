@@ -49,7 +49,7 @@ export function getReviewBaselineIds(task: Task, draft: DraftVersion): string[] 
     (d.id.startsWith('DRAFT-SNAP-REV-') || d.id === task.reviewBaseDraftId)).map(d => d.id);
 }
 
-function getApplicableReviewDraftIds(task: Task, draft: DraftVersion): Set<string> {
+export function getApplicableReviewDraftIds(task: Task, draft: DraftVersion): Set<string> {
   const applicableDraftIds = new Set<string>(getReviewBaselineIds(task, draft));
   const visited = new Set<string>();
   let lineage: DraftVersion | undefined = draft;
@@ -774,7 +774,14 @@ export function restoreDraftVersion(
   task: Task,
   restoreDraftId: string,
   activeRole: UserRole
-): { success: boolean; updatedTask: Task; workingDraft: DraftVersion } {
+): {
+  success: boolean;
+  updatedTask: Task;
+  workingDraft: DraftVersion;
+  restoredDraft?: DraftVersion;
+  hasPostRevisionVerificationCredential?: boolean;
+  sourcePostRevisionVerificationCredential?: any;
+} {
   const perm = checkPermission(activeRole, 'restore_version');
   if (!perm.allowed) {
     throw new Error(perm.reason || '当前身份无权恢复历史版本');
@@ -816,7 +823,14 @@ export function restoreDraftVersion(
     updatedAt: new Date().toISOString(),
   };
 
-  return { success: true, updatedTask, workingDraft: newWorkingDraft };
+  return {
+    success: true,
+    updatedTask,
+    workingDraft: newWorkingDraft,
+    restoredDraft: newWorkingDraft,
+    hasPostRevisionVerificationCredential: Boolean(newWorkingDraft.postRevisionVerificationCredential),
+    sourcePostRevisionVerificationCredential: newWorkingDraft.sourcePostRevisionVerificationCredential,
+  };
 }
 
 /**
@@ -829,7 +843,7 @@ export function submitDraftForReview(
   draftId: string | undefined,
   activeRole: UserRole,
   createBaselineSnapshot: boolean = true
-): { updatedTask: Task; workingDraft: DraftVersion; baselineSnapshot?: DraftVersion } {
+): { success?: boolean; updatedTask: Task; workingDraft: DraftVersion; baselineSnapshot?: DraftVersion } {
   const perm = checkPermission(activeRole, 'edit_draft');
   if (!perm.allowed) {
     throw new Error(perm.reason || '仅主笔甲可提交文稿进入审阅阶段');
@@ -847,6 +861,8 @@ export function submitDraftForReview(
 
   let updatedDrafts = [...task.drafts];
   let baselineSnapshot: DraftVersion | undefined;
+
+  const nextRound = (task.currentReviewRound || 0) + 1;
 
   if (createBaselineSnapshot && !targetDraft.isHistoricalSnapshot && !targetDraft.isFinal) {
     baselineSnapshot = {
@@ -866,6 +882,7 @@ export function submitDraftForReview(
       frozenReviewComments: freezeReviewComments(task, targetDraft),
       ...freezeFactReviews(task,targetDraft),
       ...freezePostRevisionVerification(task, targetDraft),
+      submittedReviewRound: nextRound,
     };
     updatedDrafts = [baselineSnapshot, ...updatedDrafts];
   }
@@ -876,7 +893,6 @@ export function submitDraftForReview(
     targetDraft = { ...targetDraft, reviewBaselineIds };
     updatedDrafts = updatedDrafts.map(d => d.id === targetDraft!.id ? targetDraft! : d);
   }
-  const nextRound = (task.currentReviewRound || 0) + 1;
 
   const updatedTask: Task = {
     ...task,
@@ -888,7 +904,7 @@ export function submitDraftForReview(
     updatedAt: new Date().toISOString(),
   };
 
-  return { updatedTask, workingDraft: targetDraft, baselineSnapshot };
+  return { success: true, updatedTask, workingDraft: targetDraft, baselineSnapshot };
 }
 
 export const MAX_MODIFICATION_LOGS = 20;
