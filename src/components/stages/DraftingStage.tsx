@@ -132,7 +132,7 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence?: boolean) => void;
+  onViewSnippet?: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence?: boolean) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
@@ -144,7 +144,7 @@ interface DraftingStageProps {
 export const DraftingStage: React.FC<DraftingStageProps> = ({
   task,
   onUpdateTask,
-  onViewSnippet,
+  onViewSnippet: onViewSnippetProp,
   onProceedToNextStage,
   activeRole,
   onSelectStage,
@@ -152,6 +152,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   navIntent,
   onClearNavIntent,
 }) => {
+  const onViewSnippet = onViewSnippetProp || (() => {});
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const activeReviewComments = useMemo(() => getDraftReviewComments(task, currentDraft), [task, currentDraft]);
@@ -234,6 +235,8 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [submitReviewPreviewHash, setSubmitReviewPreviewHash] = useState<string>('');
   const [submitReviewStaleNotice, setSubmitReviewStaleNotice] = useState<string | null>(null);
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const isSubmittingReviewRef = useRef(false);
+  const submitTriggerButtonRef = useRef<HTMLElement | null>(null);
 
   // Review comments filtering and modal state
   const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -1744,7 +1747,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   };
 
   // Submit draft for review click - opens in-app confirmation modal (eliminates window.confirm iframe failure)
-  const handleSubmitDraftForReviewClick = () => {
+  const handleSubmitDraftForReviewClick = (e?: React.MouseEvent) => {
+    if (e?.currentTarget instanceof HTMLElement) {
+      submitTriggerButtonRef.current = e.currentTarget;
+    } else if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      submitTriggerButtonRef.current = document.activeElement;
+    }
     const perm = checkPermission(activeRole, 'edit_draft');
     if (!perm.allowed) {
       alert(perm.reason || '权限受限：仅主笔甲可提交审阅');
@@ -1754,6 +1762,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setSubmitReviewPreviewHash(computeSubmitReviewFreshnessHash(task, currentDraft, activeRole));
     setSubmitReviewStaleNotice(null);
     setIsSubmittingReview(false);
+    isSubmittingReviewRef.current = false;
     setShowSubmitReviewModal(true);
   };
 
@@ -1761,11 +1770,31 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     setShowSubmitReviewModal(false);
     setSubmitReviewStaleNotice(null);
     setIsSubmittingReview(false);
+    isSubmittingReviewRef.current = false;
+    if (submitTriggerButtonRef.current) {
+      submitTriggerButtonRef.current.focus();
+    }
   };
+
+  useEffect(() => {
+    if (!showSubmitReviewModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        handleCancelSubmitForReview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showSubmitReviewModal]);
 
   const handleConfirmSubmitForReview = () => {
     if (!currentDraft) return;
-    if (isSubmittingReview) return; // Prevent double click creating duplicate baselines!
+    if (isSubmittingReviewRef.current || isSubmittingReview) return; // Prevent double click creating duplicate baselines!
+    isSubmittingReviewRef.current = true;
 
     // Validate submit freshness
     const validation = validateSubmitReviewContext({
@@ -1776,6 +1805,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     });
 
     if (!validation.valid) {
+      isSubmittingReviewRef.current = false;
       if (validation.isStale) {
         setSubmitReviewPreviewHash(computeSubmitReviewFreshnessHash(task, currentDraft, activeRole));
         setSubmitReviewStaleNotice(validation.reason || '文稿正文、事实依据或核对情况已发生变化，请查阅最新交接摘要后重新确认提交');
@@ -1808,6 +1838,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onProceedToNextStage();
       }
     } catch (err: any) {
+      isSubmittingReviewRef.current = false;
       setIsSubmittingReview(false);
       alert(err.message || '提交审阅失败');
     }
@@ -2052,7 +2083,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </button>
 
           <button
-            onClick={handleSubmitDraftForReviewClick}
+            onClick={(e) => handleSubmitDraftForReviewClick(e)}
             disabled={!canUserEdit || isCurrentDraftImmutable}
             className="px-3.5 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded text-sm font-semibold shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
             title="将当前工作稿提交进入新一轮审阅，自动冻结只读基准快照并递增审阅轮次"
@@ -4150,6 +4181,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
             role="dialog"
             aria-modal="true"
             aria-label="提交本轮审阅确认"
+            tabIndex={-1}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                handleCancelSubmitForReview();
+              }
+            }}
             className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           >
             <div className="bg-white rounded-xl shadow-xl max-w-lg w-full border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-150">

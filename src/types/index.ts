@@ -588,6 +588,9 @@ export interface RevisionReviewHandoffBlockDetail {
   deferredBy?: UserRole;
   deferredAt?: string;
   deferredReason?: string;
+  revokedReason?: string;
+  revokedBy?: UserRole;
+  revokedAt?: string;
   invalidatedReason?: string;
   events: PostRevisionVerificationEvent[];
 }
@@ -611,7 +614,7 @@ export interface RevisionReviewHandoffSummary {
   invalidatedCount: number;
   isAllVerified: boolean;
   statusSummaryText: string;
-  statusMessage?: string; // 摘要文案别名
+  statusMessage: string; // 摘要文案别名
   disclaimer: string;
   facts: PostRevisionFactInfo[];
   blocks: RevisionReviewHandoffBlockDetail[];

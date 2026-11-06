@@ -433,7 +433,13 @@ export function App() {
           setViewingFrozenEvidence(false);
         }}
         task={currentTask}
-        currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId) || currentTask.drafts[0]}
+        currentDraft={
+          (currentTask.currentStage === 'review' && currentTask.reviewBaseDraftId
+            ? currentTask.drafts.find((d) => d.id === currentTask.reviewBaseDraftId)
+            : undefined) ||
+          currentTask.drafts.find((d) => d.id === currentTask.currentDraftId) ||
+          currentTask.drafts[0]
+        }
       />
     </div>
   );

@@ -28,15 +28,20 @@ export function getFormalReviewBaseline(
   explicitReviewBaseDraft?: DraftVersion
 ): { reviewBaseDraft?: DraftVersion; isFormalBaseline: boolean; isFallback: boolean } {
   const base = explicitReviewBaseDraft || (task.reviewBaseDraftId ? task.drafts.find((d) => d.id === task.reviewBaseDraftId) : undefined);
+  const activeDraft = currentDraft || task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+
   if (!base) {
-    const fallback = currentDraft || task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
-    return { reviewBaseDraft: fallback, isFormalBaseline: false, isFallback: true };
+    return { reviewBaseDraft: activeDraft, isFormalBaseline: false, isFallback: true };
   }
 
-  const activeDraft = currentDraft || task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  // Formal baseline MUST be an immutable snapshot and NOT a working draft!
+  if (base.isWorkingDraft || !base.isHistoricalSnapshot) {
+    return { reviewBaseDraft: base, isFormalBaseline: false, isFallback: true };
+  }
+
   const isApplicable = activeDraft ? getApplicableReviewDraftIds(task, activeDraft).has(base.id) : true;
 
-  if (isApplicable && (base.isHistoricalSnapshot || base.summary?.includes('提交审阅') || base.id === task.reviewBaseDraftId)) {
+  if (isApplicable && (base.id === task.reviewBaseDraftId || base.submittedReviewRound !== undefined || (base.summary && base.summary.includes('提交审阅')))) {
     return { reviewBaseDraft: base, isFormalBaseline: true, isFallback: false };
   }
 
@@ -46,6 +51,7 @@ export function getFormalReviewBaseline(
 /**
  * Determines whether the current working draft text has actually been modified from the baseline.
  * CRITICAL RULE: Changes ONLY to verification records, review comments, or notes MUST NOT be treated as text changes!
+ * Paragraph order changes or text modifications are detected.
  */
 export function isDraftContentModifiedFromBaseline(
   baseDraft: DraftVersion | undefined,
@@ -58,9 +64,10 @@ export function isDraftContentModifiedFromBaseline(
 
   for (let i = 0; i < baseDraft.blocks.length; i++) {
     const bBlock = baseDraft.blocks[i];
-    const cBlock = currentDraft.blocks.find((b) => b.id === bBlock.id);
-    if (!cBlock) return true;
-    if (bBlock.content !== cBlock.content) return true;
+    const cBlock = currentDraft.blocks[i];
+    if (bBlock.id !== cBlock.id || bBlock.content !== cBlock.content) {
+      return true;
+    }
   }
 
   return false;
@@ -68,7 +75,7 @@ export function isDraftContentModifiedFromBaseline(
 
 /**
  * Computes a fingerprint representing the submission preview context.
- * Used to detect whether draft content, facts, review round, or verification records changed
+ * Used to detect whether draft content, facts, related snippets, review round, or verification records changed
  * between opening the submit confirmation modal and clicking confirm.
  */
 export function computeSubmitReviewFreshnessHash(
@@ -86,7 +93,10 @@ export function computeSubmitReviewFreshnessHash(
     .map((r) => `${r.blockId}:${r.status}:${r.notes || ''}:${r.deferredReason || ''}:${r.revocation?.reason || ''}`)
     .join('|');
   const factsKey = (task.facts || [])
-    .map((f) => `${f.id}:${f.value}:${f.status}:${f.selectedConflictValue || ''}`)
+    .map((f) => `${f.id}:${f.value}:${f.unit || ''}:${f.period || ''}:${f.metricScope || ''}:${f.status}:${f.primaryEvidenceId || ''}:${f.selectedConflictValue || ''}`)
+    .join('|');
+  const snippetsKey = (task.snippets || [])
+    .map((s) => `${s.id}:${s.text || ''}`)
     .join('|');
 
   return [
@@ -97,6 +107,7 @@ export function computeSubmitReviewFreshnessHash(
     draftContentKey,
     verifRecordsKey,
     factsKey,
+    snippetsKey,
     actualDraft.postRevisionVerificationCredential?.operationId || '',
   ].join('##');
 }
@@ -146,6 +157,10 @@ export function validateSubmitReviewContext(
     return { valid: false, reason: '当前无有效工作稿可送审' };
   }
 
+  if (task.currentDraftId && currentDraft.id !== task.currentDraftId) {
+    return { valid: false, reason: '当前工作稿已不是任务当前选中的活动草稿' };
+  }
+
   if (activeRole !== '主笔甲' && activeRole !== task.primaryAuthor) {
     return {
       valid: false,
@@ -193,7 +208,7 @@ export function buildRevisionReviewHandoffSummary(
     return {
       hasFormalBaseline: false,
       isFallbackOnly: true,
-      reviewRound: task.currentReviewRound || 1,
+      reviewRound: undefined,
       baseDraftId: reviewBaseDraft?.id,
       baseDraftVersionNumber: reviewBaseDraft?.versionNumber,
       hasCredential: false,
@@ -221,18 +236,32 @@ export function buildRevisionReviewHandoffSummary(
   const cred = base.postRevisionVerificationCredential;
   const isSourceReferenceOnly = Boolean(!cred && base.sourcePostRevisionVerificationCredential);
 
-  if (!cred || !isValidVerificationCredential(cred) || cred.taskId !== task.id) {
-    const hasDegraded = Boolean(base.postRevisionVerificationRecovery || (cred && !isValidVerificationCredential(cred)));
+  const isTargetDraftMismatch = Boolean(
+    cred &&
+    cred.targetDraftId &&
+    cred.targetDraftId !== (base.sourceDraftId || base.id) &&
+    cred.targetDraftId !== base.id
+  );
+
+  const isCorruptedOrRecovered = Boolean(
+    base.postRevisionVerificationRecovery ||
+    isTargetDraftMismatch
+  );
+
+  if (!cred || !isValidVerificationCredential(cred) || cred.taskId !== task.id || isCorruptedOrRecovered) {
+    const hasDegraded = Boolean(base.postRevisionVerificationRecovery || isCorruptedOrRecovered || (cred && !isValidVerificationCredential(cred)));
     const statusSummaryText = isSourceReferenceOnly
       ? '本轮送审基准源自历史恢复稿（仅保留历史来源稿事实修订追溯参考，未携带活动事实修订凭据）'
       : hasDegraded
       ? '本轮送审基准修订凭据异常，已安全降级处理'
       : '本轮送审基准未包含事实修订凭据';
 
+    const degradedBlocks: RevisionReviewHandoffBlockDetail[] = [];
+
     return {
       hasFormalBaseline: true,
       isFallbackOnly: false,
-      reviewRound: base.submittedReviewRound || task.currentReviewRound || 1,
+      reviewRound: base.submittedReviewRound,
       submittedAt: base.createdAt,
       submittedBy: base.author,
       baseDraftId: base.id,
@@ -240,51 +269,66 @@ export function buildRevisionReviewHandoffSummary(
       hasCredential: false,
       isSourceReferenceOnly,
       isAdoptedSourceReferenceOnly: isSourceReferenceOnly,
-      factsCount: 0,
-      uniqueBlocksCount: 0,
+      factsCount: cred && Array.isArray(cred.facts) ? cred.facts.length : 0,
+      uniqueBlocksCount: degradedBlocks.length,
       verifiedCount: 0,
-      pendingCount: 0,
+      pendingCount: degradedBlocks.filter((b) => b.status === 'pending').length,
       deferredCount: 0,
       invalidatedCount: 0,
       isAllVerified: false,
       statusSummaryText,
       statusMessage: statusSummaryText,
       disclaimer,
-      facts: [],
-      blocks: [],
+      facts: cred && Array.isArray(cred.facts) ? JSON.parse(JSON.stringify(cred.facts)) : [],
+      blocks: degradedBlocks,
       isCurrentDraftContentModified,
       degradedNotice: hasDegraded ? '修订核对数据格式异常已降级隔离，正文与审阅功能正常可用' : undefined,
     };
   }
 
   // Evaluate post-revision verification on base snapshot
-  const evalOverview: PostRevisionVerificationOverview =
+  let evalOverview: PostRevisionVerificationOverview;
+  if (
     base.frozenPostRevisionVerificationOverview &&
     base.frozenPostRevisionVerificationOverview.hasCredential &&
-    base.frozenPostRevisionVerificationOverview.operationId === cred.operationId
-      ? JSON.parse(JSON.stringify(base.frozenPostRevisionVerificationOverview))
-      : evaluatePostRevisionVerification(task, base);
+    base.frozenPostRevisionVerificationOverview.operationId === cred.operationId &&
+    Array.isArray(base.frozenPostRevisionVerificationOverview.blockEvaluations)
+  ) {
+    evalOverview = JSON.parse(JSON.stringify(base.frozenPostRevisionVerificationOverview));
+  } else {
+    evalOverview = evaluatePostRevisionVerification(task, base);
+  }
 
   // Build block details deduplicated by stable block ID
   const blocks: RevisionReviewHandoffBlockDetail[] = [];
-  const evalMap = new Map(evalOverview.blockEvaluations.map((e) => [e.blockId, e]));
-  const recordMap = new Map((base.postRevisionVerificationRecords || []).map((r) => [r.blockId, r]));
+  const blockEvaluations = Array.isArray(evalOverview?.blockEvaluations) ? evalOverview.blockEvaluations : [];
+  const evalMap = new Map(blockEvaluations.map((e) => [e.blockId, e]));
+
+  const rawRecords = (base.postRevisionVerificationRecords || []).filter(
+    (r) =>
+      r &&
+      r.taskId === task.id &&
+      (!r.draftId || r.draftId === base.sourceDraftId || r.draftId === base.id) &&
+      (!cred || r.operationId === cred.operationId)
+  );
+  const recordMap = new Map(rawRecords.map((r) => [r.blockId, r]));
 
   for (const credBlock of cred.blocks) {
     const baseBlock = base.blocks.find((b) => b.id === credBlock.blockId);
-    const submittedContent = baseBlock?.content ?? credBlock.afterContent;
+    const ev = evalMap.get(credBlock.blockId);
+    const rec = recordMap.get(credBlock.blockId);
+
+    const isMissing = !baseBlock;
+    const status = isMissing ? ('block_missing' as const) : (ev?.displayStatus || (rec ? (rec.status as any) : 'pending'));
+    const statusLabel = isMissing ? '段落已删除' : (ev?.displayStatusLabel || (status === 'verified' ? '已记录核对' : status === 'deferred' ? '暂缓处理' : '待核对'));
+
+    const submittedContent = isMissing ? '' : (baseBlock.content ?? credBlock.afterContent);
     const hasEditedAfterAdoption = baseBlock ? baseBlock.content !== credBlock.afterContent : false;
 
     const associatedFactNames = credBlock.associatedFactIds.map((fid) => {
       const f = cred.facts.find((fact) => fact.factId === fid);
       return f ? `${f.metric}（${f.fromValue}${f.unit}➔${f.toValue}${f.unit}）` : fid;
     });
-
-    const ev = evalMap.get(credBlock.blockId);
-    const rec = recordMap.get(credBlock.blockId);
-
-    const status = ev?.displayStatus || (rec ? (rec.status as any) : 'pending');
-    const statusLabel = ev?.displayStatusLabel || (status === 'verified' ? '已记录核对' : status === 'deferred' ? '暂缓处理' : '待核对');
 
     blocks.push({
       blockId: credBlock.blockId,
@@ -304,6 +348,9 @@ export function buildRevisionReviewHandoffSummary(
       deferredBy: rec?.deferredBy,
       deferredAt: rec?.deferredAt,
       deferredReason: rec?.deferredReason,
+      revokedReason: rec?.revocation?.reason,
+      revokedBy: rec?.revocation?.revokedBy,
+      revokedAt: rec?.revocation?.revokedAt,
       invalidatedReason: ev?.invalidatedReason,
       events: rec ? [...(rec.events || rec.history || [])] : [],
     });
@@ -315,7 +362,7 @@ export function buildRevisionReviewHandoffSummary(
   return {
     hasFormalBaseline: true,
     isFallbackOnly: false,
-    reviewRound: base.submittedReviewRound || task.currentReviewRound || 1,
+    reviewRound: base.submittedReviewRound,
     submittedAt: base.createdAt,
     submittedBy: base.author,
     baseDraftId: base.id,

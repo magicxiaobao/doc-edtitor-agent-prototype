@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Task,
   DraftVersion,
@@ -53,6 +53,11 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedHistoryBlockId, setExpandedHistoryBlockId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIsExpanded(false);
+    setExpandedHistoryBlockId(null);
+  }, [activeRole, reviewBaseDraft?.id, task.id]);
 
   const summary = buildRevisionReviewHandoffSummary(task, reviewBaseDraft, currentDraft);
 
@@ -386,7 +391,9 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
                           )}
                           {block.status === 'pending' && (
                             <span className="text-slate-500">
-                              送审时主笔尚未签署核对（待核对状态进入审阅阶段）
+                              {block.revokedReason
+                                ? `原核对已撤回（待重新核对）`
+                                : '送审时主笔尚未签署核对（待核对状态进入审阅阶段）'}
                             </span>
                           )}
                         </div>
@@ -404,7 +411,7 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
                         )}
                       </div>
 
-                      {/* Notes / Reason */}
+                      {/* Notes / Reason / Revoked Reason */}
                       {block.status === 'verified' && block.notes && (
                         <div className="text-slate-700 pl-1 border-l-2 border-emerald-500">
                           <span className="font-medium text-slate-800">核对说明：</span>
@@ -415,6 +422,12 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
                         <div className="text-slate-700 pl-1 border-l-2 border-amber-500">
                           <span className="font-medium text-slate-800">暂缓原因：</span>
                           {block.deferredReason}
+                        </div>
+                      )}
+                      {block.revokedReason && (
+                        <div className="text-slate-700 pl-1 border-l-2 border-rose-400">
+                          <span className="font-medium text-slate-800">撤回原因：</span>
+                          {block.revokedReason}
                         </div>
                       )}
 
@@ -445,28 +458,36 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
 
                     {/* Actions: Locate and Comment */}
                     <div className="pt-2 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100">
-                      {onLocateBlock && (
-                        <button
-                          data-testid={`btn-locate-block-${block.blockId}`}
-                          onClick={() => onLocateBlock(block.blockId)}
-                          className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                          title="定位右侧送审基准预览中的真实段落并高亮"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-                          <span>查看送审段落</span>
-                        </button>
-                      )}
+                      {block.status === 'block_missing' || !reviewBaseDraft?.blocks.some((b) => b.id === block.blockId) ? (
+                        <span className="text-xs text-rose-600 italic">
+                          该段落已在送审前正文中被删除，不可在基准中定位或提出段落意见
+                        </span>
+                      ) : (
+                        <>
+                          {onLocateBlock && (
+                            <button
+                              data-testid={`btn-locate-block-${block.blockId}`}
+                              onClick={() => onLocateBlock(block.blockId)}
+                              className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                              title="定位右侧送审基准预览中的真实段落并高亮"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
+                              <span>查看送审段落</span>
+                            </button>
+                          )}
 
-                      {onCommentOnBlock && isReviewer && (
-                        <button
-                          data-testid={`btn-comment-block-${block.blockId}`}
-                          onClick={() => onCommentOnBlock(block.blockId)}
-                          className="px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 shadow-2xs bg-blue-700 hover:bg-blue-800 text-white cursor-pointer"
-                          title="针对本送审段落填写批注意见"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span>针对本段提出意见</span>
-                        </button>
+                          {onCommentOnBlock && isReviewer && (
+                            <button
+                              data-testid={`btn-comment-block-${block.blockId}`}
+                              onClick={() => onCommentOnBlock(block.blockId)}
+                              className="px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 shadow-2xs bg-blue-700 hover:bg-blue-800 text-white cursor-pointer"
+                              title="针对本送审段落填写批注意见"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                              <span>针对本段提出意见</span>
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

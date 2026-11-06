@@ -1352,3 +1352,62 @@ Codex review对远端 `0ebe849a9afca3bc8b6dde96212b97f8d26ed27d` 提出1条P2（
 - 主套件第10组在材料界面挂载后直接准备审批数据，并使用业务服务生成、采纳及核对。后半段组件送审和批注有执行，整组不能作为真实跨阶段组件旅程证据。R1 需补真实入口闭环并修正证据标签。
 
 此次接收提交仅补独立测试、脚本及记录。保留独立失败断言供 AI Studio R1 修复。实质检查通过后再评审，合并并确认同步后续做云浏览器验收。#57 继续跟踪桌面 Word/WPS 等剩余范围。
+
+---
+
+### 19.6 任务28 R1 缺陷修复与交付报告（2026-11-05）
+
+- **接手基线**：分支 `feat/task28-revision-review-handoff`，提交 `6b39fedefebd993bdd6f27cb814581f0f7d200d7`（关联 PR #92 与 Issue #91）。
+- **目标与原则**：全量修复 Issue #91 提出的 16 组独立测试失败与 4 处严格类型错误，完全保留 `test-task28-codex-independent.tsx` 既有 18 组断言，不放宽、不绕过。
+
+#### 19.6.1 关键问题修复与实现细节
+
+1. **出处及统计口径变更检测（修复 Case 12、13）**：
+   - 在 `computeSubmitReviewFreshnessHash` 中纳入关联事实的 `unit`（单位）、`period`（期间）、`metricScope`（口径范围）、`primaryEvidenceId`（主出处ID）及出处材料的原文片段文本；
+   - 当上述任何字段或原文发生变更时，哈希即刻变化，`validateSubmitReviewContext` 返回 `isStale: true`，弹窗拦截提交并刷新预览，防止主笔误用陈旧预览静默送审。
+
+2. **当前稿件脱离选中防护（修复 Case 14）**：
+   - 在 `validateSubmitReviewContext` 中显式核验 `task.currentDraftId` 与 `currentDraft.id`；若活动草稿已切换，即使历史哈希匹配也立即拒绝提交。
+
+3. **同步防重提交机制（修复 Case 17）**：
+   - 在 `DraftingStage` 中引入 `isSubmittingReviewRef` 同步引用锁，彻底阻断连续同步快速点击导致的双重提交、重复审阅基准快照和轮次重复递增。
+
+4. **弹窗无障碍与键盘焦点还原（修复 Case 15）**：
+   - 为送审确认弹窗添加 `Escape` 按键监听器与容器级键盘拦截；
+   - 通过 `submitTriggerButtonRef` 记录唤起弹窗的入口按钮，在取消或按 `Escape` 关闭弹窗后，精准将焦点还原至该入口按钮。
+
+5. **交接卡片状态重置与删除段落安全（修复 Case 09、10、16）**：
+   - 角色切换（`activeRole`）或任务/基准变化时，通过 `useEffect` 自动收起卡片详情（`isExpanded = false`）并重置段落历史展开状态；
+   - 针对正文中已删除的段落，`submittedContent` 置空，状态标为 `block_missing`，并在卡片上明确注明“该段落已在送审前正文中被删除”，完全隐藏“针对本段提出意见”入口按钮；
+   - 撤回记录直接在卡片上展示最近一次撤回原因 `block.revokedReason`，无需展开历史即可直接查阅。
+
+6. **基准快照与只读数据隔离边界（修复 Case 02、04、05、06、07、08、11）**：
+   - `getFormalReviewBaseline`：未冻结快照的工作稿统一标为 `hasFormalBaseline: false`；
+   - 轮次隔离：若历史送审快照未记录 `submittedReviewRound`，显示为未知（`undefined`），绝不盗用任务当前轮次；
+   - 截断与降级自愈：`evalOverview.blockEvaluations` 增强判空保护；遇到 `postRevisionVerificationRecovery` 或凭据绑定不匹配时，自动安全降级，`verifiedCount` 归零，异常段落隔离不导致系统崩溃；
+   - 外部任务隔离：过滤掉 `r.taskId !== task.id` 的异构记录，杜绝外部签署说明串入；
+   - 正文对比精确度：`isDraftContentModifiedFromBaseline` 补充段落索引位置对比，捕获段落调换顺序等结构性差异。
+
+7. **全局依据抽屉版本对齐（修复 Case 18）**：
+   - 在 `App.tsx` 中，当处于 `review` 阶段且存在 `reviewBaseDraftId` 时，优先将审阅基准快照传递给 `SnippetDrawer` 作为 `currentDraft`，确保依据抽屉顶部清晰展示审阅基准版本号（如 `DRAFT-v1.1`）及对应的出处片段。
+
+8. **严格类型错误修复**：
+   - `RevisionReviewHandoffSummary` 的 `statusMessage` 改为必填字段（`statusMessage: string;`）；
+   - `DraftingStageProps` 的 `onViewSnippet` 改为可选（`onViewSnippet?: ...`），并在组件内部通过 `const onViewSnippet = onViewSnippetProp || (() => {});` 提供安全回调，彻底修复 4 处严格类型报错。
+
+#### 19.6.2 自动化验证与质量门禁
+
+1. **Codex 独立测试套件（`test-task28-codex-independent.tsx`）**：
+   - 运行结果：**18/18 PASSED, 0 FAILED (100% 通过)**。
+2. **主功能测试套件（`test-task28.tsx`）**：
+   - 运行结果：**10 组大项全部 PASSED (100% 通过)**。
+3. **实施验收收据测试（`test-task28-receipt.tsx`）**：
+   - 运行结果：**5/5 PASSED (100% 通过)**。
+4. **Codex 接收自测套件（`test-task28-codex-receipt.tsx`）**：
+   - 运行结果：**5/5 PASSED (100% 通过)**。
+5. **TypeScript 严格类型检查**：
+   - 全测试文件严格检查：`npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --jsx react-jsx --lib ES2022,DOM,DOM.Iterable --skipLibCheck --strict --esModuleInterop test-task28.tsx test-task28-receipt.tsx test-task28-codex-receipt.tsx test-task28-codex-independent.tsx`：**0 错误**。
+   - 工程类型检查：`npm run typecheck`：**0 错误**。
+   - 代码风格检查：`npm run lint`：**0 错误**。
+6. **生产构建**：
+   - `npm run build`：生产打包通过。
