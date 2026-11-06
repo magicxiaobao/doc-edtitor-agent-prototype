@@ -36,7 +36,9 @@ export function getFormalReviewBaseline(
 
   const isApplicable = activeDraft ? getApplicableReviewDraftIds(task, activeDraft).has(base.id) : true;
 
-  if (isApplicable && (base.id === task.reviewBaseDraftId || base.submittedReviewRound !== undefined || (base.summary && base.summary.includes('提交审阅')))) {
+  const isSubmission = base.id.startsWith('DRAFT-SNAP-REV-') ||
+    (Number.isSafeInteger(base.submittedReviewRound) && base.submittedReviewRound! > 0);
+  if (isApplicable && isSubmission) {
     return { reviewBaseDraft: base, isFormalBaseline: true, isFallback: false };
   }
 

@@ -353,7 +353,11 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
                     </div>
 
                     {/* If edited after adoption */}
-                    {block.hasEditedAfterAdoption ? (
+                    {block.status === 'block_missing' ? (
+                      <div className="text-xs text-amber-900">
+                        该段未包含在实际送审正文中，上方仅保留修订前及采纳时的历史正文。
+                      </div>
+                    ) : block.hasEditedAfterAdoption ? (
                       <div className="p-3 bg-purple-50 border border-purple-200 rounded text-xs space-y-1">
                         <span className="font-bold text-purple-900 block flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5 text-purple-700" />

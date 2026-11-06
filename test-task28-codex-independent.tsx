@@ -492,6 +492,24 @@ const cases: Array<[string, () => void]> = [
     const previewSnapshotHash = computeSubmitReviewFreshnessHash(task, draft, '主笔甲');
     assert.equal(validateSubmitReviewContext({ task, currentDraft: draft, activeRole: '主笔甲', previewSnapshotHash }).valid, true);
   }],
+  ['30 manual snapshot description cannot label it a formal submission', () => {
+    const { task, draft } = prepareDraft();
+    const saved = createDraftSnapshot(task, draft.id, '提交审阅前人工备份，尚未送审', '主笔甲');
+    const snapshot = saved.snapshotDraft;
+    const viewed = { ...saved.updatedTask, currentDraftId: snapshot.id };
+    assert.equal(buildRevisionReviewHandoffSummary(viewed, snapshot, snapshot).hasFormalBaseline, false);
+  }],
+  ['31 deleted submitted paragraph never displays an identical-body conclusion', () => {
+    const { task, draft } = prepareDraft();
+    const edited = applyDraftContentChange(task, draft.id, blocks => blocks.filter(b => b.id !== 'BLK-01'), '送审前删除首段', '主笔甲');
+    const submitted = submitDraftForReview(edited.updatedTask, edited.workingDraft.id, '主笔甲');
+    const ui = mount(review(submitted.updatedTask));
+    try {
+      act(() => button(ui.host, 'btn-toggle-handoff-details').click());
+      const card = ui.host.querySelector('[data-testid="handoff-block-card-BLK-01"]')!;
+      assert.ok(!card.textContent?.includes('送审正文与采纳正文完全一致'));
+    } finally { ui.close(); }
+  }],
 ];
 
 let failures = 0;
