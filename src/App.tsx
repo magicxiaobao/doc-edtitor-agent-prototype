@@ -9,6 +9,7 @@ import {
   ReviewNavigationIntent 
 } from './types';
 import { createPresetTask } from './services/mockData';
+import { resolveCurrentReviewBase } from './services/draftLifecycleService';
 import { 
   loadPersistedState, 
   savePersistedState, 
@@ -81,6 +82,7 @@ export function App() {
   }, [tasks, currentTaskId, activeRole, isCorrupted]);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId) || tasks[0];
+  const selectedDraft = currentTask.drafts.find(d => d.id === currentTask.currentDraftId) || currentTask.drafts[0];
 
   const handleUpdateCurrentTask = (updatedFields: Partial<Task>) => {
     setTasks((prev) =>
@@ -127,7 +129,7 @@ export function App() {
     setCurrentTaskId(newTask.id);
   };
 
-  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification') => {
+  const handleLoadScenario = (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification' | 'revision_review_handoff') => {
     if (scenario === 'multi_paragraph_revision') {
       const existing = tasks.find((t) => t.id === 'TASK-DEMO-MULTI-PARAGRAPH-REVISION');
       if (existing) {
@@ -168,6 +170,17 @@ export function App() {
         return;
       }
       const preset = createPresetTask('post_revision_verification');
+      setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
+      setCurrentTaskId(preset.id);
+      return;
+    }
+    if (scenario === 'revision_review_handoff') {
+      const existing = tasks.find((t) => t.id === 'TASK-DEMO-REVISION-REVIEW-HANDOFF');
+      if (existing) {
+        setCurrentTaskId(existing.id);
+        return;
+      }
+      const preset = createPresetTask('revision_review_handoff');
       setTasks((prev) => prev.some(t => t.id === preset.id) ? prev : [preset, ...prev]);
       setCurrentTaskId(preset.id);
       return;
@@ -393,6 +406,7 @@ export function App() {
             activeRole={activeRole}
             onSelectStage={handleSelectStage}
             onNavigateToDraftComment={handleNavigateToReviewComment}
+            onViewSnippet={handleOpenSnippetDrawer}
           />
         )}
 
@@ -421,7 +435,9 @@ export function App() {
           setViewingFrozenEvidence(false);
         }}
         task={currentTask}
-        currentDraft={currentTask.drafts.find((d) => d.id === currentTask.currentDraftId) || currentTask.drafts[0]}
+        currentDraft={currentTask.currentStage === 'review'
+          ? resolveCurrentReviewBase(currentTask, selectedDraft)
+          : selectedDraft}
       />
     </div>
   );

@@ -562,6 +562,64 @@ export interface DraftVersion {
   sourcePostRevisionVerificationRecords?: PostRevisionVerificationRecord[]; // 派生来源版本的核对留痕（只读参考）
   frozenPostRevisionVerificationOverview?: PostRevisionVerificationOverview; // 保存快照时的核对结论（只读冻结）
   postRevisionVerificationRecovery?: Record<string, unknown>; // 隔离异常可选字段，确保正文与其他数据安全加载
+  // Task 28: 送审基准轮次记录
+  submittedReviewRound?: number; // 记录本基准快照对应的送审轮次（例如第1轮、第2轮）
+}
+
+// ---------------------------------------------------------------------------
+// Task 28: 事实修订送审交接摘要 (Revision Review Handoff)
+// ---------------------------------------------------------------------------
+
+export interface RevisionReviewHandoffBlockDetail {
+  blockId: string;
+  blockOrder: number;
+  sectionTitle?: string;
+  associatedFactIds: string[];
+  associatedFactNames: string[];
+  beforeContent: string;        // 完整修改前正文
+  afterContent: string;         // 完整本次采纳正文
+  submittedContent: string;     // 实际送审正文 (基准快照正文)
+  hasEditedAfterAdoption: boolean; // 采纳后又经编辑
+  status: PostRevisionVerificationDisplayStatus;
+  statusLabel: string;
+  notes?: string;
+  verifiedBy?: UserRole;
+  verifiedAt?: string;
+  deferredBy?: UserRole;
+  deferredAt?: string;
+  deferredReason?: string;
+  revokedReason?: string;
+  revokedBy?: UserRole;
+  revokedAt?: string;
+  invalidatedReason?: string;
+  events: PostRevisionVerificationEvent[];
+}
+
+export interface RevisionReviewHandoffSummary {
+  hasFormalBaseline: boolean;
+  isFallbackOnly: boolean;
+  reviewRound?: number;
+  submittedAt?: string;
+  submittedBy?: string;
+  baseDraftId?: string;
+  baseDraftVersionNumber?: string;
+  hasCredential: boolean;
+  isSourceReferenceOnly?: boolean;
+  isAdoptedSourceReferenceOnly?: boolean; // 别名
+  factsCount: number;
+  uniqueBlocksCount: number;
+  verifiedCount: number;
+  pendingCount: number;
+  deferredCount: number;
+  invalidatedCount: number;
+  isAllVerified: boolean;
+  statusSummaryText: string;
+  statusMessage: string; // 摘要文案别名
+  disclaimer: string;
+  facts: PostRevisionFactInfo[];
+  blocks: RevisionReviewHandoffBlockDetail[];
+  isCurrentDraftContentModified: boolean;
+  degradedNotice?: string;
 }
 
 export type CoordinationStrategy = 'compress' | 'expand_case' | 'balanced';

@@ -21,7 +21,7 @@ interface NavbarProps {
   onSelectTask: (taskId: string) => void;
   activeRole: UserRole;
   onSelectRole: (role: UserRole) => void;
-  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification') => void;
+  onLoadScenario: (scenario: 'blank' | 'conflict_pending' | 'ready_to_draft' | 'under_review' | 'multi_paragraph_revision' | 'multi_fact_group_revision' | 'shared_paragraph_revision' | 'post_revision_verification' | 'revision_review_handoff') => void;
   onResetData: () => void;
 }
 
@@ -222,6 +222,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span className="font-semibold text-teal-300">8. 事实修订后逐段核对演示 (两事实三段核对与留痕)</span>
                     <span className="text-xs text-slate-400">已采纳新稿、事实差异为0、逐段人工核对与审计留痕</span>
                   </button>
+                  <button
+                    data-testid="btn-load-scenario-revision-review-handoff"
+                    onClick={() => onLoadScenario('revision_review_handoff')}
+                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white flex flex-col cursor-pointer border-t border-slate-800"
+                  >
+                    <span className="font-semibold text-blue-300">9. 事实修订送审交接演示 (从两项待裁决事实到审阅交接)</span>
+                    <span className="text-xs text-slate-400">两事实待裁决、全流程修改、送审交接与逐段批注</span>
+                  </button>
                 </div>
               </div>
 
@@ -264,6 +272,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Sparkles className="w-3.5 h-3.5 text-teal-300" />
                 <span>创建修订核对演示任务</span>
+              </button>
+
+              <button
+                data-testid="btn-create-revision-review-handoff-demo-task"
+                onClick={() => onLoadScenario('revision_review_handoff')}
+                className="flex items-center gap-1.5 px-3 py-1 bg-blue-900/90 hover:bg-blue-800 border border-blue-700 rounded text-blue-100 text-xs font-medium transition-colors cursor-pointer"
+                title="显式创建事实修订送审交接演示任务（不自动覆盖已有任务）"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-blue-300" />
+                <span>创建送审交接演示任务</span>
               </button>
 
               {/* Reset button */}
