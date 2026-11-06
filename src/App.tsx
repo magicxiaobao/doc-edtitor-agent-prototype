@@ -9,6 +9,7 @@ import {
   ReviewNavigationIntent 
 } from './types';
 import { createPresetTask } from './services/mockData';
+import { resolveCurrentReviewBase } from './services/draftLifecycleService';
 import { 
   loadPersistedState, 
   savePersistedState, 
@@ -81,6 +82,7 @@ export function App() {
   }, [tasks, currentTaskId, activeRole, isCorrupted]);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId) || tasks[0];
+  const selectedDraft = currentTask.drafts.find(d => d.id === currentTask.currentDraftId) || currentTask.drafts[0];
 
   const handleUpdateCurrentTask = (updatedFields: Partial<Task>) => {
     setTasks((prev) =>
@@ -433,13 +435,9 @@ export function App() {
           setViewingFrozenEvidence(false);
         }}
         task={currentTask}
-        currentDraft={
-          (currentTask.currentStage === 'review' && currentTask.reviewBaseDraftId
-            ? currentTask.drafts.find((d) => d.id === currentTask.reviewBaseDraftId)
-            : undefined) ||
-          currentTask.drafts.find((d) => d.id === currentTask.currentDraftId) ||
-          currentTask.drafts[0]
-        }
+        currentDraft={currentTask.currentStage === 'review'
+          ? resolveCurrentReviewBase(currentTask, selectedDraft)
+          : selectedDraft}
       />
     </div>
   );

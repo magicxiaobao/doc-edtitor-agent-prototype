@@ -112,6 +112,7 @@ async function runReceiptTests() {
 
     const { container, unmount } = mount(
       <DraftingStage
+        onViewSnippet={() => {}}
         task={currentTask}
         onUpdateTask={(up) => {
           currentTask = { ...currentTask, ...up };

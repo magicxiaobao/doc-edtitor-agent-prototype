@@ -2,18 +2,13 @@ import {
   Task,
   DraftVersion,
   UserRole,
-  PostRevisionEvidenceInfo,
-  PostRevisionFactInfo,
-  PostRevisionBlockInfo,
-  PostRevisionVerificationCredential,
-  PostRevisionVerificationRecord,
-  PostRevisionVerificationOverview,
   RevisionReviewHandoffSummary,
   RevisionReviewHandoffBlockDetail,
 } from '../types';
 import { checkPermission } from './permissionService';
 import {
-  evaluatePostRevisionVerification,
+  getPostRevisionVerificationContext,
+  isValidFrozenPostRevisionVerificationOverview,
   isValidVerificationCredential,
 } from './postRevisionVerificationService';
 import { getApplicableReviewDraftIds } from './draftLifecycleService';
@@ -83,33 +78,26 @@ export function computeSubmitReviewFreshnessHash(
   draft: DraftVersion | string,
   activeRole: UserRole = '主笔甲'
 ): string {
-  const actualDraft = typeof draft === 'string' ? task.drafts.find((d) => d.id === draft) : draft;
+  const draftId = typeof draft === 'string' ? draft : draft.id;
+  const actualDraft = task.drafts.find(d => d.id === draftId);
   if (!actualDraft) return '';
 
-  const draftContentKey = (actualDraft.blocks || [])
-    .map((b) => `${b.id}:${b.content}:${b.revisionSeq ?? 0}`)
-    .join('|');
-  const verifRecordsKey = (actualDraft.postRevisionVerificationRecords || [])
-    .map((r) => `${r.blockId}:${r.status}:${r.notes || ''}:${r.deferredReason || ''}:${r.revocation?.reason || ''}`)
-    .join('|');
-  const factsKey = (task.facts || [])
-    .map((f) => `${f.id}:${f.value}:${f.unit || ''}:${f.period || ''}:${f.metricScope || ''}:${f.status}:${f.primaryEvidenceId || ''}:${f.selectedConflictValue || ''}`)
-    .join('|');
-  const snippetsKey = (task.snippets || [])
-    .map((s) => `${s.id}:${s.text || ''}`)
-    .join('|');
-
-  return [
-    task.id,
-    actualDraft.id,
+  return JSON.stringify({
+    taskId: task.id,
+    currentDraftId: task.currentDraftId,
+    draftId: actualDraft.id,
     activeRole,
-    task.currentReviewRound || 0,
-    draftContentKey,
-    verifRecordsKey,
-    factsKey,
-    snippetsKey,
-    actualDraft.postRevisionVerificationCredential?.operationId || '',
-  ].join('##');
+    reviewRound: task.currentReviewRound || 0,
+    reviewBaseDraftId: task.reviewBaseDraftId,
+    blocks: actualDraft.blocks.map(block => ({
+      order: block.order,
+      sectionId: block.sectionId,
+      context: getPostRevisionVerificationContext(task, actualDraft, block),
+    })),
+    records: actualDraft.postRevisionVerificationRecords,
+    credential: actualDraft.postRevisionVerificationCredential,
+    sourceCredential: actualDraft.sourcePostRevisionVerificationCredential,
+  });
 }
 
 export interface SubmitReviewValidationResult {
@@ -160,6 +148,10 @@ export function validateSubmitReviewContext(
   if (task.currentDraftId && currentDraft.id !== task.currentDraftId) {
     return { valid: false, reason: '当前工作稿已不是任务当前选中的活动草稿' };
   }
+  const authoritativeDraft = task.drafts.find(d => d.id === currentDraft!.id);
+  if (!authoritativeDraft || JSON.stringify(authoritativeDraft) !== JSON.stringify(currentDraft)) {
+    return { valid: false, isStale: true, reason: '当前工作稿已更新，请查阅最新交接摘要后重新确认提交' };
+  }
 
   if (activeRole !== '主笔甲' && activeRole !== task.primaryAuthor) {
     return {
@@ -173,7 +165,7 @@ export function validateSubmitReviewContext(
     return { valid: false, reason: perm.reason || '当前身份无权提交审阅' };
   }
 
-  if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || !currentDraft.isWorkingDraft) {
+  if (currentDraft.isHistoricalSnapshot || currentDraft.isFinal || currentDraft.isWorkingDraft === false) {
     return { valid: false, reason: '历史版本与定稿为只读归档，不可重复提交审阅' };
   }
 
@@ -243,9 +235,18 @@ export function buildRevisionReviewHandoffSummary(
     cred.targetDraftId !== base.id
   );
 
+  const overview = base.frozenPostRevisionVerificationOverview;
+  const hasFrozenOverview = isValidFrozenPostRevisionVerificationOverview(overview) &&
+    overview.hasCredential && isValidVerificationCredential(cred) &&
+    overview.operationId === cred.operationId && overview.targetDraftId === cred.targetDraftId &&
+    overview.sourceDraftId === cred.sourceDraftId &&
+    JSON.stringify(overview.facts) === JSON.stringify(cred.facts) &&
+    overview.blockEvaluations.every(e => (!e.record || e.record.taskId === task.id) &&
+      JSON.stringify(e.credBlock) === JSON.stringify(cred.blocks.find(b => b.blockId === e.blockId)));
+
   const isCorruptedOrRecovered = Boolean(
     base.postRevisionVerificationRecovery ||
-    isTargetDraftMismatch
+    isTargetDraftMismatch || Boolean(cred && !hasFrozenOverview)
   );
 
   if (!cred || !isValidVerificationCredential(cred) || cred.taskId !== task.id || isCorruptedOrRecovered) {
@@ -269,7 +270,7 @@ export function buildRevisionReviewHandoffSummary(
       hasCredential: false,
       isSourceReferenceOnly,
       isAdoptedSourceReferenceOnly: isSourceReferenceOnly,
-      factsCount: cred && Array.isArray(cred.facts) ? cred.facts.length : 0,
+      factsCount: 0,
       uniqueBlocksCount: degradedBlocks.length,
       verifiedCount: 0,
       pendingCount: degradedBlocks.filter((b) => b.status === 'pending').length,
@@ -279,47 +280,27 @@ export function buildRevisionReviewHandoffSummary(
       statusSummaryText,
       statusMessage: statusSummaryText,
       disclaimer,
-      facts: cred && Array.isArray(cred.facts) ? JSON.parse(JSON.stringify(cred.facts)) : [],
+      facts: [],
       blocks: degradedBlocks,
       isCurrentDraftContentModified,
       degradedNotice: hasDegraded ? '修订核对数据格式异常已降级隔离，正文与审阅功能正常可用' : undefined,
     };
   }
 
-  // Evaluate post-revision verification on base snapshot
-  let evalOverview: PostRevisionVerificationOverview;
-  if (
-    base.frozenPostRevisionVerificationOverview &&
-    base.frozenPostRevisionVerificationOverview.hasCredential &&
-    base.frozenPostRevisionVerificationOverview.operationId === cred.operationId &&
-    Array.isArray(base.frozenPostRevisionVerificationOverview.blockEvaluations)
-  ) {
-    evalOverview = JSON.parse(JSON.stringify(base.frozenPostRevisionVerificationOverview));
-  } else {
-    evalOverview = evaluatePostRevisionVerification(task, base);
-  }
+  const evalOverview = structuredClone(overview!);
 
   // Build block details deduplicated by stable block ID
   const blocks: RevisionReviewHandoffBlockDetail[] = [];
   const blockEvaluations = Array.isArray(evalOverview?.blockEvaluations) ? evalOverview.blockEvaluations : [];
   const evalMap = new Map(blockEvaluations.map((e) => [e.blockId, e]));
 
-  const rawRecords = (base.postRevisionVerificationRecords || []).filter(
-    (r) =>
-      r &&
-      r.taskId === task.id &&
-      (!r.draftId || r.draftId === base.sourceDraftId || r.draftId === base.id) &&
-      (!cred || r.operationId === cred.operationId)
-  );
-  const recordMap = new Map(rawRecords.map((r) => [r.blockId, r]));
-
   for (const credBlock of cred.blocks) {
     const baseBlock = base.blocks.find((b) => b.id === credBlock.blockId);
     const ev = evalMap.get(credBlock.blockId);
-    const rec = recordMap.get(credBlock.blockId);
+    const rec = ev?.record;
 
     const isMissing = !baseBlock;
-    const status = isMissing ? ('block_missing' as const) : (ev?.displayStatus || (rec ? (rec.status as any) : 'pending'));
+    const status = isMissing ? ('block_missing' as const) : (ev?.displayStatus || 'pending');
     const statusLabel = isMissing ? '段落已删除' : (ev?.displayStatusLabel || (status === 'verified' ? '已记录核对' : status === 'deferred' ? '暂缓处理' : '待核对'));
 
     const submittedContent = isMissing ? '' : (baseBlock.content ?? credBlock.afterContent);
@@ -348,9 +329,9 @@ export function buildRevisionReviewHandoffSummary(
       deferredBy: rec?.deferredBy,
       deferredAt: rec?.deferredAt,
       deferredReason: rec?.deferredReason,
-      revokedReason: rec?.revocation?.reason,
-      revokedBy: rec?.revocation?.revokedBy,
-      revokedAt: rec?.revocation?.revokedAt,
+      revokedReason: rec?.status === 'revoked' ? rec.revocation?.reason : undefined,
+      revokedBy: rec?.status === 'revoked' ? rec.revocation?.revokedBy : undefined,
+      revokedAt: rec?.status === 'revoked' ? rec.revocation?.revokedAt : undefined,
       invalidatedReason: ev?.invalidatedReason,
       events: rec ? [...(rec.events || rec.history || [])] : [],
     });

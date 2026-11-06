@@ -1332,4 +1332,3 @@ export function createRevisionReviewHandoffDemoTask(): Task {
   }));
   return task;
 }
-

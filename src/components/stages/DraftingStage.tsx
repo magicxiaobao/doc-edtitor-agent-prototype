@@ -45,7 +45,8 @@ import { MaterialSupplementModal } from '../MaterialSupplementModal';
 import { FactImpactModal } from '../FactImpactModal';
 import { PostRevisionVerificationModal } from '../PostRevisionVerificationModal';
 import { evaluatePostRevisionVerification, isValidVerificationCredential } from '../../services/postRevisionVerificationService';
-import { validateSubmitReviewContext, computeSubmitReviewFreshnessHash } from '../../services/revisionReviewHandoffService';
+import { validateSubmitReviewContext, computeSubmitReviewFreshnessHash, getFormalReviewBaseline } from '../../services/revisionReviewHandoffService';
+import { RevisionReviewHandoffCard } from '../RevisionReviewHandoffCard';
 import { analyzeFactImpact, FactImpactItem } from '../../services/factImpactService';
 import {
   saveFactReviewRecord,
@@ -132,7 +133,7 @@ import {
 interface DraftingStageProps {
   task: Task;
   onUpdateTask: (updated: Partial<Task>) => void;
-  onViewSnippet?: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence?: boolean) => void;
+  onViewSnippet: (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence?: boolean) => void;
   onProceedToNextStage: () => void;
   activeRole: UserRole;
   onSelectStage?: (stage: TaskStage) => void;
@@ -144,7 +145,7 @@ interface DraftingStageProps {
 export const DraftingStage: React.FC<DraftingStageProps> = ({
   task,
   onUpdateTask,
-  onViewSnippet: onViewSnippetProp,
+  onViewSnippet,
   onProceedToNextStage,
   activeRole,
   onSelectStage,
@@ -152,7 +153,6 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   navIntent,
   onClearNavIntent,
 }) => {
-  const onViewSnippet = onViewSnippetProp || (() => {});
   // Active draft version
   const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const activeReviewComments = useMemo(() => getDraftReviewComments(task, currentDraft), [task, currentDraft]);
@@ -237,6 +237,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const isSubmittingReviewRef = useRef(false);
   const submitTriggerButtonRef = useRef<HTMLElement | null>(null);
+  const submitReviewDialogRef = useRef<HTMLDivElement | null>(null);
 
   // Review comments filtering and modal state
   const [commentStatusFilter, setCommentStatusFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -1778,16 +1779,28 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
 
   useEffect(() => {
     if (!showSubmitReviewModal) return;
+    submitReviewDialogRef.current?.focus();
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         e.preventDefault();
         handleCancelSubmitForReview();
+      } else if (e.key === 'Tab') {
+        const panel = submitReviewDialogRef.current;
+        if (!panel) return;
+        const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]')];
+        const first = controls[0], last = controls[controls.length - 1];
+        if (!first) { e.preventDefault(); panel.focus(); }
+        else if (!panel.contains(document.activeElement) || document.activeElement === panel ||
+          (e.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
     };
   }, [showSubmitReviewModal]);
 
@@ -2102,6 +2115,11 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
           </button>
         </div>
       </div>
+
+      {currentDraft?.isHistoricalSnapshot && getFormalReviewBaseline(task, currentDraft, currentDraft).isFormalBaseline && (
+        <RevisionReviewHandoffCard task={task} reviewBaseDraft={currentDraft} currentDraft={currentDraft}
+          activeRole={activeRole} onViewSnippet={onViewSnippet} />
+      )}
 
       {/* 2. Preparation Status Bar */}
       {hasExistingDraft ? (
@@ -4173,11 +4191,13 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         const nextReviewRound = (task.currentReviewRound || 0) + 1;
         const cred = currentDraft.postRevisionVerificationCredential;
         const isCredValid = cred && isValidVerificationCredential(cred);
-        const handoffEval = isCredValid ? evaluatePostRevisionVerification(task, currentDraft) : null;
+        const candidateEvaluation = isCredValid ? evaluatePostRevisionVerification(task, currentDraft) : null;
+        const handoffEval = candidateEvaluation?.hasCredential ? candidateEvaluation : null;
         const isRestoredSourceOnly = Boolean(!cred && currentDraft.sourcePostRevisionVerificationCredential);
 
         return (
           <div
+            ref={submitReviewDialogRef}
             role="dialog"
             aria-modal="true"
             aria-label="提交本轮审阅确认"

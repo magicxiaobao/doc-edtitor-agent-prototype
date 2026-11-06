@@ -426,6 +426,7 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
                       )}
                       {block.revokedReason && (
                         <div className="text-slate-700 pl-1 border-l-2 border-rose-400">
+                          <div>撤回人：{block.revokedBy} · 时间：{block.revokedAt ? new Date(block.revokedAt).toLocaleString('zh-CN', { hour12: false }) : '-'}</div>
                           <span className="font-medium text-slate-800">撤回原因：</span>
                           {block.revokedReason}
                         </div>

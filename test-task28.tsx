@@ -231,6 +231,7 @@ async function runTask28Tests() {
     let updatedTaskState = fixture.task;
     const { container, unmount } = mountTestComponent(
       <DraftingStage
+        onViewSnippet={() => {}}
         task={fixture.task}
         onUpdateTask={(up) => {
           updatedTaskState = { ...updatedTaskState, ...up };
@@ -637,9 +638,9 @@ async function runTask28Tests() {
   }
 
   // -------------------------------------------------------------------------
-  // [10] 真实组件跨阶段全链路闭环 (Full Real Component Cross-Stage Journey)
+  // [10] Prepared service fixture 与送审/批注组件集成
   // -------------------------------------------------------------------------
-  console.log('\n--- [10] 验证真实组件跨阶段全链路闭环 ---');
+  console.log('\n--- [10] 验证准备夹具后的送审与批注组件集成 ---');
   {
     // 10.1 从全新创建的独立任务28演示任务开始
     let task = createRevisionReviewHandoffDemoTask();
@@ -742,6 +743,7 @@ async function runTask28Tests() {
     // 10.5 挂载起草界面，完成送审预览与确认
     const { container: draftContainer, unmount: unmountDraft } = mountTestComponent(
       <DraftingStage
+        onViewSnippet={() => {}}
         task={task}
         onUpdateTask={(up) => {
           task = { ...task, ...up };

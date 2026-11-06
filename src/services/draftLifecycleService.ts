@@ -778,9 +778,6 @@ export function restoreDraftVersion(
   success: boolean;
   updatedTask: Task;
   workingDraft: DraftVersion;
-  restoredDraft?: DraftVersion;
-  hasPostRevisionVerificationCredential?: boolean;
-  sourcePostRevisionVerificationCredential?: any;
 } {
   const perm = checkPermission(activeRole, 'restore_version');
   if (!perm.allowed) {
@@ -827,9 +824,6 @@ export function restoreDraftVersion(
     success: true,
     updatedTask,
     workingDraft: newWorkingDraft,
-    restoredDraft: newWorkingDraft,
-    hasPostRevisionVerificationCredential: Boolean(newWorkingDraft.postRevisionVerificationCredential),
-    sourcePostRevisionVerificationCredential: newWorkingDraft.sourcePostRevisionVerificationCredential,
   };
 }
 

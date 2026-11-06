@@ -96,9 +96,9 @@ function createCodexFixture() {
 }
 
 async function runCodexReceiptTests() {
-  console.log('--- CODEX 独立接收核验：任务28（事实修订送审交接摘要 第一批）---');
+  console.log('--- 任务28实施方补充自测：任务28（事实修订送审交接摘要 第一批）---');
 
-  await check('CODEX-1: 提交审阅前核对未全部完成不阻断送审，弹窗显示真实进度与警示', async () => {
+  await check('SELF-1: 提交审阅前核对未全部完成不阻断送审，弹窗显示真实进度与警示', async () => {
     const f = createCodexFixture();
     const opId = f.draft.postRevisionVerificationCredential!.operationId;
     const r1 = recordPostRevisionVerification({
@@ -121,7 +121,7 @@ async function runCodexReceiptTests() {
     assert.equal(validation.valid, true, '未全部核对不作为强制门禁阻断送审');
   });
 
-  await check('CODEX-2: 提交审阅后工作稿后续编辑不回写冻结基准，正文差异感知准确', async () => {
+  await check('SELF-2: 提交审阅后工作稿后续编辑不回写冻结基准，正文差异感知准确', async () => {
     const f = createCodexFixture();
     const opId = f.draft.postRevisionVerificationCredential!.operationId;
     const r1 = recordPostRevisionVerification({
@@ -170,7 +170,7 @@ async function runCodexReceiptTests() {
     assert.equal(summary2.isCurrentDraftContentModified, true, '精准感知工作稿与送审基准的正文差异');
   });
 
-  await check('CODEX-3: 批注权限边界隔离：审阅乙/丁可针对送审段落提批注，供稿丙不可越权', async () => {
+  await check('SELF-3: 批注权限边界隔离：审阅乙/丁可针对送审段落提批注，供稿丙不可越权', async () => {
     const f = createCodexFixture();
     const sub = submitDraftForReview(f.task, f.draft.id, '主笔甲', true);
     let task = sub.updatedTask;
@@ -218,7 +218,7 @@ async function runCodexReceiptTests() {
     unmountSup();
   });
 
-  await check('CODEX-4: 多轮次送审各自冻结独立摘要，历史快照轮次不可篡改', async () => {
+  await check('SELF-4: 多轮次送审各自冻结独立摘要，历史快照轮次不可篡改', async () => {
     const f = createCodexFixture();
     const sub1 = submitDraftForReview(f.task, f.draft.id, '主笔甲', true);
     const base1 = sub1.baselineSnapshot!;
@@ -233,7 +233,7 @@ async function runCodexReceiptTests() {
     assert.equal(summary1.reviewRound, 1, '旧基准轮次不被后继全局轮次覆盖');
   });
 
-  await check('CODEX-5: 恢复版本不继承有效活动核对凭据，仅保留来源追溯', async () => {
+  await check('SELF-5: 恢复版本不继承有效活动核对凭据，仅保留来源追溯', async () => {
     const f = createCodexFixture();
     const opId = f.draft.postRevisionVerificationCredential!.operationId;
     const r1 = recordPostRevisionVerification({
@@ -247,9 +247,9 @@ async function runCodexReceiptTests() {
 
     const restRes = restoreDraftVersion(r1.updatedTask!, f.draft.id, '主笔甲');
     assert.equal(restRes.success, true);
-    const restoredDraft = restRes.restoredDraft!;
-    assert.equal(restRes.hasPostRevisionVerificationCredential, false, '恢复稿不继承活动凭据');
-    assert.ok(restRes.sourcePostRevisionVerificationCredential, '恢复稿保留来源凭据用于追溯');
+    const restoredDraft = restRes.workingDraft;
+    assert.equal(Boolean(restoredDraft.postRevisionVerificationCredential), false, '恢复稿不继承活动凭据');
+    assert.ok(restoredDraft.sourcePostRevisionVerificationCredential, '恢复稿保留来源凭据用于追溯');
 
     const sub = submitDraftForReview(restRes.updatedTask, restoredDraft.id, '主笔甲', true);
     const baseSnapshot = sub.baselineSnapshot!;
@@ -263,7 +263,7 @@ async function runCodexReceiptTests() {
     console.error(`\n❌ CODEX 验收失败项 (${failures.length}):\n${failures.join('\n')}`);
     process.exit(1);
   } else {
-    console.log('\n🎉 CODEX 独立接收核验全部 100% 通过！');
+    console.log('\n🎉 任务28实施方补充自测全部 100% 通过！');
     process.exit(0);
   }
 }
