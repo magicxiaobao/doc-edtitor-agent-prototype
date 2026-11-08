@@ -6,7 +6,8 @@ import {
   EvidenceSnippet,
   Fact,
   AdoptedEvidenceRecord,
-  ReviewNavigationIntent 
+  ReviewNavigationIntent,
+  DraftVersion
 } from './types';
 import { createPresetTask } from './services/mockData';
 import { resolveCurrentReviewBase } from './services/draftLifecycleService';
@@ -46,13 +47,21 @@ export function App() {
   const [viewingFact, setViewingFact] = useState<Fact | null>(null);
   const [viewingAdoptedEvidence, setViewingAdoptedEvidence] = useState<AdoptedEvidenceRecord | null>(null);
   const [viewingFrozenEvidence, setViewingFrozenEvidence] = useState(false);
+  const [snippetContextDraft, setSnippetContextDraft] = useState<DraftVersion | null>(null);
   const [reviewNavIntent, setReviewNavIntent] = useState<ReviewNavigationIntent | null>(null);
 
-  const handleOpenSnippetDrawer = (snippet: EvidenceSnippet, fact?: Fact, adoptedEvidence?: AdoptedEvidenceRecord, freezeDraftEvidence = false) => {
+  const handleOpenSnippetDrawer = (
+    snippet: EvidenceSnippet,
+    fact?: Fact,
+    adoptedEvidence?: AdoptedEvidenceRecord,
+    freezeDraftEvidence = false,
+    contextDraft?: DraftVersion
+  ) => {
     setViewingSnippet(snippet);
     setViewingFact(fact || null);
     setViewingAdoptedEvidence(adoptedEvidence || null);
     setViewingFrozenEvidence(freezeDraftEvidence);
+    setSnippetContextDraft(contextDraft || null);
   };
 
   // Requirement 8: Clear navigation intent ONLY when switching to a different task to prevent cross-task leakage
@@ -63,6 +72,7 @@ export function App() {
       setReviewNavIntent(null);
       setViewingSnippet(null); setViewingFact(null); setViewingAdoptedEvidence(null);
       setViewingFrozenEvidence(false);
+      setSnippetContextDraft(null);
       previousTaskIdRef.current = currentTaskId;
     }
   }, [currentTaskId]);
@@ -433,11 +443,12 @@ export function App() {
           setViewingFact(null);
           setViewingAdoptedEvidence(null);
           setViewingFrozenEvidence(false);
+          setSnippetContextDraft(null);
         }}
         task={currentTask}
-        currentDraft={currentTask.currentStage === 'review'
+        currentDraft={snippetContextDraft || (currentTask.currentStage === 'review'
           ? resolveCurrentReviewBase(currentTask, selectedDraft)
-          : selectedDraft}
+          : selectedDraft)}
       />
     </div>
   );
