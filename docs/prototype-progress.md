@@ -1554,3 +1554,57 @@ PR #92将请求最新HEAD的Codex review，通过后依既有条件合并。#91�
 - 原交付diff检查发现本文EOF空行，本次追加接收记录时规范结尾；接收提交diff检查通过不消除上述产品阻断。
 
 PR #93保持Draft，未请求Codex review、未合并，也未开始本批云浏览器验收。AI Studio应从功能分支最新远端接收HEAD继续R1，仅修Issue #94，保留所有有效断言，不删、不跳过、不放宽；完成后交Codex复验。#57继续Open，桌面Word/WPS及独立屏幕阅读器为NOT_RUN。
+
+### 20.7 任务29 R1：审阅轮次回看独立接收定向修复记录（2026-11-08）
+
+- **起始接收 HEAD**：`c99addf219cc966e2948d15517ebcb370338b1fc`（Draft PR #93 / Issue #94 所在分支 `feat/task29-review-round-history`）。
+- **针对问题**：解决 Issue #94 及 `test-task29-codex-independent.tsx` 原 11/15 失败项，涉及 6 类交互与业务边界缺口。
+
+#### 1. 根因分析与定向修复
+
+1. **分支意见隔离及准确归属（Case 02–03）**：
+   - *根因*：`getUnattributedReviewComments` 之前遍历 `task.reviewComments` 时未对 targetVersionId 进行工作稿血统（`applicableDraftIds`）有效性校验，导致属于其他分支正式送审基准的意见被误判为“针对未送审草稿”。
+   - *修复*：识别外部分支正式基准，对未重绑定到本稿的外部分支意见执行彻底隔离（不显示于本稿回看）；对外部分支提出但已重绑定到本稿的意见予以保留，并准确标注为“原始针对其他送审基准【xxx】提出，已重新绑定至本稿处理”，区分原始存证与当前处理目标。
+2. **无正式基准的安全展示与空态文案纠偏（Case 04–05）**：
+   - *根因*：原 `ReviewRoundHistoryView` 中 `unattributedComments` 嵌套在 `formalBaselines.length > 0` 的三元表达式分支内，导致在无正式送审基准时非正式原稿及来源缺失意见完全被遮蔽；且空态提示文案中“只有在完成事实修订核对并正式提交”违背了任务28“未全部核对亦可送审”的既有规则；`getReviewStageCommentCounts` 在 fallback 到工作稿时仍错误统计了以可编辑工作稿为目标版本的意见数。
+   - *修复*：将非正式基准或来源缺失意见区移至根级渲染，确保在无正式基准时依然完整可见；修订空态说明文案，删除“完成全部核对”的前提暗示；在 `getReviewStageCommentCounts` 中对 `reviewBaseDraft` 施加严格正式基准校验（必须为不可变历史快照且具备正式送审轮次标识），非正式回退时本轮原始意见数严格锁定为 0。
+3. **稳定意见ID去重（Case 06）**：
+   - *根因*：`getBaselineAttributedComments`、`getReviewStageCommentCounts` 及 `getUnattributedReviewComments` 之前未进行唯一 ID 过滤，导致偶发或重复记录被重复计数或触发 React 重复 key 渲染。
+   - *修复*：引入纯函数 `deduplicateComments`，基于稳定 `comment.id` 对各处理链路进行去重保护。
+4. **回看上下文清理与权威基准维护（Case 07–09）**：
+   - *根因*：切换轮次时原有 3 秒高亮定时器仍在运行且未清除段落高亮状态；组件内部仅依赖 `formalBaselines.length` 检测基准集合，在等长替换（例如 `[R1, R2]` 换为 `[R2, R3]`）时未感知变化，且在选中项失效时仅 fallback 到末项或首项而非当前权威基准；切换任务或工作稿时未重置筛选器。
+   - *修复*：切换轮次时主动清除旧高亮 `setHighlightedBlockId(null)` 并 `clearTimeout`；引入对 `task.id`、`task.currentDraftId`、`task.reviewBaseDraftId` 以及基准签名列表变化的响应，当基准发生替换时优先选定 `task.reviewBaseDraftId` 对应的权威当前基准，并在切换任务/草稿时自动重置 `commentFilter` 与 `reviewerFilter` 为 `all`。
+5. **键盘导航与可访问名称（Case 10–11）**：
+   - *根因*：轮次页签虽具备 `role="tab"`，但未监听方向键进行焦点与选中态联动；状态与审阅人下拉列表缺少 `aria-label`。
+   - *修复*：为页签增加 `onKeyDown` 处理，支持 `ArrowRight`、`ArrowLeft`、`Home`、`End` 循环移动并同步将 focus 移动到目标页签按钮，配置严格的 `aria-selected` 与 `tabIndex`；为状态与审阅人 `<select>` 元素分别补齐 `aria-label="按意见状态筛选"` 与 `aria-label="按审阅人筛选"`。
+6. **出处抽屉交互边界与 Escape 冒泡隔离（Case 12）**：
+   - *根因*：`SnippetDrawer` 未在顶层对话框层捕获 Escape 键盘事件，事件穿透至底层的 `ReviewRoundHistoryView`，导致底层回看模式意外关闭而抽屉依然悬浮。
+   - *修复*：在 `SnippetDrawer` 根级增加 `onKeyDown` 处理器，当按 `Escape` 时通过 `e.stopPropagation()` 阻止事件继续向父级冒泡，并调用 `onClose()` 安全关闭抽屉，底层回看视图完好保留。
+
+#### 2. 测试与门禁验证结果
+
+1. **Codex 独立测试套件（`test-task29-codex-independent.tsx`）**：
+   - 运行命令：`node --import tsx test-task29-codex-independent.tsx`
+   - 实测结果：**15/15 全部 PASSED (100% 通过，0 失败)**。
+2. **任务29 原实施方自测与收据套件**：
+   - `test-task29.tsx`：**10/10 组大项全部 PASSED (100% 通过)**。
+   - `test-task29-receipt.tsx`：**5/5 项收据凭据全部 PASSED (100% 通过)**。
+3. **任务28 全量回归套件**：
+   - `test-task28.tsx`：10 组全部 PASSED。
+   - `test-task28-codex-independent.tsx`：**31/31 独立断言全部保留并 PASSED**。
+   - `test-task28-implementation-extra.tsx`：5 组自测全部 PASSED。
+4. **既有全量演练测试（Demo 11 套）**：
+   - 全量 11 套脚本通过 `node --import tsx` 依次运行，全部 PASSED。
+5. **全链自动化与环境等价性说明**：
+   - 原 `npm test` 在容器沙箱环境下依然因 tsx IPC pipe 限制（`EPERM /tmp/tsx-0/18.pipe`）退出，属于已知容器环境限制；
+   - 对应 package.json 完整原列表、原顺序的所有专项测试套件均已按等价执行方式 100% 成功通过。
+6. **严格 TypeScript 类型与代码构建**：
+   - 三份任务29测试显式严格检查：`npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --jsx react-jsx --lib ES2022,DOM,DOM.Iterable --skipLibCheck --strict --esModuleInterop test-task29.tsx test-task29-receipt.tsx test-task29-codex-independent.tsx` -> **0 错误**。
+   - 工程类型检查：`npm run typecheck` -> **0 错误**。
+   - 代码风格与 Lint：`npm run lint` -> **0 错误**。
+   - 生产打包构建：`npm run build` -> **构建打包成功**。
+   - 差异与空白规范：`git diff --check` -> **0 格式异常**。
+
+#### 3. 客观保留事项
+- 本批修复为纯定向缺陷修复，停止新增功能，不触及跨轮自动迁移或批量关闭意见。
+- 宿主 Word/WPS 客户端及独立读屏器按规范保持 NOT_RUN。PR #93 继续保持 Draft，等待 Codex 独立复验。

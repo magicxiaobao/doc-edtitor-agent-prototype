@@ -102,11 +102,19 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   // Adoption and frozen provenance freeze the excerpt, not the source document's entire content.
   const resolvedDoc = (adoptedEvidence || hasFrozenProvenance || freezeDraftEvidence) ? undefined : liveDoc;
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      onClose();
+    }
+  };
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="snippet-drawer-title"
+      onKeyDown={handleKeyDown}
       className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-in fade-in duration-200"
     >
       <div className="w-full max-w-xl bg-white h-full shadow-2xl flex flex-col border-l border-slate-200">

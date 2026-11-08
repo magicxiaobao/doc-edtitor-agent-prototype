@@ -64,18 +64,71 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
   const [commentFilter, setCommentFilter] = useState<'all' | ReviewCommentStatus>('all');
   const [reviewerFilter, setReviewerFilter] = useState<'all' | '审阅乙' | '审阅丁'>('all');
 
-  // Reset highlight & ensure valid selection when task, role, currentDraft or baselines change
+  const highlightTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabButtonRefs = React.useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  // Track task identity, currentDraft identity, and formal baseline IDs signature
+  const prevTaskIdRef = React.useRef(task.id);
+  const prevDraftIdRef = React.useRef(task.currentDraftId);
+  const prevBaselinesSigRef = React.useRef(formalBaselines.map((b) => b.id).join(','));
+
   useEffect(() => {
-    setHighlightedBlockId(null);
-    if (!formalBaselines.some((b) => b.id === selectedBaselineId)) {
-      const fallbackId = formalBaselines[formalBaselines.length - 1]?.id || '';
-      setSelectedBaselineId(fallbackId);
+    const isNewTask = prevTaskIdRef.current !== task.id;
+    const isNewDraft = prevDraftIdRef.current !== task.currentDraftId;
+    const currentSig = formalBaselines.map((b) => b.id).join(',');
+    const isBaselinesChanged = prevBaselinesSigRef.current !== currentSig;
+
+    if (isNewTask || isNewDraft || isBaselinesChanged) {
+      prevTaskIdRef.current = task.id;
+      prevDraftIdRef.current = task.currentDraftId;
+      prevBaselinesSigRef.current = currentSig;
+
+      // Clear any pending highlight and its timer
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = null;
+      }
+      setHighlightedBlockId(null);
+
+      // Reset filters when task context changes
+      if (isNewTask || isNewDraft) {
+        setCommentFilter('all');
+        setReviewerFilter('all');
+      }
+
+      // Recompute authoritative baseline selection
+      const authoritativeId =
+        (task.reviewBaseDraftId && formalBaselines.some((b) => b.id === task.reviewBaseDraftId))
+          ? task.reviewBaseDraftId
+          : formalBaselines[formalBaselines.length - 1]?.id || '';
+      setSelectedBaselineId(authoritativeId);
+    } else {
+      // Just ensure selected baseline is in the list
+      if (!formalBaselines.some((b) => b.id === selectedBaselineId)) {
+        const fallbackId =
+          (task.reviewBaseDraftId && formalBaselines.some((b) => b.id === task.reviewBaseDraftId))
+            ? task.reviewBaseDraftId
+            : formalBaselines[formalBaselines.length - 1]?.id || '';
+        setSelectedBaselineId(fallbackId);
+      }
     }
-  }, [task.id, task.currentDraftId, activeRole, formalBaselines.length]);
+  }, [task.id, task.currentDraftId, task.reviewBaseDraftId, formalBaselines, selectedBaselineId]);
+
+  // When selectedBaselineId changes, clear old highlight immediately and cancel timer
+  const handleSelectBaseline = (newBaselineId: string) => {
+    if (highlightTimeoutRef.current) {
+      clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+    setHighlightedBlockId(null);
+    setSelectedBaselineId(newBaselineId);
+  };
 
   // Keyboard Escape listener to return to the active review workspace
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // If the event was already consumed (e.g. by an open child drawer like SnippetDrawer), do nothing!
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape') {
         onExitHistory();
       }
@@ -103,8 +156,8 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
     return true;
   });
 
-  // Unattributed / non-formal comments
-  const unattributedComments = getUnattributedReviewComments(task, formalBaselines);
+  // Unattributed / non-formal comments (isolated to current lineage)
+  const unattributedComments = getUnattributedReviewComments(task, formalBaselines, currentDraft);
 
   // Handle locating a paragraph in the historical baseline document
   const handleLocateHistoricalBlock = (blockId: string) => {
@@ -114,14 +167,43 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
       alert(`所选送审基准【${selectedBaseline.versionNumber}】中未找到段落【${blockId}】（可能在送审前正文中已删除或不存在）`);
       return;
     }
+    if (highlightTimeoutRef.current) {
+      clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
     setHighlightedBlockId(blockId);
     const el = document.getElementById(`history-baseline-block-${blockId}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-    setTimeout(() => {
+    highlightTimeoutRef.current = setTimeout(() => {
       setHighlightedBlockId((prev) => (prev === blockId ? null : prev));
+      highlightTimeoutRef.current = null;
     }, 3000);
+  };
+
+  // Keyboard navigation for tablist (ArrowLeft, ArrowRight, Home, End)
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    let nextIndex = -1;
+    if (e.key === 'ArrowRight') {
+      nextIndex = (currentIndex + 1) % formalBaselines.length;
+    } else if (e.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + formalBaselines.length) % formalBaselines.length;
+    } else if (e.key === 'Home') {
+      nextIndex = 0;
+    } else if (e.key === 'End') {
+      nextIndex = formalBaselines.length - 1;
+    }
+
+    if (nextIndex !== -1) {
+      e.preventDefault();
+      const nextBaseline = formalBaselines[nextIndex];
+      if (nextBaseline) {
+        handleSelectBaseline(nextBaseline.id);
+        const nextButton = tabButtonRefs.current.get(nextBaseline.id);
+        nextButton?.focus();
+      }
+    }
   };
 
   return (
@@ -157,7 +239,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
       </div>
 
       {/* Empty State: No Formal Baselines */}
-      {formalBaselines.length === 0 ? (
+      {formalBaselines.length === 0 && (
         <div
           data-testid="no-formal-baselines-notice"
           className="bg-white border border-slate-200 p-8 rounded-lg shadow-2xs text-center space-y-3"
@@ -167,7 +249,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
           </div>
           <h3 className="font-bold text-sm text-slate-800">当前工作稿尚未产生正式送审基准快照</h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-            只有在正文起草阶段完成事实修订核对并正式点击“提交本轮审阅”后，系统才会生成不可篡改的送审基准快照。当前稿件尚无正式送审历史可供回看。
+            只有在正文起草阶段点击“提交本轮审阅”并确认后，系统才会生成不可篡改的送审基准快照。当前稿件尚无正式送审历史可供回看。
           </p>
           <div className="pt-2">
             <button
@@ -179,7 +261,9 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
             </button>
           </div>
         </div>
-      ) : (
+      )}
+
+      {formalBaselines.length > 0 && (
         <>
           {/* Baseline Tabs Selection */}
           <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-2xs space-y-2">
@@ -188,7 +272,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
               <span className="text-2xs text-slate-400">共 {formalBaselines.length} 个正式送审轮次基准</span>
             </div>
             <div className="flex flex-wrap items-center gap-2" role="tablist">
-              {formalBaselines.map((baseline) => {
+              {formalBaselines.map((baseline, index) => {
                 const isSelected = baseline.id === selectedBaseline?.id;
                 const isCurrentLiveBase = baseline.id === task.reviewBaseDraftId;
                 const roundText = getRoundDisplayName(baseline);
@@ -196,11 +280,17 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                 return (
                   <button
                     key={baseline.id}
+                    ref={(el) => {
+                      if (el) tabButtonRefs.current.set(baseline.id, el);
+                      else tabButtonRefs.current.delete(baseline.id);
+                    }}
                     type="button"
                     role="tab"
                     aria-selected={isSelected}
+                    tabIndex={isSelected ? 0 : -1}
                     data-testid={`round-tab-${baseline.id}`}
-                    onClick={() => setSelectedBaselineId(baseline.id)}
+                    onClick={() => handleSelectBaseline(baseline.id)}
+                    onKeyDown={(e) => handleTabKeyDown(e, index)}
                     className={`px-3.5 py-2 rounded-lg text-xs font-medium border flex items-center gap-2 cursor-pointer transition-colors ${
                       isSelected
                         ? 'bg-blue-700 text-white border-blue-700 shadow-xs'
@@ -307,6 +397,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
 
                     <div className="flex items-center gap-2 text-xs">
                       <select
+                        aria-label="按意见状态筛选"
                         value={commentFilter}
                         onChange={(e) => setCommentFilter(e.target.value as any)}
                         className="border border-slate-300 rounded px-2 py-1 bg-white text-slate-700 text-xs"
@@ -320,6 +411,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                       </select>
 
                       <select
+                        aria-label="按审阅人筛选"
                         value={reviewerFilter}
                         onChange={(e) => setReviewerFilter(e.target.value as any)}
                         className="border border-slate-300 rounded px-2 py-1 bg-white text-slate-700 text-xs"
@@ -530,45 +622,45 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
               </div>
             </>
           )}
-
-          {/* Unattributed / Non-Formal Comments Section (Requirement 4.6) */}
-          {unattributedComments.length > 0 && (
-            <div
-              data-testid="unattributed-comments-section"
-              className="bg-white border border-slate-200 rounded-lg p-5 shadow-2xs space-y-3"
-            >
-              <div className="flex items-center gap-2 font-bold text-xs text-slate-800">
-                <ShieldAlert className="w-4 h-4 text-amber-600" />
-                <span>非正式基准或来源缺失意见（共 {unattributedComments.length} 条）</span>
-              </div>
-              <p className="text-xs text-slate-500">
-                以下意见针对未正式送审的临时草稿提出，或其来源送审基准在草稿库中缺失。为确保审阅记录完整存证，系统单独在此列出，未将其混入上述正式轮次中。
-              </p>
-              <div className="space-y-2">
-                {unattributedComments.map(({ comment, reason }) => (
-                  <div
-                    key={comment.id}
-                    data-testid={`unattributed-comment-${comment.id}`}
-                    className="p-3 bg-slate-50 rounded border border-slate-200 text-xs space-y-1"
-                  >
-                    <div className="flex items-center justify-between text-2xs text-slate-500">
-                      <span className="font-bold text-slate-700">
-                        {comment.reviewer} · {comment.id}
-                      </span>
-                      <span className="text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                        {reason}
-                      </span>
-                    </div>
-                    <p className="text-slate-800">{comment.content}</p>
-                    <div className="text-2xs text-slate-400 font-mono">
-                      原记录目标版本ID：{comment.targetVersionId} · 当前状态：{comment.status}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {/* Unattributed / Non-Formal Comments Section (Requirement 4.6) */}
+      {unattributedComments.length > 0 && (
+        <div
+          data-testid="unattributed-comments-section"
+          className="bg-white border border-slate-200 rounded-lg p-5 shadow-2xs space-y-3"
+        >
+          <div className="flex items-center gap-2 font-bold text-xs text-slate-800">
+            <ShieldAlert className="w-4 h-4 text-amber-600" />
+            <span>非正式基准或来源缺失意见（共 {unattributedComments.length} 条）</span>
+          </div>
+          <p className="text-xs text-slate-500">
+            以下意见针对未正式送审的临时草稿提出，或其来源送审基准在草稿库中缺失。为确保审阅记录完整存证，系统单独在此列出，未将其混入上述正式轮次中。
+          </p>
+          <div className="space-y-2">
+            {unattributedComments.map(({ comment, reason }) => (
+              <div
+                key={comment.id}
+                data-testid={`unattributed-comment-${comment.id}`}
+                className="p-3 bg-slate-50 rounded border border-slate-200 text-xs space-y-1"
+              >
+                <div className="flex items-center justify-between text-2xs text-slate-500">
+                  <span className="font-bold text-slate-700">
+                    {comment.reviewer} · {comment.id}
+                  </span>
+                  <span className="text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                    {reason}
+                  </span>
+                </div>
+                <p className="text-slate-800">{comment.content}</p>
+                <div className="text-2xs text-slate-400 font-mono">
+                  原记录目标版本ID：{comment.targetVersionId} · 当前状态：{comment.status}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
