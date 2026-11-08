@@ -956,6 +956,7 @@ const cases: [string, () => void | Promise<void>][] = [
 
         // Open evidence drawer from R1 handoff card
         click('btn-toggle-handoff-details');
+        ui.host.querySelector<HTMLButtonElement>('[data-testid="btn-view-evidence-from-FACT-01"]')!.focus();
         click('btn-view-evidence-from-FACT-01');
         const drawer = ui.host.querySelector('[aria-labelledby="snippet-drawer-title"]');
         assert.ok(drawer, 'Snippet drawer should open');
@@ -965,6 +966,13 @@ const cases: [string, () => void | Promise<void>][] = [
           `Drawer should show R1 baseline version ${r1Base.versionNumber}`
         );
         assert.ok(!drawer.textContent?.includes(r2Base.versionNumber), 'Drawer must not show R2 baseline version');
+
+        assert.ok(drawer.contains(document.activeElement), 'Actual App drawer must own keyboard focus');
+        act(() => document.activeElement!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+        assert.ok(!ui.host.querySelector('[aria-labelledby="snippet-drawer-title"]'), 'Escape closes the source drawer');
+        assert.ok(ui.host.querySelector('[data-testid="review-round-history-view"]'), 'Escape preserves the underlying round-history view');
+        assert.ok(document.activeElement === ui.host.querySelector('[data-testid="btn-view-evidence-from-FACT-01"]'), 'Focus returns to the actual R1 source trigger');
+        click('btn-view-evidence-from-FACT-01');
 
         // Close drawer
         clickText(ui.host, '关闭返回');

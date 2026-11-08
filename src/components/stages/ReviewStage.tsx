@@ -50,7 +50,7 @@ import {
   History
 } from 'lucide-react';
 import { ReviewRoundHistoryView } from '../ReviewRoundHistoryView';
-import { getReviewStageCommentCounts } from '../../services/reviewRoundHistoryService';
+import { getFormalReviewBaselines, getReviewStageCommentCounts } from '../../services/reviewRoundHistoryService';
 
 interface ReviewStageProps {
   task: Task;
@@ -86,7 +86,10 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     alert('该意见不适用于当前版本，请返回当前分支处理');
     return false;
   };
-  const currentReviewRound = task.currentReviewRound || 1;
+  const currentFormalBaseline = getFormalReviewBaselines(task, currentDraft)
+    .find((baseline) => baseline.id === reviewBaseDraft?.id);
+  const submittedRound = currentFormalBaseline?.submittedReviewRound;
+  const currentReviewRound = Number.isSafeInteger(submittedRound) && submittedRound! > 0 ? submittedRound : undefined;
 
   // Comment filter
   const [commentFilter, setCommentFilter] = useState<'all' | ReviewCommentStatus>('all');
@@ -497,17 +500,19 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       <div className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-xs shrink-0">
-            R{currentReviewRound}
+            {currentReviewRound ? `R${currentReviewRound}` : currentFormalBaseline ? '?' : '—'}
           </div>
           <div>
             <div className="font-bold text-slate-800 flex items-center gap-2">
-              <span>第 {currentReviewRound} 轮审阅周期</span>
+              <span>{currentFormalBaseline
+                ? currentReviewRound ? `第 ${currentReviewRound} 轮审阅周期` : '送审轮次未知'
+                : '尚未正式送审'}</span>
               <span className="text-xs px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium">
-                进行中
+                {currentFormalBaseline ? '进行中' : '工作稿参考'}
               </span>
             </div>
             <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
-              <span>本轮审阅基准版本：<strong className="text-slate-700 font-medium">{reviewBaseDraft?.versionNumber || '初始版本'}</strong></span>
+              <span>{currentFormalBaseline ? '本轮审阅基准版本：' : '当前参考版本：'}<strong className="text-slate-700 font-medium">{reviewBaseDraft?.versionNumber || '初始版本'}</strong></span>
               <span aria-hidden="true">·</span>
               <span>当前最新工作稿：<strong className="text-slate-700 font-medium">{currentDraft?.versionNumber || '无'}</strong></span>
             </div>

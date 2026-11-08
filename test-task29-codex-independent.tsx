@@ -192,6 +192,120 @@ const cases: Array<[string, () => void]> = [
       assert.equal(task.reviewComments[0].targetVersionId, f.r2.id);
     } finally { ui.close(); }
   }],
+  ['16 unrelated unsent working-branch comments stay outside the current lineage', () => {
+    const f = fixture(); const other = { ...structuredClone(f.work), id: 'OTHER-UNSENT-WORK', sourceDraftId: undefined, reviewBaselineIds: [] };
+    const c = comment('CMT-OTHER-UNSENT', other); f.task.drafts.push(other); f.task.reviewComments.push(c);
+    assert.ok(!getApplicableReviewComments(f.task, f.work).some(x => x.id === c.id));
+    assert.ok(!getUnattributedReviewComments(f.task, getFormalReviewBaselines(f.task), f.work).some(x => x.comment.id === c.id));
+  }],
+  ['17 conflicting duplicate statuses never hide an unresolved opinion behind a closed first copy', () => {
+    const f = fixture(); f.task.reviewComments = [{ ...f.c1, status: 'implemented' }, { ...f.c1, status: 'pending' }];
+    const counts = getReviewStageCommentCounts(f.task, f.work, f.r1);
+    assert.equal(counts.applicableTotalCount, 1); assert.equal(counts.applicableUnclosedCount, 1);
+    assert.equal(counts.currentRoundUnclosedCount, 1); assert.equal(counts.canFinalizeComments, false);
+    assert.notEqual(getBaselineAttributedComments(f.task, f.r1.id)[0].status, 'implemented');
+  }],
+  ['18 a genuine but unrelated formal baseline does not supply this working draft current-round counts', () => {
+    const f = fixture(); const other = { ...structuredClone(f.r1), id: 'DRAFT-SNAP-REV-FOREIGN-COUNTS', sourceDraftId: 'OTHER-WORK' };
+    f.task.drafts.push(other); f.task.reviewComments.push(comment('CMT-FOREIGN-COUNTS', other));
+    assert.equal(getReviewStageCommentCounts(f.task, f.work, other).currentRoundOriginalCount, 0);
+  }],
+  ['19 changing role clears a pending historical paragraph highlight', () => {
+    const f = fixture(); const ui = mount(history(f.task, f.work)); try {
+      click(ui.host, `round-tab-${f.r1.id}`); click(ui.host, `btn-locate-comment-block-${f.c1.id}`);
+      const selector = `[data-testid="history-baseline-block-${f.r1.blocks[0].id}"]`;
+      assert.ok(ui.host.querySelector(selector)?.className.includes('ring-2'));
+      ui.render(<ReviewRoundHistoryView task={f.task} currentDraft={f.work} activeRole="审阅丁" onExitHistory={() => {}} />);
+      assert.ok(!ui.host.querySelector(selector)?.className.includes('ring-2'));
+    } finally { ui.close(); }
+  }],
+  ['20 leaving history cancels its pending paragraph-highlight timeout', () => {
+    const f = fixture(); const originalSet = globalThis.setTimeout; const originalClear = globalThis.clearTimeout;
+    let tracked: ReturnType<typeof setTimeout> | undefined; let cleared = false;
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      const timer = originalSet(callback, delay, ...args); if (delay === 3000) tracked = timer; return timer;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer: ReturnType<typeof setTimeout>) => {
+      if (timer === tracked) cleared = true; originalClear(timer);
+    }) as typeof clearTimeout;
+    const ui = mount(history(f.task, f.work)); let closed = false;
+    try {
+      click(ui.host, `round-tab-${f.r1.id}`); click(ui.host, `btn-locate-comment-block-${f.c1.id}`);
+      assert.ok(tracked); ui.close(); closed = true; assert.equal(cleared, true);
+    } finally {
+      if (!closed) ui.close(); if (tracked) originalClear(tracked);
+      globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear;
+    }
+  }],
+  ['21 source drawer takes actual focus and Escape closes only the drawer, restoring its trigger', () => {
+    const f = fixture();
+    function Harness() {
+      const [shown, setShown] = useState(true); const [source, setSource] = useState<EvidenceSnippet | null>(null);
+      return <>{shown && <ReviewRoundHistoryView task={f.task} currentDraft={f.work} activeRole="主笔甲" onExitHistory={() => setShown(false)} />}
+        <button data-testid="open-real-focus-source" onClick={() => setSource(f.task.snippets[0])}>source</button>
+        <SnippetDrawer snippet={source} documents={f.task.documents} task={f.task} currentDraft={f.r1} onClose={() => setSource(null)} /></>;
+    }
+    const ui = mount(<Harness />); try {
+      const trigger = ui.host.querySelector<HTMLButtonElement>('[data-testid="open-real-focus-source"]')!; trigger.focus(); act(() => trigger.click());
+      const drawer = ui.host.querySelector('[aria-labelledby="snippet-drawer-title"]')!;
+      assert.ok(drawer.contains(document.activeElement), 'opening the drawer must move keyboard focus inside it');
+      act(() => document.activeElement!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+      assert.ok(!ui.host.querySelector('[aria-labelledby="snippet-drawer-title"]'));
+      assert.ok(ui.host.querySelector('[data-testid="review-round-history-view"]'));
+      assert.ok(document.activeElement === trigger);
+    } finally { ui.close(); }
+  }],
+  ['22 source drawer traps keyboard focus at its own boundaries', () => {
+    const f = fixture(); const ui = mount(<SnippetDrawer snippet={f.task.snippets[0]} documents={f.task.documents} task={f.task} currentDraft={f.r1} onClose={() => {}} />);
+    try {
+      const drawer = ui.host.querySelector('[aria-labelledby="snippet-drawer-title"]')!;
+      const buttons = Array.from(drawer.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
+      const first = buttons[0]; const last = buttons[buttons.length - 1]; first.focus();
+      act(() => first.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })));
+      assert.ok(document.activeElement === last, 'Shift+Tab must wrap to the drawer last control');
+      act(() => last.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
+      assert.ok(document.activeElement === first, 'Tab must wrap to the drawer first control');
+    } finally { ui.close(); }
+  }],
+  ['23 rebound formal-origin records are not presented under a misleading informal-only category', () => {
+    const f = fixture(); const foreign = { ...structuredClone(f.r1), id: 'DRAFT-SNAP-REV-FOREIGN-LABEL', sourceDraftId: 'OTHER-WORK' };
+    const c = comment('CMT-FOREIGN-LABEL', foreign); c.rebindRecord = { targetDraftId: f.work.id, toBlockId: f.work.blocks[0].id, toBlockOrder: 1, reboundAt: c.createdAt, reboundBy: '主笔甲' };
+    f.task.drafts.push(foreign); f.task.reviewComments.push(c);
+    const ui = mount(history(f.task, f.work)); try {
+      const section = ui.host.querySelector('[data-testid="unattributed-comments-section"]')!;
+      assert.ok(section); assert.ok(!section.textContent?.includes('非正式基准或来源缺失意见（'));
+      assert.ok(section.textContent?.includes(f.work.id), 'current rebound target remains traceable');
+    } finally { ui.close(); }
+  }],
+  ['24 incomplete opinion IDs do not disappear or turn an unresolved count green', () => {
+    const f = fixture(); f.task.reviewComments = [{ ...f.c1, id: '' }];
+    const counts = getReviewStageCommentCounts(f.task, f.work, f.r1);
+    assert.equal(counts.applicableUnclosedCount, 1); assert.equal(counts.canFinalizeComments, false);
+    assert.equal(getBaselineAttributedComments(f.task, f.r1.id).length, 1);
+  }],
+  ['25 a legacy task with no remaining draft still exposes its missing-source opinions', () => {
+    const f = fixture(); f.task.drafts = []; f.task.currentDraftId = '';
+    const ui = mount(history(f.task)); try {
+      assert.ok(ui.host.querySelector('[data-testid="no-formal-baselines-notice"]'));
+      assert.ok(ui.host.querySelector(`[data-testid="unattributed-comment-${f.c1.id}"]`));
+    } finally { ui.close(); }
+  }],
+  ['26 live review workspace does not invent R1 for an unsent draft or borrow an unknown baseline round', () => {
+    const task = createRevisionReviewHandoffDemoTask(); task.currentReviewRound = 0; task.reviewBaseDraftId = task.currentDraftId;
+    const render = (t: Task) => <ReviewStage task={t} activeRole="主笔甲" onUpdateTask={() => {}} onProceedToNextStage={() => {}} />;
+    const ui = mount(render(task)); try {
+      assert.ok(ui.host.textContent?.includes('尚未正式送审'));
+      assert.ok(!ui.host.textContent?.includes('第 1 轮审阅周期'));
+      const f = fixture(); delete f.r2.submittedReviewRound;
+      ui.render(render(f.task));
+      assert.ok(ui.host.textContent?.includes('送审轮次未知'));
+      assert.ok(!ui.host.textContent?.includes('第 2 轮审阅周期'));
+      f.r2.submittedReviewRound = -1;
+      ui.render(render({ ...f.task }));
+      assert.ok(ui.host.textContent?.includes('送审轮次未知'));
+      assert.ok(!ui.host.textContent?.includes('R-1'));
+    } finally { ui.close(); }
+  }],
 ];
 let failed = 0;
 for (const [name, run] of cases) { try { run(); console.log('PASS '+name); } catch (error) { failed++; console.error('FAIL '+name, error); } }

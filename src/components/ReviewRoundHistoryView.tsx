@@ -73,6 +73,20 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
   const prevBaselinesSigRef = React.useRef(formalBaselines.map((b) => b.id).join(','));
 
   useEffect(() => {
+    if (highlightTimeoutRef.current) {
+      clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+    setHighlightedBlockId(null);
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = null;
+      }
+    };
+  }, [activeRole]);
+
+  useEffect(() => {
     const isNewTask = prevTaskIdRef.current !== task.id;
     const isNewDraft = prevDraftIdRef.current !== task.currentDraftId;
     const currentSig = formalBaselines.map((b) => b.id).join(',');
@@ -430,6 +444,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                       <div className="font-semibold">关于意见处理状态的重要说明：</div>
                       <div>
                         意见当前处理状态，不代表该轮结束时的冻结结论。后续主笔在工作稿中对该意见的答复、采纳或落实会更新当前展示，送审快照本身的正文与交接摘要保持不可篡改。
+                        意见按稳定ID去重；重复状态冲突按未闭环保守展示，原始记录不改写。
                       </div>
                     </div>
                   </div>
@@ -446,12 +461,12 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                           : '没有符合筛选条件的审阅意见'}
                       </div>
                     ) : (
-                      filteredComments.map((cmt) => {
+                      filteredComments.map((cmt, commentIndex) => {
                         const isRebound = Boolean(cmt.rebindRecord);
 
                         return (
                           <div
-                            key={cmt.id}
+                            key={cmt.id || `missing-id-${commentIndex}`}
                             data-testid={`history-comment-item-${cmt.id}`}
                             className="p-4 rounded-lg border border-slate-200 bg-white space-y-2 text-xs shadow-2xs"
                           >
@@ -461,7 +476,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                                 <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-2xs border border-slate-200">
                                   {cmt.type === 'overall' ? '全局意见' : `第 ${cmt.targetBlockOrder || '?'} 段批注`}
                                 </span>
-                                <span className="text-2xs text-slate-400 font-mono">{cmt.id}</span>
+                                <span className="text-2xs text-slate-400 font-mono">{cmt.id || '缺少意见标识，需人工核实'}</span>
                               </div>
 
                               <div>
@@ -633,21 +648,21 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
         >
           <div className="flex items-center gap-2 font-bold text-xs text-slate-800">
             <ShieldAlert className="w-4 h-4 text-amber-600" />
-            <span>非正式基准或来源缺失意见（共 {unattributedComments.length} 条）</span>
+            <span>未归入本稿正式轮次的适用意见（共 {unattributedComments.length} 条）</span>
           </div>
           <p className="text-xs text-slate-500">
-            以下意见针对未正式送审的临时草稿提出，或其来源送审基准在草稿库中缺失。为确保审阅记录完整存证，系统单独在此列出，未将其混入上述正式轮次中。
+            以下为非正式原稿、来源缺失或原属其他送审基准但已重绑定至本稿的意见。原始归属和当前处理目标分别保留，不计入所选轮次原始意见数。
           </p>
           <div className="space-y-2">
-            {unattributedComments.map(({ comment, reason }) => (
+            {unattributedComments.map(({ comment, reason }, commentIndex) => (
               <div
-                key={comment.id}
+                key={comment.id || `missing-source-id-${commentIndex}`}
                 data-testid={`unattributed-comment-${comment.id}`}
                 className="p-3 bg-slate-50 rounded border border-slate-200 text-xs space-y-1"
               >
                 <div className="flex items-center justify-between text-2xs text-slate-500">
                   <span className="font-bold text-slate-700">
-                    {comment.reviewer} · {comment.id}
+                    {comment.reviewer} · {comment.id || '缺少意见标识，需人工核实'}
                   </span>
                   <span className="text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
                     {reason}

@@ -90,13 +90,27 @@ export function getRoundDisplayName(draft: DraftVersion | undefined): string {
 /**
  * Helper to deduplicate review comments by ID while preserving order.
  */
+function isUnclosedStatus(status: ReviewCommentStatus): boolean {
+  return status === 'pending' || status === 'accepted_pending_implementation' || status === 'need_discussion';
+}
+
 function deduplicateComments(comments: ReviewComment[]): ReviewComment[] {
-  const seenIds = new Set<string>();
+  const positions = new Map<string, number>();
   const unique: ReviewComment[] = [];
   for (const c of comments) {
-    if (!c || !c.id || seenIds.has(c.id)) continue;
-    seenIds.add(c.id);
-    unique.push(c);
+    if (!c) continue;
+    // Missing IDs cannot establish equivalence. Keep them visible and unresolved
+    // rather than silently dropping them from the working-draft counters.
+    if (!c.id) { unique.push(c); continue; }
+    const previous = positions.get(c.id);
+    if (previous === undefined) {
+      positions.set(c.id, unique.length);
+      unique.push(c);
+    } else if (isUnclosedStatus(c.status) && !isUnclosedStatus(unique[previous].status)) {
+      // A contradictory closed copy is never evidence that the pending copy was
+      // resolved. Only derive a conservative display; leave stored records intact.
+      unique[previous] = c;
+    }
   }
   return unique;
 }
@@ -139,7 +153,8 @@ export function getUnattributedReviewComments(
   const activeDraft = currentDraft || task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   const applicableDraftIds = activeDraft ? getApplicableReviewDraftIds(task, activeDraft) : undefined;
 
-  const uniqueComments = deduplicateComments(task.reviewComments);
+  const applicableComments = activeDraft ? getApplicableReviewComments(task, activeDraft) : task.reviewComments;
+  const uniqueComments = deduplicateComments(applicableComments);
   const unattributed: UnattributedCommentInfo[] = [];
 
   for (const comment of uniqueComments) {
@@ -172,7 +187,7 @@ export function getUnattributedReviewComments(
     let reason: string;
     if (isForeignFormalBaseline && isReboundToCurrentLineage) {
       const originName = originDraft?.versionNumber || comment.targetVersionNumber || comment.targetVersionId;
-      reason = `原始针对其他送审基准【${originName}】提出，已重新绑定至本稿处理`;
+      reason = `原始针对其他送审基准【${originName}】提出；当前重绑定目标：${comment.rebindRecord!.targetDraftId} · 第${comment.rebindRecord!.toBlockOrder}段`;
     } else if (originDraft) {
       reason = `针对未送审草稿【${comment.targetVersionNumber || originDraft.versionNumber || comment.targetVersionId}】提出，非正式送审基准`;
     } else {
@@ -202,26 +217,18 @@ export function getReviewStageCommentCounts(
   const rawApplicableComments = activeDraft ? getApplicableReviewComments(task, activeDraft) : [];
   const applicableComments = deduplicateComments(rawApplicableComments);
 
-  const isUnclosed = (status: ReviewCommentStatus) =>
-    status === 'pending' || status === 'accepted_pending_implementation' || status === 'need_discussion';
-
-  const applicableUnclosedCount = applicableComments.filter((c) => isUnclosed(c.status)).length;
+  const applicableUnclosedCount = applicableComments.filter((c) => isUnclosedStatus(c.status)).length;
 
   // Strict check: reviewBaseDraft must be a formal baseline (not a fallback working draft)
-  const isFormalBase = Boolean(
-    reviewBaseDraft &&
-    !reviewBaseDraft.isWorkingDraft &&
-    reviewBaseDraft.isHistoricalSnapshot &&
-    !reviewBaseDraft.isFinal &&
-    (reviewBaseDraft.id.startsWith('DRAFT-SNAP-REV-') || (Number.isSafeInteger(reviewBaseDraft.submittedReviewRound) && reviewBaseDraft.submittedReviewRound! > 0))
-  );
+  const isFormalBase = Boolean(reviewBaseDraft && getFormalReviewBaselines(task, activeDraft)
+    .some((baseline) => baseline.id === reviewBaseDraft.id));
 
   const rawRoundComments = (isFormalBase && reviewBaseDraft)
     ? (task.reviewComments || []).filter((c) => c.targetVersionId === reviewBaseDraft.id)
     : [];
   const currentRoundOriginalComments = deduplicateComments(rawRoundComments);
   const currentRoundOriginalCount = currentRoundOriginalComments.length;
-  const currentRoundUnclosedCount = currentRoundOriginalComments.filter((c) => isUnclosed(c.status)).length;
+  const currentRoundUnclosedCount = currentRoundOriginalComments.filter((c) => isUnclosedStatus(c.status)).length;
 
   return {
     applicableTotalCount: applicableComments.length,

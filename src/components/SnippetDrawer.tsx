@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { EvidenceSnippet, SourceDocument, Fact, DraftVersion, Task, AdoptedEvidenceRecord } from '../types';
 import { X, FileText, Calendar, MapPin, Tag, AlertTriangle, ChevronDown, CheckCircle2 } from 'lucide-react';
 import { resolveDraftFactEvidence } from '../services/factLifecycleService';
@@ -27,6 +27,16 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   task,
 }) => {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const isOpen = Boolean(snippet || fact);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const firstButton = drawerRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])');
+    (firstButton || drawerRef.current)?.focus();
+    return () => { if (previousFocus?.isConnected) previousFocus.focus(); };
+  }, [isOpen]);
 
   if (!snippet && !fact) return null;
 
@@ -104,14 +114,28 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
       e.stopPropagation();
       onClose();
+    } else if (e.key === 'Tab') {
+      const controls = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ) || []).filter((element) => !element.hidden);
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (!first) { e.preventDefault(); drawerRef.current?.focus(); }
+      else if (e.shiftKey && (document.activeElement === first || document.activeElement === drawerRef.current)) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
     }
   };
 
   return (
     <div
       role="dialog"
+      ref={drawerRef}
+      tabIndex={-1}
       aria-modal="true"
       aria-labelledby="snippet-drawer-title"
       onKeyDown={handleKeyDown}
