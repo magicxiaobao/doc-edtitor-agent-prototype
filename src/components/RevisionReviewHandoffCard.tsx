@@ -36,7 +36,8 @@ interface RevisionReviewHandoffCardProps {
     snippet: EvidenceSnippet,
     fact?: Fact,
     adoptedEvidence?: AdoptedEvidenceRecord,
-    freezeDraftEvidence?: boolean
+    freezeDraftEvidence?: boolean,
+    contextDraft?: DraftVersion
   ) => void;
   onLocateBlock?: (blockId: string) => void;
   onCommentOnBlock?: (blockId: string) => void;
@@ -83,7 +84,7 @@ export const RevisionReviewHandoffCard: React.FC<RevisionReviewHandoffCardProps>
       contentFingerprint: JSON.stringify(evidence),
       capturedAt: evidence.capturedAt || '',
     };
-    onViewSnippet(snippet, undefined, frozen, true);
+    onViewSnippet(snippet, undefined, frozen, true, reviewBaseDraft);
   };
 
   // 1. If not a formal review baseline (e.g. no reviewBaseDraftId or fallback only)

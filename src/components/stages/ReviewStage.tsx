@@ -46,8 +46,11 @@ import {
   Check,
   ChevronRight,
   CornerDownRight,
-  Info
+  Info,
+  History
 } from 'lucide-react';
+import { ReviewRoundHistoryView } from '../ReviewRoundHistoryView';
+import { getReviewStageCommentCounts } from '../../services/reviewRoundHistoryService';
 
 interface ReviewStageProps {
   task: Task;
@@ -60,7 +63,8 @@ interface ReviewStageProps {
     snippet: EvidenceSnippet,
     fact?: Fact,
     adoptedEvidence?: AdoptedEvidenceRecord,
-    freezeDraftEvidence?: boolean
+    freezeDraftEvidence?: boolean,
+    contextDraft?: DraftVersion
   ) => void;
 }
 
@@ -124,6 +128,19 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
   const isReviewer = activeRole === '审阅乙' || activeRole === '审阅丁';
 
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
+
+  // Review round history view state
+  const [isViewingRoundHistory, setIsViewingRoundHistory] = useState(false);
+  const historyTriggerRef = React.useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    setIsViewingRoundHistory(false);
+  }, [task.id, currentDraft?.id]);
+
+  const commentCounts = useMemo(
+    () => getReviewStageCommentCounts(task, currentDraft, reviewBaseDraft),
+    [task, currentDraft, reviewBaseDraft]
+  );
 
   const handleLocateBaselineBlock = (blockId: string) => {
     const exists = (reviewBaseDraft || currentDraft)?.blocks.some(b => b.id === blockId);
@@ -398,6 +415,23 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     }
   };
 
+  if (isViewingRoundHistory) {
+    return (
+      <ReviewRoundHistoryView
+        task={task}
+        currentDraft={currentDraft}
+        activeRole={activeRole}
+        onExitHistory={() => {
+          setIsViewingRoundHistory(false);
+          setTimeout(() => {
+            historyTriggerRef.current?.focus();
+          }, 0);
+        }}
+        onViewSnippet={onViewSnippet}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -460,7 +494,7 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
       </div>
 
       {/* Review Round & Base Draft Reference Banner */}
-      <div className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+      <div className="bg-white border border-slate-200 p-3.5 rounded-lg shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-xs shrink-0">
             R{currentReviewRound}
@@ -479,9 +513,33 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             </div>
           </div>
         </div>
-        <div className="text-right text-xs text-slate-400">
-          <div>意见总数：{totalComments} 条（待处理 {pendingCommentsCount} 条）</div>
-          <div>意见针对基准版本提出，落实后记录落实版本与段落</div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-end">
+          <button
+            type="button"
+            ref={historyTriggerRef}
+            onClick={() => setIsViewingRoundHistory(true)}
+            data-testid="btn-open-round-history"
+            className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors shrink-0"
+            title="回看历次正式送审冻结版本、正文、交接摘要及该轮原始意见处理状态"
+          >
+            <History className="w-4 h-4 text-blue-700" />
+            <span>审阅轮次回看</span>
+          </button>
+
+          <div className="text-right text-xs text-slate-500 space-y-0.5 border-l border-slate-200/80 pl-3">
+            <div>
+              本轮原始意见：<strong className="text-slate-800 font-semibold">{commentCounts.currentRoundOriginalCount}</strong> 条
+              （待处理 <strong className="text-amber-700 font-semibold">{commentCounts.currentRoundUnclosedCount}</strong> 条）
+            </div>
+            <div>
+              当前工作稿适用未闭环：<strong className="text-amber-700 font-semibold">{commentCounts.applicableUnclosedCount}</strong> 条
+              （共适用 <strong className="text-slate-700 font-semibold">{commentCounts.applicableTotalCount}</strong> 条）
+            </div>
+            <div className="text-2xs text-slate-400">
+              意见总数：{commentCounts.applicableTotalCount} 条（待处理 {commentCounts.applicableUnclosedCount} 条）
+            </div>
+          </div>
         </div>
       </div>
 
@@ -523,9 +581,12 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
         <div className="col-span-12 lg:col-span-7 bg-white rounded-lg border border-slate-200 shadow-2xs p-5 space-y-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-2 border-b border-slate-100">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-xs text-slate-800">全部审阅意见清单</span>
+              <span className="font-bold text-xs text-slate-800">当前工作稿适用审阅意见清单</span>
               <span className="text-xs bg-slate-200 text-slate-700 px-1.5 py-0.2 rounded font-mono">
                 {activeReviewComments.length}
+              </span>
+              <span className="text-2xs text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded">
+                （含历次送审仍适用于当前工作稿的意见）
               </span>
             </div>
 

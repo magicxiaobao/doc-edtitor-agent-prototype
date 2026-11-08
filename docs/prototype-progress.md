@@ -1436,3 +1436,94 @@ PR #92将请求最新HEAD的Codex review，通过后依既有条件合并。#91�
 同时补充第30组，复现手动快照说明包含“提交审阅”时被识别为正式送审。正式基准现由实际送审元数据或旧版送审专用ID识别，人工说明不会产生送审身份。该组修复前失败，修复后通过。原18组断言保留。
 
 末次复跑四份Task28套件通过，独立31/31组；应用及四份测试严格类型、实际build和diff检查通过。完整37项等价回归及Demo11套结果见19.7，本次两处展示/识别修复后未重复其余无变化套件。最新HEAD仍须取得通过评审，首轮有发现的结论不作为最新HEAD通过依据。
+
+---
+
+## 20. 任务29：审阅轮次回看与意见归属（第一批：只读回看）交付记录
+
+### 20.1 基线与边界
+
+- **起始基线**：main 最新提交 `2b5b2f9b38dd731882ac4837eb90c037d4503d84`，包含任务28及PR #92接收修复。工作区保留既有未跟踪补丁和压缩包，不执行破坏性清理。
+- **分支命名**：`feat/task29-review-round-history`。
+- **目标与核心问题**：在阶段5集中回答：
+  1. 这轮送审的是哪个冻结版本？
+  2. 当时送审正文、事实依据和主笔核对情况是什么？
+  3. 哪些意见最初针对这轮提出，目前处理到什么状态？
+  4. 当前工作稿还有多少适用意见未闭环？
+- **严格只读边界**：本批实现纯只读回看能力。回看模式不提供新增意见、采纳、拒绝、落实、重新绑定、协调或再次送审操作；不增加新的审阅签批状态、轮次结束流程、批量关闭意见或跨轮自动迁移。不修改既有定稿门禁，pending、accepted_pending_implementation、need_discussion 继续按既有规则阻断定稿。
+
+### 20.2 核心设计与技术实现
+
+1. **服务层（`src/services/reviewRoundHistoryService.ts`）**：
+   - `getFormalReviewBaselines`：严格列出当前工作稿适用范围内的正式送审基准。通过 `getApplicableReviewDraftIds(task, currentDraft)` 严格限制在当前工作稿的历史血统链条内；仅将具备不可变历史快照属性（`isHistoricalSnapshot === true && !isWorkingDraft && !d.isFinal`）且拥有真实送审标识（ID 匹配 `DRAFT-SNAP-REV-` 或具备有效数字 `submittedReviewRound > 0`）的版本识别为正式基准。普通手动快照（即便说明包含“提交审阅”文字）、可编辑工作稿及定稿均被严格排除。
+   - `getRoundDisplayName`：正式基准缺失 `submittedReviewRound` 时返回“轮次未知”，绝不借用当前任务轮次，也不根据数组顺序推断。相同轮次数字的不同基准（若存在）通过版本号明确区分，不合并为单个条目。
+   - `getBaselineAttributedComments`：原始归属以意见创建时的初始 `targetVersionId` 与基准快照 ID 匹配为唯一判定依据。不按 `createdAt`、显示名称或当前轮次推断，不因重新绑定（`rebindRecord`）改变原始归属。若意见经过重新绑定，同时保留原始基准与当前处理目标显示。
+   - `getUnattributedReviewComments`：单独归集非正式原稿意见、来源基准缺失或无法归属的历史旧意见，提供独立警示卡片，既不静默丢弃，也不计入所选正式轮次的意见。
+   - `getReviewStageCommentCounts`：精确计算当前轮次原始意见数与当前工作稿适用未闭环意见数。
+2. **只读回看组件（`src/components/ReviewRoundHistoryView.tsx`）**：
+   - 包含明确的“返回当前审阅工作区”入口按钮及清晰免责声明：“意见当前处理状态，不代表该轮结束时的冻结结论。”
+   - 顶部提供正式送审基准页签切换（支持键盘左右箭头及 Tab 导航），展示基准版本号、送审人、送审时间、来源工作稿版本。
+   - 复用任务28交接卡（`RevisionReviewHandoffCard`），传递所选历史基准作为 `reviewBaseDraft`，保证冻结交接摘要、事实前后值及主笔核对情况严格读取该快照的冻结记录。
+   - 左右双栏布局：左侧展示原始归属该轮的意见清单（标明原始归属与当前处理状态，无任何采纳/拒绝/落实操作按钮）；右侧展示该送审基准的完整只读正文（禁止直接编辑）。
+   - 段落定位依据稳定 Block ID；若段落已被删除，明确提示“该段落在所选送审基准中不存在或已被调整”，不按数组索引强行定位。
+   - 支持键盘 `Escape` 关闭回看视图并平滑恢复焦点到触发按钮。
+3. **出处抽屉上下文版本隔离（`src/App.tsx` & `RevisionReviewHandoffCard.tsx`）**：
+   - `RevisionReviewHandoffCard` 的 `onViewSnippet` 回调支持传入上下文草稿 `contextDraft`，点击出处时将 `reviewBaseDraft` 传递给全局 `SnippetDrawer`。
+   - 在 R1 回看中查看事实出处时，抽屉内对照版本严格显示为 R1 送审基准版本，绝不显示为 R2 或最新工作稿。
+4. **阶段5界面集成（`src/components/stages/ReviewStage.tsx`）**：
+   - 在轮次横条右侧增加紧凑入口按钮“审阅轮次回看”（`data-testid="btn-open-round-history"`）。
+   - 轮次横条区分显示“本轮原始意见数”与“当前工作稿适用未闭环数”，并将意见清单标题更名为“当前工作稿适用审阅意见清单”。
+
+### 20.3 真实组件交互路径验证
+
+通过挂载真实 App 组件从首页演练完整交互链路：
+1. 从首页创建独立演示任务 `TASK-DEMO-REVISION-REVIEW-HANDOFF`，进入材料与事实阶段裁决事实，确认事实与大纲。
+2. 生成修订候选并采纳，在正文起草阶段完成事实修订核对（1段已核对、1段暂缓）。
+3. 提交第一轮审阅（R1），生成冻结送审基准快照。
+4. 进入审阅阶段，由审阅乙针对 BLK-01 提出批注（`CMT-R1`，绑定 R1 基准）。
+5. 主笔返回正文起草，对 BLK-01 进行二次编辑，并再次提交第二轮审阅（R2），生成新冻结基准快照。
+6. 进入审阅阶段，由审阅丁针对 BLK-01 提出新批注（`CMT-R2`，绑定 R2 基准）。
+7. 点击“审阅轮次回看”按钮，进入独立只读回看视图。
+8. 切换回看 R1：交接卡完整展示 R1 冻结核对状态（已核对1、暂缓1、待处理2），出处抽屉显示 R1 基准版本；意见区仅展示 `CMT-R1`，状态为待处理，无操作按钮。
+9. 切换回看 R2：交接卡展示 R2 冻结状态，意见区仅展示 `CMT-R2`。
+10. 点击“返回当前审阅工作区”，工作区恢复为可操作状态，可正常针对当前基准新增意见。
+11. 验证整个回看切换过程中，任务指针 `currentDraftId`、`reviewBaseDraftId`、`currentReviewRound`、各草稿正文及核对记录完全未发生任何改动。
+
+### 20.4 自动化回归与验收结果
+
+所有测试均明确标注为实施方自测（测试套件与执行脚本）：
+
+1. **任务29 实施方业务验收套件（`test-task29.tsx`，对应 `npm run test:task29`）**：
+   - 用例覆盖：
+     - Case A: 正式送审基准识别与非正式快照隔离
+     - Case B: 缺失轮次显示“轮次未知”且不借用当前轮次
+     - Case C: 相同轮次不同基准版本区分不合并
+     - Case D: 原始意见轮次归属与重绑定标识
+     - Case E: 无法归属与非正式原稿意见单独说明
+     - Case F: 冻结交接摘要与正文严格保真，当前意见状态不反写历史
+     - Case G: 阶段5意见计数区分（当前轮次原始 vs 工作稿适用未闭环）
+     - Case H: 只读纯净性与指针隔离（不修改任何指针、正文及草稿）
+     - Case I: 出处抽屉上下文版本对齐（回看R1不显示R2或工作稿）
+     - Case J: 真实组件挂载完整多轮交互演练与持久化验证
+   - 运行结果：**10/10 组大项全部 PASSED (100% 通过)**。
+2. **任务29 实施方验收收据套件（`test-task29-receipt.tsx`，对应 `npm run test:task29:receipt`）**：
+   - 用例覆盖：5 项核心验收凭据全部执行并断言通过。
+   - 运行结果：**5/5 PASSED (100% 通过)**。
+3. **任务28 全量回归（`test-task28.tsx`、`test-task28-codex-independent.tsx`、`test-task28-implementation-extra.tsx`）**：
+   - 独立 31 组断言：**31/31 PASSED (100% 通过)**。
+   - 实施方测试套件：全部通过。
+4. **既有演练套件回归（Demo 11 套）**：
+   - `test-demo-drafting.tsx`、`test-demo-export-provenance.tsx`、`test-demo-followup.tsx`、`test-demo-journey.tsx`、`test-demo-materials.tsx`、`test-demo-panels.tsx`、`test-demo-rag.tsx`、`test-demo-review.ts`、`test-demo-source-view.tsx`、`test-demo-versions.tsx`、`test-demo-wording.tsx` 全量 11 套运行全部通过。
+5. **代码质量与构建门禁**：
+   - `npx tsc --noEmit`（针对新增测试文件及全局应用）：**0 错误**。
+   - `npm run typecheck`：**0 错误**。
+   - `npm run lint`：**0 错误**。
+   - `git diff --check`：**0 格式/空白异常**。
+   - `npm run build`：生产环境打包成功（dist/assets 产物无报错）。
+
+### 20.5 客观保留事项与未执行范围
+
+1. **本批范围限定**：仅实施任务29第一批“只读回看与意见归属”，未实现跨轮自动迁移、批量关闭意见、新签批状态或轮次结束流程。
+2. **客户端真实环境**：真实桌面 Microsoft Word / WPS Office 本地打开排版表现，以及宿主真实云浏览器多分辨率截屏，保持 NOT_RUN 状态待后续专项目标验证。
+3. **既有 Issue 跟踪**：Issue #57 继续 Open 跟踪剩余范围，本交付不擅自关闭或合并。
+
