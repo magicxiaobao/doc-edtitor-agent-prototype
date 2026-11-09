@@ -1631,3 +1631,104 @@ Codex增加16–24组后先复现9个失败边界，再最小修复：
 - 实际 `npm run build` 通过（JS 1,433.19kB），保留既有大于500kB分块提示；`git diff --check`通过。
 
 此为源码、服务/JSDOM组件及构建接收结论；没有执行本批云浏览器验收。接收修复推送后应请求最新HEAD的Codex review，取得通过且无未解决问题后方可按既有授权合并；合并后待用户确认AI Studio同步再进行限定云浏览器复验。Issue #94暂保持Open，#57继续Open；桌面Word/WPS及独立读屏保持NOT_RUN。
+
+---
+
+## 21. 任务30 交付进展：单条审阅意见处理履历与落实凭据（第一批）
+
+- **开发分支**：`feat/task30-review-comment-audit-trail`
+- **基线 main 提交**：`27900d1de10c1f8f2a111ced69967ca25b915615`
+- **目标概述**：
+  为单条审阅意见（`ReviewComment`）建立端到端、只读可查、结构化持久化的处理履历与真实写入凭据（`ReviewCommentAuditEvent[]`）。
+  解决用户针对一条审阅意见能查明：原始归属版本/轮次/段落、研判与沟通说明、重绑流转、实际写入正文凭据（修改日志ID、稳定段落ID、落实前正文与实际写入正文），以及安全撤销精准回滚与关联凭据。
+
+### 21.1 核心数据结构与通道实现
+
+1. **类型定义与事件结构（`src/types/index.ts`）**：
+   - 动作枚举 `ReviewCommentActionType`：`'accept_pending' | 'discuss' | 'reject' | 'rebind' | 'implement' | 'undo'`；
+   - 履历事件 `ReviewCommentAuditEvent`：
+     - `eventId`、`operationId`、`seq`、`timestamp`、`taskId`、`commentId`；
+     - 操作角色 `operatorRole` 与显示名称 `operatorName`；
+     - 操作所在工作稿及版本 `draftId`、`draftVersionNumber`；
+     - 原始提出归属 `originalVersionId`、`originalVersionNumber`、`originalBlockId`、`originalBlockOrder`；
+     - 当前处理目标 `targetDraftId`、`targetBlockId`、`targetBlockOrder`；
+     - 说明与理由 `authorReply`、`decisionReason`、`notes`；
+     - 状态快照 `beforeStatus`、`afterStatus`、`beforeSnapshot`、`afterSnapshot`；
+     - 正文落实字段：`modificationLogId`、`blockId`、`beforeContent`、`afterContent`、`implementationSource`、`implementationLabel`；
+     - 安全撤销关联：`undoneEventId`、`undoneOperationId`、`undoneModificationLogId`、`undoReason`。
+   - `ReviewComment` 增加可选持久化字段 `events?: ReviewCommentAuditEvent[]`（兼容别名 `auditTrail`）。
+
+2. **核心领域服务（`src/services/reviewCommentAuditService.ts`）**：
+   - `appendCommentAuditEvent`：事件递增排序与重复提交防抖（同 `eventId` 或同一瞬间相同动作直接幂等过滤）；
+   - `recordCommentDecisionAuditEvent`：记录“决定采纳但待落实”（`accept_pending`）、“标记待沟通”（`discuss`）及“拒绝意见并说明”（`reject`）；
+   - `recordCommentRebindAuditEvent`：记录人工重新指定目标段落（`rebind`），原始 `targetBlockId` 保持不变，单独记录新目标；
+   - `recordCommentImplementationAuditEvent`：记录真实写入正文事件（`implement`），保存完整正文修改前/修改后字符串快照及关联日志ID；
+   - `recordCommentUndoAuditEvent`：记录安全撤销事件（`undo`），保留历史落实记录，明确关联被撤销落实事件及修改日志；
+   - `getCommentAuditTrail`：纯只读安全提取，过滤损坏/空项，旧数据缺失时不反推伪造历史。
+
+3. **真实生产写入通道梳理与接入**：
+
+| 通道序号 | 业务动作 | 对应服务与函数 | 记录动作类型 | 是否改写正文 | 写入凭据内容 |
+| :---: | :--- | :--- | :---: | :---: | :--- |
+| **通道 1** | 决定采纳但待落实 | `reviewCoordinationService.ts` -> `updateReviewCommentDecision('accepted_pending_implementation')` | `accept_pending` | 否 | 状态流转为待落实，不记录正文，仍阻断定稿 |
+| **通道 2** | 标记待沟通及更新回复 | `reviewCoordinationService.ts` -> `updateReviewCommentDecision('need_discussion')` | `discuss` | 否 | 记录沟通说明与回复，状态流转为待沟通，仍阻断定稿 |
+| **通道 3** | 拒绝并说明理由 | `reviewCoordinationService.ts` -> `updateReviewCommentDecision('rejected')` | `reject` | 否 | 强制校验业务拒绝理由并随意见存证归档 |
+| **通道 4** | 人工重新指定目标段落 | `reviewCoordinationService.ts` -> `rebindReviewCommentTargetBlock` | `rebind` | 否 | 原始提出归属保留，记录当前有效目标段落与重绑原因 |
+| **通道 5a** | 阶段05 审阅直接落实 | `reviewCoordinationService.ts` -> `implementReviewCommentWithText` | `implement` | **是** | 记录真实写入正文、修改日志ID、段落ID、落实前/后完整文本 |
+| **通道 5b** | 阶段04 采纳建议/替换稿 | `draftLifecycleService.ts` -> `adoptParagraphSuggestion`（关联 `sourceCommentId`） | `implement` | **是** | 区分审阅人替换稿/AI建议/人工微调，记录修改前/后完整正文与日志ID |
+| **通道 5c** | 审阅协调决策应用 | `reviewCoordinationService.ts` -> `applyCoordinationDecision` | `implement` 或 `accept_pending` | **是** | 仅实际替换该段正文的意见记 `implement`，其他协调意见记 `accept_pending`（共用 `coordinationOpId`，不伪造正文改写） |
+| **通道 6** | 正文修改安全撤销 | `draftLifecycleService.ts` -> `undoSafeParagraphModification`（关联意见） | `undo` | **是（回滚）** | 保留此前落实事件，追加撤销事件，关联被撤销落实事件ID与日志ID，状态精准回滚 |
+
+4. **存储与持久化防御（`src/services/storageService.ts`）**：
+   - 模式迁移与数据加载保留并净化 `events` 数组；
+   - 旧历史意见无履历时安全加载，绝不损坏任务数据或伪造历史。
+
+5. **统一只读展示组件（`src/components/ReviewCommentAuditTrailModal.tsx`）**：
+   - 顶部三栏结构卡片：
+     - **原始提出归属**：提出轮次、版本ID、原始段落编号及提出时基准原句；
+     - **当前处理目标**：当前目标稿、当前段落编号（如已重绑则醒目标注）、失效/丢失段落提示；
+     - **当前处理状态**：最新状态徽章、最新主笔回复、最近落实时间；
+   - **轮次回看上下文提示横幅**：
+     “展示该意见当前处理履历，可能包含本轮送审后的处理，不代表本轮结束时的冻结结论。”
+   - **事件时间线**：按序号递增与真实时序排列，展示动作标签、状态流转（before -> after）、操作人、时间戳、操作说明；
+   - **正文落实与撤销比对**：
+     - 正文落实事件支持展开查看完整“落实前正文”与“实际落实正文”，展示字数统计及关联修改日志ID；即使修改日志由于20条策略归档，保存在事件中的正文快照依然完整可查；
+     - 安全撤销事件清晰标注撤销原因及被撤销的落实事件ID；
+   - **旧数据兼容**：若历史意见无事件记录，呈现“此前处理履历未完整记录”提示，保留当前已知状态与答复。
+   - **只读约束**：弹窗无任何直接修改状态、删除事件或单独回滚按钮，严守只读安全边界。
+
+6. **多入口无缝集成**：
+   - **阶段05 审阅阶段（`ReviewStage.tsx`）**：每张意见卡片均配备紧凑“处理履历”按钮；
+   - **阶段04 起草检查面板（`DraftingInspectorContent.tsx` / `DraftingStage.tsx`）**：在审阅意见列表与右侧检查抽屉中均配备“处理履历”按钮；
+   - **轮次回看视图（`ReviewRoundHistoryView.tsx`）**：在送审基准意见列表及非正式适用意见列表中均配备“处理履历”按钮，以 `isHistoricalContext=true` 传参渲染显著提醒。
+
+### 21.2 自动化测试与验证
+
+- **专项综合测试套件（`test-task30.tsx`）**：
+  - Group A: 多次研判与沟通记录前后状态、理由和操作人；
+  - Group B: 决定采纳但待落实通道验证；
+  - Group C: 真实写入通道与前/后正文真实存证（直接落实、替换稿采纳、协调决策）；
+  - Group D: 人工重指定目标段落保留原始归属与新目标；
+  - Group E: 安全撤销后正文恢复、意见恢复、履历追加撤销凭据并支持重新落实；
+  - Group F: 历史稿 `frozenReviewComments` 深度隔离与轮次回看说明；
+  - Group G: 旧数据无履历安全加载、损坏事件容错；
+  - Group H: 重复提交防抖与幂等性保护；
+  - Group I: 查看与交互零副作用；
+  - Group J: 修改日志超20条后凭据依然完整保留正文快照；
+  - Group K: 真实组件挂载与交互履历弹窗展示；
+  - Group L: 定稿规则无回归（待落实与待沟通继续阻断定稿）。
+- **核心验收凭据套件（`test-task30-receipt.tsx`）**：
+  - 凭据 1: 原始归属版本、正式轮次、原始段落与基准文本严格存证不被改写；
+  - 凭据 2: 研判、沟通、重绑和落实完整时序链条及操作说明记录；
+  - 凭据 3: 每次事件包含明确操作人、时间戳、前后状态及业务说明；
+  - 凭据 4: 正文落实事件包含修改日志ID、稳定段落ID、落实前正文与实际写入正文；
+  - 凭据 5: 安全撤销保留此前落实记录，准确关联被撤销落实事件与修改日志，状态精准回滚；
+  - 凭据 6: 轮次回看说明提示与历史稿冻结履历不受后续工作稿篡改。
+- **全量回归结果**：
+  - `node --import tsx test-task30.tsx`：全部 12 组 PASSED；
+  - `node --import tsx test-task30-receipt.tsx`：全部 6 项凭据 PASSED；
+  - `npm run test:task28:codex-independent`：31/31 PASSED；
+  - `npm run test:task29:codex-independent`：26/26 PASSED；
+  - `npm run test:demo`：11 套全量 PASSED；
+  - `npm run typecheck` & `npm run lint`：0 错误；
+  - `npm run build`：生产构建成功。

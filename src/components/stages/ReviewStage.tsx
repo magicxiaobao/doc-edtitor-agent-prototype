@@ -24,9 +24,12 @@ import {
   implementReviewCommentWithText,
   getReviewCommentLocation,
   rebindReviewCommentTargetBlock,
-  interpretReviewCommentSuggestion
+  interpretReviewCommentSuggestion,
+  recordCoordinationStrategyDecision
 } from '../../services/reviewCoordinationService';
 import { applyDraftContentChange, getApplicableReviewComments, resolveCurrentReviewBase } from '../../services/draftLifecycleService';
+import { ReviewCommentAuditTrailModal } from '../ReviewCommentAuditTrailModal';
+import { getCommentAuditTrail } from '../../services/reviewCommentAuditService';
 import { 
   MessageSquare, 
   UserCheck, 
@@ -132,13 +135,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
 
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
 
+  // Single comment audit trail modal state
+  const [auditTrailComment, setAuditTrailComment] = useState<ReviewComment | null>(null);
+
   // Review round history view state
   const [isViewingRoundHistory, setIsViewingRoundHistory] = useState(false);
   const historyTriggerRef = React.useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setIsViewingRoundHistory(false);
-  }, [task.id, currentDraft?.id]);
+    setAuditTrailComment(null);
+  }, [task.id, currentDraft?.id, activeRole]);
 
   const commentCounts = useMemo(
     () => getReviewStageCommentCounts(task, currentDraft, reviewBaseDraft),
@@ -369,21 +376,15 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
     if (!currentDraft || !currentCoordinationDiff) return;
 
     if (mode === 'strategy_only') {
-      // Record strategy decision only; status remains accepted_pending_implementation
-      const updatedComments = task.reviewComments.map((c) => {
-        if (coordinationCommentIds.includes(c.id)) {
-          return {
-            ...c,
-            status: 'accepted_pending_implementation' as const,
-            authorReply: `【主笔协调裁决策略·待落实】：${currentCoordinationDiff.strategyExplanation}`,
-            decisionReason: strategyReason.trim() || currentCoordinationDiff.strategyExplanation,
-            resolutionType: 'strategy_decided' as const,
-          };
-        }
-        return c;
-      });
-
-      onUpdateTask({ reviewComments: updatedComments });
+      const { updatedTask } = recordCoordinationStrategyDecision(
+        task,
+        currentDraft.id,
+        currentCoordinationDiff,
+        strategyReason,
+        activeRole,
+        coordinationCommentIds
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
       setShowContradictionModal(false);
       return;
     }
@@ -659,29 +660,41 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
                       </div>
 
                       {/* Requirement 5: Clear distinct status pills. Only decision -> NOT "已采纳修改" */}
-                      <span
-                        className={`text-xs px-2.5 py-0.5 rounded font-medium ${
-                          cmt.status === 'implemented'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setAuditTrailComment(cmt)}
+                          data-testid={`btn-audit-trail-${cmt.id}`}
+                          className="px-2 py-0.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                          title="查看该审阅意见的完整研判、重绑与落实处理履历"
+                        >
+                          <History className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>处理履历{getCommentAuditTrail(cmt).length > 0 ? ` (${getCommentAuditTrail(cmt).length})` : ''}</span>
+                        </button>
+                        <span
+                          className={`text-xs px-2.5 py-0.5 rounded font-medium ${
+                            cmt.status === 'implemented'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : cmt.status === 'accepted_pending_implementation'
+                              ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                              : cmt.status === 'rejected'
+                              ? 'bg-slate-200 text-slate-700'
+                              : cmt.status === 'need_discussion'
+                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-300'
+                          }`}
+                        >
+                          {cmt.status === 'implemented'
+                            ? '已修改·正文已落实'
                             : cmt.status === 'accepted_pending_implementation'
-                            ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                            ? '决定采纳·待落实正文'
                             : cmt.status === 'rejected'
-                            ? 'bg-slate-200 text-slate-700'
+                            ? '拒绝采纳'
                             : cmt.status === 'need_discussion'
-                            ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                            : 'bg-amber-100 text-amber-800 border border-amber-300'
-                        }`}
-                      >
-                        {cmt.status === 'implemented'
-                          ? '已修改·正文已落实'
-                          : cmt.status === 'accepted_pending_implementation'
-                          ? '决定采纳·待落实正文'
-                          : cmt.status === 'rejected'
-                          ? '拒绝采纳'
-                          : cmt.status === 'need_discussion'
-                          ? '沟通讨论中'
-                          : '待主笔处理'}
-                      </span>
+                            ? '沟通讨论中'
+                            : '待主笔处理'}
+                        </span>
+                      </div>
                     </div>
 
                     <p className="text-sm text-slate-800 leading-relaxed font-medium">{cmt.content}</p>
@@ -1503,6 +1516,17 @@ export const ReviewStage: React.FC<ReviewStageProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {auditTrailComment && (
+        <ReviewCommentAuditTrailModal
+          isOpen={Boolean(auditTrailComment)}
+          onClose={() => setAuditTrailComment(null)}
+          comment={auditTrailComment}
+          task={task}
+          currentDraft={currentDraft}
+          activeRole={activeRole}
+        />
       )}
     </div>
   );

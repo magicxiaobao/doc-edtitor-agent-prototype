@@ -680,6 +680,65 @@ export interface ReviewNavigationIntent {
 
 export type ReviewSuggestionType = 'instruction' | 'replacement';
 
+export type ReviewCommentActionType =
+  | 'accept_pending' // 决定采纳但待落实
+  | 'discuss'        // 标记待沟通 / 更新处理回复
+  | 'reject'         // 拒绝并说明理由
+  | 'rebind'         // 人工重新指定目标段落
+  | 'implement'      // 正文实际落实 (包括审阅直接落实、建议采纳、替换稿采纳、协调方案采纳)
+  | 'undo';          // 对关联意见的正文修改执行既有安全撤销
+
+export interface ReviewCommentAuditEvent {
+  eventId: string;             // 稳定 eventId (e.g. RCAE-...)
+  operationId: string;         // 稳定 operationId (关联操作ID)
+  seq: number;                 // 稳定递增序号 (1, 2, 3...)
+  taskId: string;
+  commentId: string;
+  actionType: ReviewCommentActionType;
+  actionLabel: string;         // 动作显示名称
+  operatorRole: UserRole;      // 实际操作角色 (如 "主笔甲")
+  operatorName: string;        // 实际操作人显示名称
+  timestamp: string;           // 操作时间 (ISO string)
+  draftId: string;             // 操作所在工作稿ID
+  draftVersionNumber?: string; // 操作所在工作稿版本号
+
+  // 原始提出归属
+  originalVersionId: string;
+  originalVersionNumber?: string;
+  originalBlockId?: string;
+  originalBlockOrder?: number;
+
+  // 本次实际处理目标
+  targetDraftId?: string;
+  targetBlockId?: string;
+  targetBlockOrder?: number;
+
+  // 当次说明与回复
+  authorReply?: string;
+  decisionReason?: string;
+  notes?: string;
+
+  // 状态快照
+  beforeStatus: ReviewCommentStatus;
+  afterStatus: ReviewCommentStatus;
+  beforeSnapshot?: ReviewCommentSnapshotBeforeChange;
+  afterSnapshot?: ReviewCommentSnapshotAfterChange;
+
+  // 若实际改写正文
+  modificationLogId?: string;  // 关联修改日志ID
+  blockId?: string;            // 稳定Block ID
+  beforeContent?: string;      // 完整落实前正文
+  afterContent?: string;       // 完整实际落实正文
+  implementationSource?: ModificationSource | string;
+  implementationLabel?: string; // 来源类型说明
+
+  // 若安全撤销
+  undoneEventId?: string;      // 被撤销的落实事件ID
+  undoneOperationId?: string;  // 被撤销的落实operationId
+  undoneModificationLogId?: string; // 被撤销的修改日志ID
+  undoReason?: string;         // 撤销理由
+}
+
 export interface ReviewComment {
   id: string;
   type: 'overall' | 'paragraph';
@@ -706,6 +765,8 @@ export interface ReviewComment {
   implementedAt?: string;              // 落实时间
   decisionReason?: string;             // 采纳决定/拒绝/协调理由
   resolutionType?: 'text_modified' | 'strategy_decided' | 'rejected' | 'communicated';
+  events?: ReviewCommentAuditEvent[];  // 单条审阅意见处理履历事件列表 (按发生顺序追加)
+  auditTrail?: ReviewCommentAuditEvent[]; // 履历别名 (保证向前兼容)
 }
 
 export type AuditIssueType = 

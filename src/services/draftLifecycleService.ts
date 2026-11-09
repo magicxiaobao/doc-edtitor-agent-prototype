@@ -29,6 +29,10 @@ import {
   validateSelectedMaterialsQuantitativeClaims,
   arePeriodsStrictlyIdentical
 } from './materialSupplementService';
+import {
+  recordCommentImplementationAuditEvent,
+  recordCommentUndoAuditEvent,
+} from './reviewCommentAuditService';
 
 export function freezeFactReviews(task:Task,draft:DraftVersion): Pick<DraftVersion,
   'factReviewRecords'|'sourceFactReviewRecords'|'factReviewRecovery'|'frozenFactReviewOverview'> {
@@ -1545,6 +1549,21 @@ export function adoptParagraphSuggestion(
     ? writtenBlock.revisionSeq
     : ((targetBlock.revisionSeq || 0) + 1);
 
+  // Determine modification source with clear reviewer replacement distinction
+  const logSource: ModificationSource = isMaterialSupplementation
+    ? isFineTuned
+      ? 'material_supplementation_fine_tuned'
+      : 'material_supplementation'
+    : isReviewerReplacement
+    ? isFineTuned
+      ? 'reviewer_replacement_fine_tuned'
+      : 'reviewer_replacement'
+    : isFineTuned
+    ? 'ai_suggestion_fine_tuned'
+    : 'ai_suggestion';
+
+  const logId = `MOD-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
   // If associated with a review comment, record previous comment state and update ONLY this comment
   let previousCommentState: ReviewCommentSnapshotBeforeChange | undefined;
   let postAdoptionCommentState: ReviewCommentSnapshotAfterChange | undefined;
@@ -1580,10 +1599,29 @@ export function adoptParagraphSuggestion(
         : suggestion.diffExplanation;
       const implementedAt = new Date().toISOString();
 
+      const implementationLabel = isReviewerReplacement
+        ? (isFineTuned ? '审阅替换稿（人工微调）' : '审阅替换稿')
+        : (isFineTuned ? '修改建议（人工微调）' : '修改建议');
+
       updatedComments = taskWithModifiedDraft.reviewComments.map((cmt) => {
         if (cmt.id === suggestion.sourceCommentId) {
+          const recordedCmt = recordCommentImplementationAuditEvent(cmt, {
+            taskId: task.id,
+            draft: workingDraft,
+            blockId: targetBlock.id,
+            blockOrder: targetBlock.order,
+            beforeContent: targetBlock.content,
+            afterContent: finalContent,
+            modificationLogId: logId,
+            implementationSource: logSource,
+            implementationLabel,
+            operatorRole: activeRole,
+            authorReply: adoptedReply,
+            decisionReason: adoptedDecisionReason,
+          });
+
           const updatedCmt: ReviewComment = {
-            ...cmt,
+            ...recordedCmt,
             status: 'implemented' as const,
             authorReply: adoptedReply,
             decisionReason: adoptedDecisionReason,
@@ -1615,22 +1653,9 @@ export function adoptParagraphSuggestion(
     }
   }
 
-  // Determine modification source with clear reviewer replacement distinction
-  const logSource: ModificationSource = isMaterialSupplementation
-    ? isFineTuned
-      ? 'material_supplementation_fine_tuned'
-      : 'material_supplementation'
-    : isReviewerReplacement
-    ? isFineTuned
-      ? 'reviewer_replacement_fine_tuned'
-      : 'reviewer_replacement'
-    : isFineTuned
-    ? 'ai_suggestion_fine_tuned'
-    : 'ai_suggestion';
-
   // Create modification log entry
   const logEntry: ParagraphModificationLog = {
-    id: `MOD-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+    id: logId,
     taskId: task.id,
     draftId: workingDraft.id,
     blockId: targetBlock.id,
@@ -1901,8 +1926,17 @@ export function undoSafeParagraphModification(
     const prev = log.previousCommentState;
     updatedComments = taskWithRevertedDraft.reviewComments.map((cmt) => {
       if (cmt.id === log.associatedCommentId) {
-        return {
-          ...cmt,
+        const recordedCmt = recordCommentUndoAuditEvent(cmt, {
+          taskId: task.id,
+          draft: workingDraft,
+          undoneModificationLogId: log.id,
+          restoredStatus: prev.status,
+          operatorRole: activeRole,
+          undoReason: '主笔安全撤销最近局部采纳修改（已精准恢复原正文与关联意见状态）',
+        });
+
+        const baseCmt: ReviewComment = {
+          ...recordedCmt,
           status: prev.status,
           authorReply: prev.authorReply,
           decisionReason: prev.decisionReason,
@@ -1912,6 +1946,7 @@ export function undoSafeParagraphModification(
           implementationBlockId: prev.implementationBlockId,
           implementedAt: prev.implementedAt,
         };
+        return baseCmt;
       }
       return cmt;
     });

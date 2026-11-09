@@ -28,6 +28,8 @@ import {
   CornerDownRight,
   ShieldAlert,
 } from 'lucide-react';
+import { ReviewCommentAuditTrailModal } from './ReviewCommentAuditTrailModal';
+import { getCommentAuditTrail } from '../services/reviewCommentAuditService';
 
 export interface ReviewRoundHistoryViewProps {
   task: Task;
@@ -64,6 +66,9 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
   const [commentFilter, setCommentFilter] = useState<'all' | ReviewCommentStatus>('all');
   const [reviewerFilter, setReviewerFilter] = useState<'all' | '审阅乙' | '审阅丁'>('all');
 
+  // Single review comment audit trail modal state
+  const [auditTrailComment, setAuditTrailComment] = useState<ReviewComment | null>(null);
+
   const highlightTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const tabButtonRefs = React.useRef<Map<string, HTMLButtonElement>>(new Map());
 
@@ -78,6 +83,7 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
       highlightTimeoutRef.current = null;
     }
     setHighlightedBlockId(null);
+    setAuditTrailComment(null);
     return () => {
       if (highlightTimeoutRef.current) {
         clearTimeout(highlightTimeoutRef.current);
@@ -574,9 +580,20 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                               </div>
                             )}
 
-                            {/* Locate Block Action */}
-                            {cmt.type === 'paragraph' && cmt.targetBlockId && (
-                              <div className="pt-1 flex justify-end">
+                            {/* Actions: Audit Trail & Locate Block */}
+                            <div className="pt-1 flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setAuditTrailComment(cmt)}
+                                data-testid={`btn-audit-trail-history-${cmt.id}`}
+                                className="px-2.5 py-1 text-slate-700 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 rounded text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                                title="查看该意见处理履历与落实凭据"
+                              >
+                                <History className="w-3.5 h-3.5 text-slate-500" />
+                                <span>处理履历</span>
+                              </button>
+
+                              {cmt.type === 'paragraph' && cmt.targetBlockId && (
                                 <button
                                   type="button"
                                   onClick={() => handleLocateHistoricalBlock(cmt.targetBlockId!)}
@@ -586,8 +603,8 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                                   <MapPin className="w-3.5 h-3.5" />
                                   <span>在送审正文中定位</span>
                                 </button>
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </div>
                         );
                       })
@@ -669,13 +686,34 @@ export const ReviewRoundHistoryView: React.FC<ReviewRoundHistoryViewProps> = ({
                   </span>
                 </div>
                 <p className="text-slate-800">{comment.content}</p>
-                <div className="text-2xs text-slate-400 font-mono">
-                  原记录目标版本ID：{comment.targetVersionId} · 当前状态：{comment.status}
+                <div className="flex items-center justify-between text-2xs text-slate-400 font-mono">
+                  <span>原记录目标版本ID：{comment.targetVersionId} · 当前状态：{comment.status}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAuditTrailComment(comment)}
+                    data-testid={`btn-audit-trail-unattributed-${comment.id}`}
+                    className="px-2 py-0.5 text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded text-2xs font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <History className="w-3 h-3 text-slate-500" />
+                    <span>查看履历</span>
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {/* Audit Trail Modal */}
+      {auditTrailComment && (
+        <ReviewCommentAuditTrailModal
+          isOpen={Boolean(auditTrailComment)}
+          comment={auditTrailComment}
+          task={task}
+          onClose={() => setAuditTrailComment(null)}
+          isHistoricalContext={true}
+          historicalRoundNumber={selectedBaseline?.submittedReviewRound}
+        />
       )}
     </div>
   );

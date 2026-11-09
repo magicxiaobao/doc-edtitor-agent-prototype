@@ -14,6 +14,12 @@ import {
 } from '../types';
 import { applyDraftContentChange } from './draftLifecycleService';
 import { checkPermission } from './permissionService';
+import {
+  recordCommentDecisionAuditEvent,
+  recordCommentRebindAuditEvent,
+  recordCommentImplementationAuditEvent,
+  createAuditOperationId,
+} from './reviewCommentAuditService';
 
 function commentState(c: ReviewComment) {
   return { status: c.status, authorReply: c.authorReply, decisionReason: c.decisionReason,
@@ -22,14 +28,22 @@ function commentState(c: ReviewComment) {
     implementedAt: c.implementedAt, currentBlockId: c.currentBlockId, targetBlockId: c.targetBlockId,
     reboundAt: c.rebindRecord?.reboundAt };
 }
-function recordReviewChanges(beforeTask: Task, afterTask: Task, before: DraftVersion, after: DraftVersion, commentId?: string): Task {
+function recordReviewChanges(
+  beforeTask: Task,
+  afterTask: Task,
+  before: DraftVersion,
+  after: DraftVersion,
+  commentId?: string,
+  customLogId?: string
+): Task {
   const entries: ParagraphModificationLog[] = [];
   for (const block of after.blocks) {
     const old = before.blocks.find(b => b.id === block.id);
     if (!old || old.content === block.content) continue;
     const previous = beforeTask.reviewComments.find(c => c.id === commentId);
     const current = afterTask.reviewComments.find(c => c.id === commentId);
-    entries.push({ id: `MOD-REVIEW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, taskId: afterTask.id,
+    const logId = (customLogId && entries.length === 0) ? customLogId : `MOD-REVIEW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    entries.push({ id: logId, taskId: afterTask.id,
       draftId: after.id, blockId: block.id, blockOrder: block.order, timestamp: new Date().toISOString(),
       source: 'review_implementation', sourceDescription: commentId ? '主笔直接落实审阅意见' : '主笔落实冲突协调方案',
       beforeContent: old.content, afterContent: block.content, status: 'applied',
@@ -346,19 +360,49 @@ export function applyCoordinationDecision(
     authorRole
   );
 
+  const coordinationOpId = createAuditOperationId();
+
   // A generic strategy is not proof that an arbitrary opinion has been fulfilled.
   const updatedComments = taskWithNewDraft.reviewComments.map((cmt) => {
     if (!relatedCommentIds.includes(cmt.id)) return cmt;
     const covered = coordinationResult.diffPreview.find(d => d.blockId === getEffectiveTargetBlockId(cmt));
     const exactReplacement = cmt.type === 'paragraph' && getCommentSuggestionType(cmt) === 'replacement' && covered && cmt.suggestedChange?.trim() === covered.proposedText.trim();
-    return {
-      ...cmt, status: exactReplacement ? 'implemented' as const : 'accepted_pending_implementation' as const,
+    const baseObj = {
+      ...cmt,
+      status: exactReplacement ? 'implemented' as const : 'accepted_pending_implementation' as const,
       authorReply: exactReplacement ? `主笔已按替换正文落实：${coordinationResult.strategyExplanation}` : `已按协调策略调整部分正文；本条意见仍待逐条核实落实：${coordinationResult.strategyExplanation}`,
       decisionReason: coordinationResult.strategyExplanation,
       resolutionType: exactReplacement ? 'text_modified' as const : 'strategy_decided' as const,
       implementationDraftId: exactReplacement ? workingDraft.id : undefined,
       implementationBlockId: exactReplacement ? covered.blockId : undefined,
     };
+
+    if (exactReplacement && covered) {
+      return recordCommentImplementationAuditEvent(baseObj, {
+        taskId: task.id,
+        draft: workingDraft,
+        blockId: covered.blockId,
+        beforeContent: covered.originalText,
+        afterContent: covered.proposedText,
+        modificationLogId: `MOD-COORD-${covered.blockId}`,
+        implementationSource: 'review_implementation',
+        implementationLabel: '协调方案替换稿落实',
+        operatorRole: authorRole,
+        authorReply: baseObj.authorReply,
+        decisionReason: baseObj.decisionReason,
+        operationId: coordinationOpId,
+      });
+    } else {
+      return recordCommentDecisionAuditEvent(baseObj, {
+        taskId: task.id,
+        draft: workingDraft,
+        actionType: 'accept_pending',
+        operatorRole: authorRole,
+        reasonOrReply: baseObj.authorReply,
+        newStatus: 'accepted_pending_implementation',
+        operationId: coordinationOpId,
+      });
+    }
   });
 
   const finalTask: Task = {
@@ -368,6 +412,53 @@ export function applyCoordinationDecision(
   };
 
   return { updatedTask: recordReviewChanges(task, finalTask, currentDraft, workingDraft), workingDraft };
+}
+
+/**
+ * Records a strategy-only coordination decision without directly changing text.
+ * Shared operationId is recorded on all coordinated comments.
+ */
+export function recordCoordinationStrategyDecision(
+  task: Task,
+  draftId: string,
+  coordinationResult: CoordinationDiffResult,
+  strategyReason: string,
+  activeRole: UserRole,
+  coordinationCommentIds: string[]
+): { updatedTask: Task } {
+  const currentDraft = task.drafts.find((d) => d.id === draftId) || task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
+  const coordinationOpId = createAuditOperationId();
+  const explanation = strategyReason.trim() || coordinationResult.strategyExplanation;
+
+  const updatedComments = task.reviewComments.map((c) => {
+    if (coordinationCommentIds.includes(c.id)) {
+      const baseObj: ReviewComment = {
+        ...c,
+        status: 'accepted_pending_implementation' as const,
+        authorReply: `【主笔协调裁决策略·待落实】：${explanation}`,
+        decisionReason: explanation,
+        resolutionType: 'strategy_decided' as const,
+      };
+      return recordCommentDecisionAuditEvent(baseObj, {
+        taskId: task.id,
+        draft: currentDraft,
+        actionType: 'accept_pending',
+        operatorRole: activeRole,
+        reasonOrReply: baseObj.authorReply || explanation,
+        newStatus: 'accepted_pending_implementation',
+        operationId: coordinationOpId,
+      });
+    }
+    return c;
+  });
+
+  const updatedTask: Task = {
+    ...task,
+    reviewComments: updatedComments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  return { updatedTask };
 }
 
 export interface ReviewCommentLocationResult {
@@ -591,13 +682,29 @@ export function implementReviewCommentWithText(
     activeRole
   );
 
+  const modLogId = `MOD-REVIEW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let updatedCommentObj: ReviewComment | undefined;
 
   // CRITICAL RULE: Updates ONLY the specified comment! Other comments remain completely unchanged!
   const updatedComments = taskWithNewDraft.reviewComments.map((cmt) => {
     if (cmt.id === commentId) {
+      const recordedCmt = recordCommentImplementationAuditEvent(cmt, {
+        taskId: task.id,
+        draft: workingDraft,
+        blockId: targetBlockId,
+        blockOrder: targetBlock.order,
+        beforeContent: targetBlock.content,
+        afterContent: updatedContent,
+        modificationLogId: modLogId,
+        implementationSource: 'review_implementation',
+        implementationLabel: '审阅直接落实',
+        operatorRole: activeRole,
+        authorReply: authorReply.trim() || `主笔已采纳落实意见并更新第${targetBlock.order}段正文。`,
+        decisionReason: authorReply.trim() || cmt.decisionReason,
+      });
+
       updatedCommentObj = {
-        ...cmt,
+        ...recordedCmt,
         status: 'implemented' as const,
         authorReply: authorReply.trim() || `主笔已采纳落实意见并更新第${targetBlock.order}段正文。`,
         decisionReason: authorReply.trim() || cmt.decisionReason,
@@ -619,7 +726,7 @@ export function implementReviewCommentWithText(
   };
 
   return {
-    updatedTask: recordReviewChanges(task, finalTask, currentDraft, workingDraft, commentId),
+    updatedTask: recordReviewChanges(task, finalTask, currentDraft, workingDraft, commentId, modLogId),
     workingDraft,
     implementedComment: updatedCommentObj!,
   };
@@ -652,12 +759,28 @@ export function updateReviewCommentDecision(
     throw new Error('拒绝审阅意见必须填写具体业务理由（随公文版本存证归档）！');
   }
 
+  const currentDraft = task.drafts.find((d) => d.id === task.currentDraftId) || task.drafts[0];
   let updatedCommentObj: ReviewComment | undefined;
+
+  const actionType = status === 'accepted_pending_implementation'
+    ? 'accept_pending'
+    : status === 'rejected'
+    ? 'reject'
+    : 'discuss';
 
   const updatedComments = task.reviewComments.map((cmt) => {
     if (cmt.id === commentId) {
+      const recordedComment = recordCommentDecisionAuditEvent(cmt, {
+        taskId: task.id,
+        draft: currentDraft,
+        actionType,
+        operatorRole: activeRole,
+        reasonOrReply: reasonOrReply.trim() || (status === 'accepted_pending_implementation' ? '主笔决定采纳，待后续统筹落实' : '主笔已登记沟通'),
+        newStatus: status,
+      });
+
       updatedCommentObj = {
-        ...cmt,
+        ...recordedComment,
         status,
         authorReply: reasonOrReply.trim() || (status === 'accepted_pending_implementation' ? '主笔决定采纳，待后续统筹落实' : '主笔已登记沟通'),
         decisionReason: reasonOrReply.trim(),
@@ -689,7 +812,8 @@ export function rebindReviewCommentTargetBlock(
   task: Task,
   commentId: string,
   newBlockId: string,
-  activeRole: UserRole
+  activeRole: UserRole,
+  reason?: string
 ): { updatedTask: Task; updatedComment: ReviewComment } {
   const perm = checkPermission(activeRole, 'resolve_comment');
   if (!perm.allowed) {
@@ -712,7 +836,7 @@ export function rebindReviewCommentTargetBlock(
     if (cmt.id === commentId) {
       // P1/P2: Retain original evidentiary record (targetVersionId, targetBlockId, targetBlockOrder, baseParagraphText).
       // Save current effective block location, rebound baseline text, and rebind audit record separately.
-      updatedCommentObj = {
+      const baseObj: ReviewComment = {
         ...cmt,
         type: cmt.type,
         currentBlockId: newBlock.id,
@@ -726,11 +850,19 @@ export function rebindReviewCommentTargetBlock(
           toBlockId: newBlock.id,
           toBlockOrder: newBlock.order,
           targetDraftId: currentDraft.id,
-          reason: '主笔人工重新指定意见目标段落',
+          reason: reason || '主笔人工重新指定意见目标段落',
           reboundParagraphText: newBlock.content,
         },
         locationOutdated: false,
       };
+      updatedCommentObj = recordCommentRebindAuditEvent(baseObj, {
+        taskId: task.id,
+        draft: currentDraft,
+        newBlockId: newBlock.id,
+        newBlockOrder: newBlock.order,
+        operatorRole: activeRole,
+        reason: reason || '主笔人工重新指定意见目标段落',
+      });
       return updatedCommentObj;
     }
     return cmt;

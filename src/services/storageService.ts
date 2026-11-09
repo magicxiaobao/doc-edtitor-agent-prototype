@@ -402,9 +402,15 @@ function migrateToSchemaV2(rawTasks: any[]): { tasks: Task[]; message: string } 
             if (suggestionType !== 'instruction' && suggestionType !== 'replacement') {
               suggestionType = undefined;
             }
+            const rawEvents = Array.isArray(c.events) ? c.events : (Array.isArray(c.auditTrail) ? c.auditTrail : undefined);
+            const events = rawEvents
+              ? rawEvents.filter((e: any) => e && typeof e === 'object' && typeof e.eventId === 'string')
+              : undefined;
             return {
               ...c,
               suggestionType,
+              events,
+              auditTrail: events,
             };
           })
         : [],
@@ -487,9 +493,15 @@ export function loadPersistedState(): LoadStateResult {
               if (suggestionType !== 'instruction' && suggestionType !== 'replacement') {
                 suggestionType = undefined;
               }
+              const rawEvents = Array.isArray(c.events) ? c.events : (Array.isArray(c.auditTrail) ? c.auditTrail : undefined);
+              const events = rawEvents
+                ? rawEvents.filter((e: any) => e && typeof e === 'object' && typeof e.eventId === 'string')
+                : undefined;
               return {
                 ...c,
                 suggestionType,
+                events,
+                auditTrail: events,
               };
             })
           : [],

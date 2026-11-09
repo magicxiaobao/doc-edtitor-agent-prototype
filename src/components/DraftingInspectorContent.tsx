@@ -11,6 +11,7 @@ import {
   Tag,
   MessageSquare,
   BookOpen,
+  History,
 } from 'lucide-react';
 import {
   Task,
@@ -27,6 +28,7 @@ import {
   AdoptedEvidenceRecord,
 } from '../types';
 import { getReviewCommentLocation, interpretReviewCommentSuggestion } from '../services/reviewCoordinationService';
+import { getCommentAuditTrail } from '../services/reviewCommentAuditService';
 import { ParagraphSuggestionEditor } from './ParagraphSuggestionEditor';
 import { MaterialEvidenceList } from './MaterialEvidenceList';
 
@@ -58,6 +60,7 @@ export interface DraftingInspectorContentProps {
   onOpenDiscussModal: (comment: ReviewComment) => void;
   onAcceptCommentDecisionOnly: (comment: ReviewComment) => void;
   onGenerateRevisionFromComment: (comment: ReviewComment) => void;
+  onOpenAuditTrail?: (comment: ReviewComment) => void;
   onJumpToTargetBlock: (blockId: string) => void;
   // Revision suggestion
   revisionSuggestion: RevisionSuggestion | null;
@@ -114,6 +117,7 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
   onOpenDiscussModal,
   onAcceptCommentDecisionOnly,
   onGenerateRevisionFromComment,
+  onOpenAuditTrail,
   onJumpToTargetBlock,
   revisionSuggestion,
   isRevisionGenerating,
@@ -407,29 +411,46 @@ export const DraftingInspectorContent: React.FC<DraftingInspectorContentProps> =
                             )}
                           </div>
 
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded font-medium ${
-                              cmt.status === 'implemented'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {onOpenAuditTrail && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenAuditTrail(cmt);
+                                }}
+                                data-testid={`btn-audit-trail-${cmt.id}`}
+                                className="px-2 py-0.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                title="查看该审阅意见的完整研判、重绑与落实处理履历"
+                              >
+                                <History className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>处理履历{getCommentAuditTrail(cmt).length > 0 ? ` (${getCommentAuditTrail(cmt).length})` : ''}</span>
+                              </button>
+                            )}
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                cmt.status === 'implemented'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : cmt.status === 'accepted_pending_implementation'
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                  : cmt.status === 'rejected'
+                                  ? 'bg-slate-200 text-slate-700'
+                                  : cmt.status === 'need_discussion'
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                              }`}
+                            >
+                              {cmt.status === 'implemented'
+                                ? '已落实'
                                 : cmt.status === 'accepted_pending_implementation'
-                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                ? '决定采纳·待落实'
                                 : cmt.status === 'rejected'
-                                ? 'bg-slate-200 text-slate-700'
+                                ? '已拒绝'
                                 : cmt.status === 'need_discussion'
-                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                                : 'bg-amber-100 text-amber-800 border border-amber-300'
-                            }`}
-                          >
-                            {cmt.status === 'implemented'
-                              ? '已落实'
-                              : cmt.status === 'accepted_pending_implementation'
-                              ? '决定采纳·待落实'
-                              : cmt.status === 'rejected'
-                              ? '已拒绝'
-                              : cmt.status === 'need_discussion'
-                              ? '待沟通'
-                              : '待处理'}
-                          </span>
+                                ? '待沟通'
+                                : '待处理'}
+                            </span>
+                          </div>
                         </div>
 
                         {/* Scope and Source Details */}

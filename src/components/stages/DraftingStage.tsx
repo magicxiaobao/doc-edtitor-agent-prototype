@@ -92,8 +92,10 @@ import {
   generateCoordinationDiff,
   applyCoordinationDecision,
   findAuthenticCaseSnippet,
-  interpretReviewCommentSuggestion
+  interpretReviewCommentSuggestion,
+  recordCoordinationStrategyDecision
 } from '../../services/reviewCoordinationService';
+import { ReviewCommentAuditTrailModal } from '../ReviewCommentAuditTrailModal';
 import { 
   PenTool, 
   Sparkles, 
@@ -267,6 +269,12 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
   // Re-bind comment block modal
   const [reboundingComment, setReboundingComment] = useState<ReviewComment | null>(null);
   const [reboundBlockId, setReboundBlockId] = useState<string>('');
+
+  // Single review comment audit trail modal state
+  const [auditTrailComment, setAuditTrailComment] = useState<ReviewComment | null>(null);
+  useEffect(() => {
+    setAuditTrailComment(null);
+  }, [task.id, currentDraft?.id, activeRole]);
 
   // Contradiction resolution panel
   const [showContradictionModal, setShowContradictionModal] = useState(false);
@@ -1699,20 +1707,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     const diff = generateCoordinationDiff(task, currentDraft, mappedStrategy);
 
     if (mode === 'strategy_only') {
-      const updatedComments = task.reviewComments.map((c) => {
-        if (coordinationCommentIds.includes(c.id)) {
-          return {
-            ...c,
-            status: 'accepted_pending_implementation' as const,
-            authorReply: `【主笔协调裁决策略·待落实】：${diff.strategyExplanation}`,
-            decisionReason: strategyReason.trim() || diff.strategyExplanation,
-            resolutionType: 'strategy_decided' as const,
-          };
-        }
-        return c;
-      });
-
-      onUpdateTask({ reviewComments: updatedComments });
+      const { updatedTask } = recordCoordinationStrategyDecision(
+        task,
+        currentDraft.id,
+        diff,
+        strategyReason,
+        activeRole,
+        coordinationCommentIds
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
       setShowContradictionModal(false);
       return;
     }
@@ -1920,19 +1923,15 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
     if (!currentDraft || !currentCoordinationDiff) return;
 
     if (mode === 'strategy_only') {
-      const updatedComments = task.reviewComments.map((c) => {
-        if (coordinationCommentIds.includes(c.id)) {
-          return {
-            ...c,
-            status: 'accepted_pending_implementation' as const,
-            authorReply: `【主笔协调裁决策略·待落实】：${currentCoordinationDiff.strategyExplanation}`,
-            decisionReason: strategyReason.trim() || currentCoordinationDiff.strategyExplanation,
-            resolutionType: 'strategy_decided' as const,
-          };
-        }
-        return c;
-      });
-      onUpdateTask({ reviewComments: updatedComments });
+      const { updatedTask } = recordCoordinationStrategyDecision(
+        task,
+        currentDraft.id,
+        currentCoordinationDiff,
+        strategyReason,
+        activeRole,
+        coordinationCommentIds
+      );
+      onUpdateTask({ reviewComments: updatedTask.reviewComments });
       setShowContradictionModal(false);
       return;
     }
@@ -3435,6 +3434,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               onOpenDiscussModal={handleOpenDiscussModal}
               onAcceptCommentDecisionOnly={handleAcceptCommentDecisionOnly}
               onGenerateRevisionFromComment={handleGenerateRevisionFromComment}
+              onOpenAuditTrail={(c) => setAuditTrailComment(c)}
               onJumpToTargetBlock={handleJumpToTargetBlock}
               revisionSuggestion={revisionSuggestion}
               isRevisionGenerating={isRevisionGenerating}
@@ -3602,6 +3602,7 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
               onOpenDiscussModal={handleOpenDiscussModal}
               onAcceptCommentDecisionOnly={handleAcceptCommentDecisionOnly}
               onGenerateRevisionFromComment={handleGenerateRevisionFromComment}
+              onOpenAuditTrail={(c) => setAuditTrailComment(c)}
               onJumpToTargetBlock={handleJumpToTargetBlock}
               revisionSuggestion={revisionSuggestion}
               isRevisionGenerating={isRevisionGenerating}
@@ -4405,6 +4406,18 @@ export const DraftingStage: React.FC<DraftingStageProps> = ({
         onJumpToFactsStage={onSelectStage ? () => onSelectStage('material_fact') : undefined}
         onUpdateTask={onUpdateTask}
       />
+
+      {/* Task 30: Review Comment Audit Trail Modal */}
+      {auditTrailComment && (
+        <ReviewCommentAuditTrailModal
+          isOpen={Boolean(auditTrailComment)}
+          onClose={() => setAuditTrailComment(null)}
+          comment={auditTrailComment}
+          task={task}
+          currentDraft={currentDraft}
+          activeRole={activeRole}
+        />
+      )}
     </div>
   );
 };
